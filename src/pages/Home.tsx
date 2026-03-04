@@ -18,6 +18,7 @@ interface PersistedStateView {
 export default function Home() {
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<PersistedStateView>("get_persisted_state")
@@ -55,14 +56,18 @@ export default function Home() {
       ]);
       setPhase("idle");
     });
-    const unlistenError = listen<{ message: string }>("pipeline-error", () => {
-      setPhase("error");
-    });
+    const unlistenErrorDetails = listen<{ stage: string; message: string }>(
+      "pipeline-error",
+      (event) => {
+        setLastError(`[${event.payload.stage}] ${event.payload.message}`);
+        setPhase("error");
+      }
+    );
 
     return () => {
       unlistenPhase.then((fn) => fn());
       unlistenComplete.then((fn) => fn());
-      unlistenError.then((fn) => fn());
+      unlistenErrorDetails.then((fn) => fn());
     };
   }, []);
 
@@ -99,6 +104,20 @@ export default function Home() {
         <RecordingIndicator mode={phase} />
       </div>
 
+      {lastError && (
+        <div className="px-4 pb-3">
+          <div className="rounded-lg border border-red-900 bg-red-950/40 p-3 text-xs text-red-300 flex items-start justify-between gap-2">
+            <span>{lastError}</span>
+            <button
+              onClick={() => setLastError(null)}
+              className="text-red-400 hover:text-red-200 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {Object.keys(grouped).length === 0 ? (
@@ -108,7 +127,9 @@ export default function Home() {
               Hold <kbd className="px-1 py-0.5 bg-neutral-800 rounded">Cmd+Shift+Space</kbd> and speak
             </p>
             {(phase === "transcribing" || phase === "injecting") && (
-              <p className="text-xs mt-1 text-amber-400">Working on transcription...</p>
+              <p className="text-xs mt-1 text-amber-400">
+                {phase === "injecting" ? "Typing into focused app..." : "Working on transcription..."}
+              </p>
             )}
           </div>
         ) : (
