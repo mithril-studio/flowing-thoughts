@@ -12,12 +12,18 @@ pub async fn transcribe_audio(
     session_id: u64,
     wav_path: &Path,
     duration_ms: u64,
+    api_key_override: Option<&str>,
 ) -> Result<String, String> {
     // Small delay keeps state transitions readable while the request starts.
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| "OPENAI_API_KEY is not set".to_string())?;
+    let api_key = if let Some(value) = api_key_override {
+        value.to_string()
+    } else {
+        std::env::var("OPENAI_API_KEY").map_err(|_| {
+            "No API key configured. Set one in onboarding or OPENAI_API_KEY.".to_string()
+        })?
+    };
     let audio_bytes = std::fs::read(wav_path)
         .map_err(|e| format!("Failed to read captured audio for session {session_id}: {e}"))?;
     if audio_bytes.is_empty() {

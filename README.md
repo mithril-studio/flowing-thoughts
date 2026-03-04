@@ -16,6 +16,7 @@ Implemented:
 - Session lifecycle state machine (`idle -> recording -> transcribing -> idle`)
 - Frontend event wiring for session phases and completed transcripts
 - Timeline UI for completed transcripts
+- First-run onboarding flow (license, API key, accessibility check, injection test)
 
 In progress:
 - Real microphone capture (`audio.rs`)

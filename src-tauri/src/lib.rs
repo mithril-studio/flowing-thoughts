@@ -3,6 +3,7 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -41,6 +42,11 @@ struct PipelineErrorEvent {
     message: String,
 }
 
+#[derive(Debug, Default)]
+struct AppConfig {
+    openai_api_key: Option<String>,
+}
+
 #[tauri::command]
 fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> bool {
     matches!(
@@ -49,15 +55,78 @@ fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> boo
     )
 }
 
+#[tauri::command]
+fn set_openai_api_key(
+    key: String,
+    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("OpenAI API key cannot be empty".to_string());
+    }
+    let mut cfg = config
+        .inner()
+        .lock()
+        .map_err(|_| "Config lock poisoned".to_string())?;
+    cfg.openai_api_key = Some(trimmed.to_string());
+    Ok(())
+}
+
+#[tauri::command]
+fn has_openai_api_key(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<bool, String> {
+    let cfg = config
+        .inner()
+        .lock()
+        .map_err(|_| "Config lock poisoned".to_string())?;
+    Ok(cfg.openai_api_key.is_some())
+}
+
+#[tauri::command]
+fn check_accessibility_permission() -> Result<bool, String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to return UI elements enabled")
+        .output()
+        .map_err(|e| format!("Failed to check accessibility permission: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("Accessibility check failed: {stderr}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(stdout.trim().eq_ignore_ascii_case("true"))
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    let status = Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .status()
+        .map_err(|e| format!("Failed to open accessibility settings: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Open accessibility settings command failed with status: {status}"
+        ))
+    }
+}
+
+#[tauri::command]
+fn run_injection_test() -> Result<(), String> {
+    text_inject::inject_text("Open Voice Wispr test successful.")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
     let next_session_id = Arc::new(Mutex::new(1_u64));
+    let app_config = Arc::new(Mutex::new(AppConfig::default()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(session_state.clone())
+        .manage(app_config.clone())
         .setup(move |app| {
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -88,6 +157,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let shared_session_state = session_state.clone();
             let shared_next_session_id = next_session_id.clone();
+            let shared_app_config = app_config.clone();
 
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
@@ -205,12 +275,19 @@ pub fn run() {
 
                             let app_handle_for_task = app_handle.clone();
                             let session_state_for_task = shared_session_state.clone();
+                            let app_config_for_task = shared_app_config.clone();
 
                             tauri::async_runtime::spawn(async move {
+                                let runtime_api_key = app_config_for_task
+                                    .lock()
+                                    .ok()
+                                    .and_then(|cfg| cfg.openai_api_key.clone());
+
                                 match transcribe::transcribe_audio(
                                     session_id,
                                     &capture.wav_path,
                                     capture.duration_ms,
+                                    runtime_api_key.as_deref(),
                                 )
                                 .await
                                 {
@@ -301,7 +378,14 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_recording_state])
+        .invoke_handler(tauri::generate_handler![
+            get_recording_state,
+            set_openai_api_key,
+            has_openai_api_key,
+            check_accessibility_permission,
+            open_accessibility_settings,
+            run_injection_test
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
