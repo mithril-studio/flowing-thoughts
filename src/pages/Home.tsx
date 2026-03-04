@@ -8,7 +8,7 @@ interface TranscriptionEntry {
   timestamp: string;
 }
 
-type SessionPhase = "idle" | "recording" | "transcribing" | "error";
+type SessionPhase = "idle" | "recording" | "transcribing" | "injecting" | "error";
 
 export default function Home() {
   const [phase, setPhase] = useState<SessionPhase>("idle");
@@ -88,7 +88,7 @@ export default function Home() {
             <p className="text-xs mt-1">
               Hold <kbd className="px-1 py-0.5 bg-neutral-800 rounded">fn</kbd> and speak
             </p>
-            {phase === "transcribing" && (
+            {(phase === "transcribing" || phase === "injecting") && (
               <p className="text-xs mt-1 text-amber-400">Working on transcription...</p>
             )}
           </div>

@@ -1,5 +1,5 @@
 interface RecordingIndicatorProps {
-  mode: "idle" | "recording" | "transcribing" | "error";
+  mode: "idle" | "recording" | "transcribing" | "injecting" | "error";
 }
 
 export default function RecordingIndicator({ mode }: RecordingIndicatorProps) {
@@ -8,6 +8,8 @@ export default function RecordingIndicator({ mode }: RecordingIndicatorProps) {
       ? "bg-red-500 animate-pulse"
       : mode === "transcribing"
         ? "bg-amber-400 animate-pulse"
+        : mode === "injecting"
+          ? "bg-emerald-400 animate-pulse"
         : mode === "error"
           ? "bg-red-700"
           : "bg-neutral-600";
@@ -17,6 +19,8 @@ export default function RecordingIndicator({ mode }: RecordingIndicatorProps) {
       ? "Recording..."
       : mode === "transcribing"
         ? "Transcribing..."
+        : mode === "injecting"
+          ? "Typing..."
         : mode === "error"
           ? "Pipeline error"
           : "Press fn to record";

@@ -15,6 +15,7 @@ enum SessionState {
     Idle,
     Recording { session_id: u64 },
     Transcribing { session_id: u64 },
+    Injecting { session_id: u64 },
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -214,14 +215,43 @@ pub fn run() {
                                 .await
                                 {
                                     Ok(text) => {
+                                        {
+                                            let mut session_state_guard =
+                                                session_state_for_task.lock().unwrap();
+                                            if matches!(
+                                                *session_state_guard,
+                                                SessionState::Transcribing {
+                                                    session_id: current_id
+                                                } if current_id == session_id
+                                            ) {
+                                                *session_state_guard =
+                                                    SessionState::Injecting { session_id };
+                                            }
+                                        }
+                                        let _ = app_handle_for_task.emit(
+                                            "session-phase",
+                                            SessionPhaseEvent { phase: "injecting" },
+                                        );
+                                        let inject_result = text_inject::inject_text(&text);
+
                                         let _ = app_handle_for_task.emit(
                                             "transcription-complete",
                                             TranscriptionCompleteEvent {
                                                 session_id,
-                                                text,
+                                                text: text.clone(),
                                                 timestamp: chrono::Utc::now().to_rfc3339(),
                                             },
                                         );
+                                        if let Err(message) = inject_result {
+                                            let _ = app_handle_for_task.emit(
+                                                "pipeline-error",
+                                                PipelineErrorEvent { session_id, message },
+                                            );
+                                            let _ = app_handle_for_task.emit(
+                                                "session-phase",
+                                                SessionPhaseEvent { phase: "error" },
+                                            );
+                                        }
                                         let _ = app_handle_for_task.emit(
                                             "session-phase",
                                             SessionPhaseEvent { phase: "idle" },
@@ -247,6 +277,11 @@ pub fn run() {
                                 if matches!(
                                     *session_state_guard,
                                     SessionState::Transcribing {
+                                        session_id: current_id
+                                    } if current_id == session_id
+                                ) || matches!(
+                                    *session_state_guard,
+                                    SessionState::Injecting {
                                         session_id: current_id
                                     } if current_id == session_id
                                 ) {
