@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-const LICENSE_KEY_STORAGE = "license_key";
-const ONBOARDING_DONE_STORAGE = "onboarding_complete";
+interface PersistedStateView {
+  onboarding_complete: boolean;
+  license_key: string | null;
+  has_openai_api_key: boolean;
+}
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -10,16 +13,22 @@ interface OnboardingProps {
 
 export default function Onboarding({ onComplete }: OnboardingProps) {
   const [step, setStep] = useState(1);
-  const [licenseKey, setLicenseKey] = useState(localStorage.getItem(LICENSE_KEY_STORAGE) ?? "");
+  const [licenseKey, setLicenseKey] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [accessibilityGranted, setAccessibilityGranted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    invoke<boolean>("has_openai_api_key")
-      .then((hasKey) => {
-        if (hasKey) setStep(3);
+    invoke<PersistedStateView>("get_persisted_state")
+      .then((state) => {
+        if (state.license_key) {
+          setLicenseKey(state.license_key);
+          setStep(2);
+        }
+        if (state.has_openai_api_key) {
+          setStep(3);
+        }
       })
       .catch(() => {
         // Keep default step when backend command is unavailable.
@@ -31,7 +40,6 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       setError("Please enter a valid license key.");
       return;
     }
-    localStorage.setItem(LICENSE_KEY_STORAGE, licenseKey.trim());
     setError(null);
     setStep(2);
   };
@@ -71,8 +79,11 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     setBusy(true);
     setError(null);
     try {
+      await invoke("save_onboarding_state", {
+        license_key: licenseKey.trim(),
+        onboarding_complete: true,
+      });
       await invoke("run_injection_test");
-      localStorage.setItem(ONBOARDING_DONE_STORAGE, "true");
       onComplete();
     } catch (e) {
       setError(String(e));

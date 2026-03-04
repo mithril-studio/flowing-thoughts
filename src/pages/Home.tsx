@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import RecordingIndicator from "../components/RecordingIndicator";
 
 interface TranscriptionEntry {
@@ -10,11 +11,29 @@ interface TranscriptionEntry {
 
 type SessionPhase = "idle" | "recording" | "transcribing" | "injecting" | "error";
 
+interface PersistedStateView {
+  history: { session_id: number; text: string; timestamp: string }[];
+}
+
 export default function Home() {
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
 
   useEffect(() => {
+    invoke<PersistedStateView>("get_persisted_state")
+      .then((state) => {
+        setTranscriptions(
+          state.history.map((entry) => ({
+            id: entry.session_id,
+            text: entry.text,
+            timestamp: entry.timestamp,
+          }))
+        );
+      })
+      .catch(() => {
+        // Keep empty state if loading fails.
+      });
+
     const unlistenPhase = listen<{ phase: SessionPhase }>(
       "session-phase",
       (event) => {

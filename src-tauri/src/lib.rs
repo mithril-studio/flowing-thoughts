@@ -9,6 +9,7 @@ use std::thread;
 
 mod audio;
 mod hotkey;
+mod storage;
 mod text_inject;
 mod transcribe;
 
@@ -42,11 +43,6 @@ struct PipelineErrorEvent {
     message: String,
 }
 
-#[derive(Debug, Default)]
-struct AppConfig {
-    openai_api_key: Option<String>,
-}
-
 #[tauri::command]
 fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> bool {
     matches!(
@@ -58,27 +54,74 @@ fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> boo
 #[tauri::command]
 fn set_openai_api_key(
     key: String,
-    config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
 ) -> Result<(), String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
         return Err("OpenAI API key cannot be empty".to_string());
     }
-    let mut cfg = config
+    let mut state = persisted
         .inner()
         .lock()
-        .map_err(|_| "Config lock poisoned".to_string())?;
-    cfg.openai_api_key = Some(trimmed.to_string());
+        .map_err(|_| "Persisted state lock poisoned".to_string())?;
+    state.openai_api_key = Some(trimmed.to_string());
+    storage::save(&state)?;
     Ok(())
 }
 
 #[tauri::command]
-fn has_openai_api_key(config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<bool, String> {
-    let cfg = config
+fn has_openai_api_key(
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+) -> Result<bool, String> {
+    let state = persisted
         .inner()
         .lock()
-        .map_err(|_| "Config lock poisoned".to_string())?;
-    Ok(cfg.openai_api_key.is_some())
+        .map_err(|_| "Persisted state lock poisoned".to_string())?;
+    Ok(state.openai_api_key.is_some())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PersistedStateView {
+    onboarding_complete: bool,
+    license_key: Option<String>,
+    has_openai_api_key: bool,
+    history: Vec<storage::HistoryEntry>,
+}
+
+#[tauri::command]
+fn get_persisted_state(
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+) -> Result<PersistedStateView, String> {
+    let state = persisted
+        .inner()
+        .lock()
+        .map_err(|_| "Persisted state lock poisoned".to_string())?;
+    Ok(PersistedStateView {
+        onboarding_complete: state.onboarding_complete,
+        license_key: state.license_key.clone(),
+        has_openai_api_key: state.openai_api_key.is_some(),
+        history: state.history.clone(),
+    })
+}
+
+#[tauri::command]
+fn save_onboarding_state(
+    license_key: String,
+    onboarding_complete: bool,
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+) -> Result<(), String> {
+    let trimmed = license_key.trim();
+    if trimmed.len() < 8 {
+        return Err("Please provide a valid license key".to_string());
+    }
+    let mut state = persisted
+        .inner()
+        .lock()
+        .map_err(|_| "Persisted state lock poisoned".to_string())?;
+    state.license_key = Some(trimmed.to_string());
+    state.onboarding_complete = onboarding_complete;
+    storage::save(&state)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -120,13 +163,13 @@ fn run_injection_test() -> Result<(), String> {
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
     let next_session_id = Arc::new(Mutex::new(1_u64));
-    let app_config = Arc::new(Mutex::new(AppConfig::default()));
+    let persisted = Arc::new(Mutex::new(storage::load().unwrap_or_default()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(session_state.clone())
-        .manage(app_config.clone())
+        .manage(persisted.clone())
         .setup(move |app| {
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -157,7 +200,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let shared_session_state = session_state.clone();
             let shared_next_session_id = next_session_id.clone();
-            let shared_app_config = app_config.clone();
+            let shared_persisted = persisted.clone();
 
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
@@ -275,13 +318,13 @@ pub fn run() {
 
                             let app_handle_for_task = app_handle.clone();
                             let session_state_for_task = shared_session_state.clone();
-                            let app_config_for_task = shared_app_config.clone();
+                            let persisted_for_task = shared_persisted.clone();
 
                             tauri::async_runtime::spawn(async move {
-                                let runtime_api_key = app_config_for_task
+                                let runtime_api_key = persisted_for_task
                                     .lock()
                                     .ok()
-                                    .and_then(|cfg| cfg.openai_api_key.clone());
+                                    .and_then(|state| state.openai_api_key.clone());
 
                                 match transcribe::transcribe_audio(
                                     session_id,
@@ -319,6 +362,20 @@ pub fn run() {
                                                 timestamp: chrono::Utc::now().to_rfc3339(),
                                             },
                                         );
+                                        if let Ok(mut state) = persisted_for_task.lock() {
+                                            state.history.insert(
+                                                0,
+                                                storage::HistoryEntry {
+                                                    session_id,
+                                                    text: text.clone(),
+                                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                                },
+                                            );
+                                            if state.history.len() > 200 {
+                                                state.history.truncate(200);
+                                            }
+                                            let _ = storage::save(&state);
+                                        }
                                         if let Err(message) = inject_result {
                                             let _ = app_handle_for_task.emit(
                                                 "pipeline-error",
@@ -382,6 +439,8 @@ pub fn run() {
             get_recording_state,
             set_openai_api_key,
             has_openai_api_key,
+            get_persisted_state,
+            save_onboarding_state,
             check_accessibility_permission,
             open_accessibility_settings,
             run_injection_test
