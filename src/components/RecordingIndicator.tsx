@@ -23,7 +23,7 @@ export default function RecordingIndicator({ mode }: RecordingIndicatorProps) {
           ? "Typing..."
         : mode === "error"
           ? "Pipeline error"
-          : "Press fn to record";
+          : "Hold Cmd+Shift+Space";
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800">

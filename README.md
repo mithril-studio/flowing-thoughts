@@ -3,8 +3,8 @@
 Desktop voice dictation app for macOS, built with Tauri + React.
 
 Current interaction model:
-- Hold `fn` to start a session
-- Release `fn` to stop and trigger transcription pipeline
+- Hold `Cmd+Shift+Space` to start a session
+- Release the combo to stop and trigger transcription pipeline
 - Render completed transcript in the Home timeline
 
 The app is in active build. Audio capture, Whisper API calls, and text injection are still being finalized.
@@ -47,6 +47,11 @@ Commands:
 ```bash
 npm install
 npm run tauri dev
+```
+
+Hotkey override for development:
+```bash
+OVW_HOTKEY=fn npm run tauri dev
 ```
 
 Build checks:
