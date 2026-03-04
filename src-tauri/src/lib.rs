@@ -160,6 +160,24 @@ fn run_injection_test() -> Result<(), String> {
     text_inject::inject_text("Open Voice Wispr test successful.")
 }
 
+#[tauri::command]
+fn open_logs_folder() -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let logs_dir = std::path::PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("Open Voice Wispr");
+    let status = Command::new("open")
+        .arg(logs_dir)
+        .status()
+        .map_err(|e| format!("Failed to open logs folder: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Open logs folder command failed with status: {status}"))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
@@ -217,6 +235,10 @@ pub fn run() {
                             let mut id_guard = shared_next_session_id.lock().unwrap();
                             let session_id = *id_guard;
                             *id_guard += 1;
+                            let _ = storage::append_log(
+                                "INFO",
+                                &format!("Session {session_id} starting audio capture"),
+                            );
 
                             let recording = match audio::start_recording() {
                                 Ok(recording) => recording,
@@ -230,6 +252,10 @@ pub fn run() {
                                             stage: "audio-start",
                                             message,
                                         },
+                                    );
+                                    let _ = storage::append_log(
+                                        "ERROR",
+                                        &format!("Session {session_id} failed at audio-start"),
                                     );
                                     let _ = app_handle.emit(
                                         "session-phase",
@@ -298,6 +324,10 @@ pub fn run() {
                                         "session-phase",
                                         SessionPhaseEvent { phase: "idle" },
                                     );
+                                    let _ = storage::append_log(
+                                        "ERROR",
+                                        &format!("Session {session_id} failed at audio-finalize"),
+                                    );
                                     let mut session_state_guard =
                                         shared_session_state.lock().unwrap();
                                     if matches!(
@@ -328,6 +358,13 @@ pub fn run() {
                                 let _ = app_handle.emit(
                                     "session-phase",
                                     SessionPhaseEvent { phase: "idle" },
+                                );
+                                let _ = storage::append_log(
+                                    "WARN",
+                                    &format!(
+                                        "Session {session_id} dropped due to short duration ({}ms)",
+                                        capture.duration_ms
+                                    ),
                                 );
                                 let mut session_state_guard = shared_session_state.lock().unwrap();
                                 if matches!(
@@ -393,6 +430,13 @@ pub fn run() {
                                             SessionPhaseEvent { phase: "injecting" },
                                         );
                                         let inject_result = text_inject::inject_text(&text);
+                                        let _ = storage::append_log(
+                                            "INFO",
+                                            &format!(
+                                                "Session {session_id} transcribed successfully, length {}",
+                                                text.len()
+                                            ),
+                                        );
 
                                         let _ = app_handle_for_task.emit(
                                             "transcription-complete",
@@ -422,12 +466,18 @@ pub fn run() {
                                                 PipelineErrorEvent {
                                                     session_id,
                                                     stage: "inject",
-                                                    message,
+                                                    message: message.clone(),
                                                 },
                                             );
                                             let _ = app_handle_for_task.emit(
                                                 "session-phase",
                                                 SessionPhaseEvent { phase: "error" },
+                                            );
+                                            let _ = storage::append_log(
+                                                "ERROR",
+                                                &format!(
+                                                    "Session {session_id} failed at inject: {message}"
+                                                ),
                                             );
                                         }
                                         let _ = app_handle_for_task.emit(
@@ -454,12 +504,18 @@ pub fn run() {
                                             PipelineErrorEvent {
                                                 session_id,
                                                 stage: "transcribe",
-                                                message,
+                                                message: message.clone(),
                                             },
                                         );
                                         let _ = app_handle_for_task.emit(
                                             "session-phase",
                                             SessionPhaseEvent { phase: "error" },
+                                        );
+                                        let _ = storage::append_log(
+                                            "ERROR",
+                                            &format!(
+                                                "Session {session_id} failed at transcribe: {message}"
+                                            ),
                                         );
                                         let _ = app_handle_for_task.emit(
                                             "session-phase",
@@ -504,7 +560,8 @@ pub fn run() {
             save_onboarding_state,
             check_accessibility_permission,
             open_accessibility_settings,
-            run_injection_test
+            run_injection_test,
+            open_logs_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

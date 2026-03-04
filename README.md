@@ -27,6 +27,7 @@ In progress:
 ## Architecture
 
 See [Speech Pipeline Architecture](./docs/ARCHITECTURE.md).
+For manual cross-app verification, use [Compatibility Matrix](./docs/COMPATIBILITY.md).
 
 ## Project Structure
 
