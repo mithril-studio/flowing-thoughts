@@ -40,6 +40,7 @@ struct TranscriptionCompleteEvent {
 #[derive(Debug, Clone, serde::Serialize)]
 struct PipelineErrorEvent {
     session_id: u64,
+    stage: &'static str,
     message: String,
 }
 
@@ -224,7 +225,11 @@ pub fn run() {
                                     drop(session_state_guard);
                                     let _ = app_handle.emit(
                                         "pipeline-error",
-                                        PipelineErrorEvent { session_id, message },
+                                        PipelineErrorEvent {
+                                            session_id,
+                                            stage: "audio-start",
+                                            message,
+                                        },
                                     );
                                     let _ = app_handle.emit(
                                         "session-phase",
@@ -279,7 +284,11 @@ pub fn run() {
                                 Err(message) => {
                                     let _ = app_handle.emit(
                                         "pipeline-error",
-                                        PipelineErrorEvent { session_id, message },
+                                        PipelineErrorEvent {
+                                            session_id,
+                                            stage: "audio-finalize",
+                                            message,
+                                        },
                                     );
                                     let _ = app_handle.emit(
                                         "session-phase",
@@ -302,6 +311,35 @@ pub fn run() {
                                     continue;
                                 }
                             };
+                            if capture.duration_ms < 180 {
+                                let _ = app_handle.emit(
+                                    "pipeline-error",
+                                    PipelineErrorEvent {
+                                        session_id,
+                                        stage: "audio-finalize",
+                                        message: "Recording too short. Hold the hotkey longer and try again."
+                                            .to_string(),
+                                    },
+                                );
+                                let _ = app_handle.emit(
+                                    "session-phase",
+                                    SessionPhaseEvent { phase: "error" },
+                                );
+                                let _ = app_handle.emit(
+                                    "session-phase",
+                                    SessionPhaseEvent { phase: "idle" },
+                                );
+                                let mut session_state_guard = shared_session_state.lock().unwrap();
+                                if matches!(
+                                    *session_state_guard,
+                                    SessionState::Transcribing {
+                                        session_id: current_id
+                                    } if current_id == session_id
+                                ) {
+                                    *session_state_guard = SessionState::Idle;
+                                }
+                                continue;
+                            }
 
                             let _ = app_handle.emit(
                                 "recording-state",
@@ -338,15 +376,17 @@ pub fn run() {
                                         {
                                             let mut session_state_guard =
                                                 session_state_for_task.lock().unwrap();
-                                            if matches!(
+                                            if !matches!(
                                                 *session_state_guard,
                                                 SessionState::Transcribing {
                                                     session_id: current_id
                                                 } if current_id == session_id
                                             ) {
-                                                *session_state_guard =
-                                                    SessionState::Injecting { session_id };
+                                                // Late response from stale session, ignore.
+                                                return;
                                             }
+                                            *session_state_guard =
+                                                SessionState::Injecting { session_id };
                                         }
                                         let _ = app_handle_for_task.emit(
                                             "session-phase",
@@ -379,7 +419,11 @@ pub fn run() {
                                         if let Err(message) = inject_result {
                                             let _ = app_handle_for_task.emit(
                                                 "pipeline-error",
-                                                PipelineErrorEvent { session_id, message },
+                                                PipelineErrorEvent {
+                                                    session_id,
+                                                    stage: "inject",
+                                                    message,
+                                                },
                                             );
                                             let _ = app_handle_for_task.emit(
                                                 "session-phase",
@@ -392,9 +436,26 @@ pub fn run() {
                                         );
                                     }
                                     Err(message) => {
+                                        let is_current = {
+                                            let session_state_guard =
+                                                session_state_for_task.lock().unwrap();
+                                            matches!(
+                                                *session_state_guard,
+                                                SessionState::Transcribing {
+                                                    session_id: current_id
+                                                } if current_id == session_id
+                                            )
+                                        };
+                                        if !is_current {
+                                            return;
+                                        }
                                         let _ = app_handle_for_task.emit(
                                             "pipeline-error",
-                                            PipelineErrorEvent { session_id, message },
+                                            PipelineErrorEvent {
+                                                session_id,
+                                                stage: "transcribe",
+                                                message,
+                                            },
                                         );
                                         let _ = app_handle_for_task.emit(
                                             "session-phase",
