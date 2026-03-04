@@ -11,7 +11,6 @@ mod hotkey;
 mod text_inject;
 mod transcribe;
 
-#[derive(Debug, Clone)]
 enum SessionState {
     Idle,
     Recording { session_id: u64 },
@@ -43,7 +42,10 @@ struct PipelineErrorEvent {
 
 #[tauri::command]
 fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> bool {
-    matches!(*state.lock().unwrap(), SessionState::Recording { .. })
+    matches!(
+        *state.inner().lock().unwrap(),
+        SessionState::Recording { .. }
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -87,6 +89,8 @@ pub fn run() {
             let shared_next_session_id = next_session_id.clone();
 
             thread::spawn(move || {
+                let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
+
                 while let Ok(event) = hotkey_rx.recv() {
                     match event {
                         hotkey::HotkeyEvent::RecordStart => {
@@ -98,6 +102,28 @@ pub fn run() {
                             let mut id_guard = shared_next_session_id.lock().unwrap();
                             let session_id = *id_guard;
                             *id_guard += 1;
+
+                            let recording = match audio::start_recording() {
+                                Ok(recording) => recording,
+                                Err(message) => {
+                                    drop(id_guard);
+                                    drop(session_state_guard);
+                                    let _ = app_handle.emit(
+                                        "pipeline-error",
+                                        PipelineErrorEvent { session_id, message },
+                                    );
+                                    let _ = app_handle.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "error" },
+                                    );
+                                    let _ = app_handle.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "idle" },
+                                    );
+                                    continue;
+                                }
+                            };
+                            active_recording = Some((session_id, recording));
 
                             *session_state_guard = SessionState::Recording { session_id };
                             drop(id_guard);
@@ -115,15 +141,52 @@ pub fn run() {
                             );
                         }
                         hotkey::HotkeyEvent::RecordStop => {
-                            let session_id = {
+                            let (session_id, recording) = {
                                 let mut session_state_guard = shared_session_state.lock().unwrap();
-                                let recording_session_id = match *session_state_guard {
-                                    SessionState::Recording { session_id } => session_id,
+                                let active_state = std::mem::replace(
+                                    &mut *session_state_guard,
+                                    SessionState::Idle,
+                                );
+                                match (active_state, active_recording.take()) {
+                                    (
+                                        SessionState::Recording { session_id },
+                                        Some((recording_session_id, recording)),
+                                    ) if recording_session_id == session_id => {
+                                        *session_state_guard =
+                                            SessionState::Transcribing { session_id };
+                                        (session_id, recording)
+                                    }
                                     _ => continue,
-                                };
-                                *session_state_guard =
-                                    SessionState::Transcribing { session_id: recording_session_id };
-                                recording_session_id
+                                }
+                            };
+
+                            let capture = match audio::stop_and_finalize(recording, session_id) {
+                                Ok(capture) => capture,
+                                Err(message) => {
+                                    let _ = app_handle.emit(
+                                        "pipeline-error",
+                                        PipelineErrorEvent { session_id, message },
+                                    );
+                                    let _ = app_handle.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "error" },
+                                    );
+                                    let _ = app_handle.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "idle" },
+                                    );
+                                    let mut session_state_guard =
+                                        shared_session_state.lock().unwrap();
+                                    if matches!(
+                                        *session_state_guard,
+                                        SessionState::Transcribing {
+                                            session_id: current_id
+                                        } if current_id == session_id
+                                    ) {
+                                        *session_state_guard = SessionState::Idle;
+                                    }
+                                    continue;
+                                }
                             };
 
                             let _ = app_handle.emit(
@@ -143,7 +206,13 @@ pub fn run() {
                             let session_state_for_task = shared_session_state.clone();
 
                             tauri::async_runtime::spawn(async move {
-                                match transcribe::transcribe_placeholder(session_id).await {
+                                match transcribe::transcribe_placeholder(
+                                    session_id,
+                                    &capture.wav_path,
+                                    capture.duration_ms,
+                                )
+                                .await
+                                {
                                     Ok(text) => {
                                         let _ = app_handle_for_task.emit(
                                             "transcription-complete",
