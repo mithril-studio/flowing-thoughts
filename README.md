@@ -19,7 +19,7 @@ Implemented:
 
 In progress:
 - Real microphone capture (`audio.rs`)
-- Whisper API transcription (`transcribe.rs`)
+- Whisper API transcription (`transcribe.rs`, currently uses `OPENAI_API_KEY`)
 - macOS text injection into focused apps (`text_inject.rs`)
 - Onboarding gates (license, OpenAI key, accessibility checks)
 

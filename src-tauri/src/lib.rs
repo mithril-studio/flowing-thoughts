@@ -206,7 +206,7 @@ pub fn run() {
                             let session_state_for_task = shared_session_state.clone();
 
                             tauri::async_runtime::spawn(async move {
-                                match transcribe::transcribe_placeholder(
+                                match transcribe::transcribe_audio(
                                     session_id,
                                     &capture.wav_path,
                                     capture.duration_ms,
