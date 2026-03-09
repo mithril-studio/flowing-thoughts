@@ -9,22 +9,24 @@ pub enum HotkeyEvent {
     RecordStop,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotkeyMode {
     CmdShiftSpace,
     Fn,
 }
 
 impl HotkeyMode {
-    fn from_env() -> Self {
-        match std::env::var("OVW_HOTKEY")
-            .unwrap_or_else(|_| "cmd+shift+space".to_string())
-            .to_ascii_lowercase()
-            .trim()
-        {
+    fn parse(value: &str) -> Self {
+        match value.to_ascii_lowercase().trim() {
             "fn" => Self::Fn,
             _ => Self::CmdShiftSpace,
         }
+    }
+
+    fn from_env() -> Self {
+        let raw = std::env::var("OVW_HOTKEY")
+            .unwrap_or_else(|_| "cmd+shift+space".to_string());
+        Self::parse(&raw)
     }
 }
 
@@ -114,4 +116,22 @@ fn is_cmd_key(key: Key) -> bool {
 
 fn is_shift_key(key: Key) -> bool {
     key == Key::ShiftLeft || key == Key::ShiftRight
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HotkeyMode;
+
+    #[test]
+    fn hotkey_mode_parse_supports_fn_override() {
+        assert_eq!(HotkeyMode::parse("fn"), HotkeyMode::Fn);
+        assert_eq!(HotkeyMode::parse("FN"), HotkeyMode::Fn);
+    }
+
+    #[test]
+    fn hotkey_mode_parse_defaults_to_cmd_shift_space() {
+        assert_eq!(HotkeyMode::parse("cmd+shift+space"), HotkeyMode::CmdShiftSpace);
+        assert_eq!(HotkeyMode::parse("anything-else"), HotkeyMode::CmdShiftSpace);
+        assert_eq!(HotkeyMode::parse(""), HotkeyMode::CmdShiftSpace);
+    }
 }

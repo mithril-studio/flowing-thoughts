@@ -2,10 +2,15 @@ use std::path::Path;
 use std::time::Duration;
 
 use reqwest::multipart::{Form, Part};
+use reqwest::StatusCode;
 
 #[derive(serde::Deserialize)]
 struct OpenAiTranscriptionResponse {
     text: String,
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
 pub async fn transcribe_audio(
@@ -69,7 +74,7 @@ pub async fn transcribe_audio(
                 last_error = format!(
                     "OpenAI transcription failed ({status}) for session {session_id}, duration {duration_ms}ms: {body}"
                 );
-                if status.is_client_error() {
+                if !should_retry_status(status) {
                     break;
                 }
             }
@@ -86,4 +91,24 @@ pub async fn transcribe_audio(
     }
 
     Err(last_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_retry_status;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn retries_on_rate_limit_and_server_errors() {
+        assert!(should_retry_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(should_retry_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(should_retry_status(StatusCode::BAD_GATEWAY));
+    }
+
+    #[test]
+    fn does_not_retry_on_other_client_errors() {
+        assert!(!should_retry_status(StatusCode::UNAUTHORIZED));
+        assert!(!should_retry_status(StatusCode::BAD_REQUEST));
+        assert!(!should_retry_status(StatusCode::NOT_FOUND));
+    }
 }
