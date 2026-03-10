@@ -4,27 +4,27 @@ import RecordingIndicator from "./RecordingIndicator";
 
 describe("RecordingIndicator", () => {
   it("shows idle helper text", () => {
-    render(<RecordingIndicator mode="idle" />);
+    render(<RecordingIndicator mode="idle" idleLabel="Hold Cmd+Shift+Space" />);
     expect(screen.getByText("Hold Cmd+Shift+Space")).toBeInTheDocument();
   });
 
   it("shows recording text", () => {
-    render(<RecordingIndicator mode="recording" />);
+    render(<RecordingIndicator mode="recording" idleLabel="Hold Cmd+Shift+Space" />);
     expect(screen.getByText("Recording...")).toBeInTheDocument();
   });
 
   it("shows transcribing text", () => {
-    render(<RecordingIndicator mode="transcribing" />);
+    render(<RecordingIndicator mode="transcribing" idleLabel="Hold Cmd+Shift+Space" />);
     expect(screen.getByText("Transcribing...")).toBeInTheDocument();
   });
 
   it("shows injecting text", () => {
-    render(<RecordingIndicator mode="injecting" />);
+    render(<RecordingIndicator mode="injecting" idleLabel="Hold Cmd+Shift+Space" />);
     expect(screen.getByText("Typing...")).toBeInTheDocument();
   });
 
   it("shows error text", () => {
-    render(<RecordingIndicator mode="error" />);
+    render(<RecordingIndicator mode="error" idleLabel="Hold Cmd+Shift+Space" />);
     expect(screen.getByText("Pipeline error")).toBeInTheDocument();
   });
 });

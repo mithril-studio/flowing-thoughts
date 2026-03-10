@@ -19,6 +19,9 @@ function App() {
   const [isOnboardingComplete, setIsOnboardingComplete] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
 
+  const shortcutLabel =
+    appSettings.shortcuts.preset === "fn" ? "Fn" : "Cmd+Shift+Space";
+
   useEffect(() => {
     Promise.all([
       invoke<PersistedStateView>("get_persisted_state"),
@@ -38,7 +41,7 @@ function App() {
   }, []);
 
   const pages: Record<Tab, React.ReactNode> = {
-    home: <Home />,
+    home: <Home shortcutLabel={shortcutLabel} />,
     snippets: <Snippets />,
     notes: <Notes />,
     settings: (

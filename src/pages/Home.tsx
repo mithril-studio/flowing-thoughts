@@ -15,7 +15,11 @@ interface PersistedStateView {
   history: { session_id: number; text: string; timestamp: string }[];
 }
 
-export default function Home() {
+interface HomeProps {
+  shortcutLabel: string;
+}
+
+export default function Home({ shortcutLabel }: HomeProps) {
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
@@ -101,7 +105,7 @@ export default function Home() {
     <div className="flex flex-col h-full">
       {/* Recording indicator */}
       <div className="flex justify-center py-4">
-        <RecordingIndicator mode={phase} />
+        <RecordingIndicator mode={phase} idleLabel={`Hold ${shortcutLabel}`} />
       </div>
 
       {lastError && (
@@ -124,7 +128,7 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center h-full text-neutral-500">
             <p className="text-sm">No transcriptions yet</p>
             <p className="text-xs mt-1">
-              Hold <kbd className="px-1 py-0.5 bg-neutral-800 rounded">Cmd+Shift+Space</kbd> and speak
+              Hold <kbd className="px-1 py-0.5 bg-neutral-800 rounded">{shortcutLabel}</kbd> and speak
             </p>
             {(phase === "transcribing" || phase === "injecting") && (
               <p className="text-xs mt-1 text-amber-400">

@@ -1,8 +1,9 @@
 interface RecordingIndicatorProps {
   mode: "idle" | "recording" | "transcribing" | "injecting" | "error";
+  idleLabel: string;
 }
 
-export default function RecordingIndicator({ mode }: RecordingIndicatorProps) {
+export default function RecordingIndicator({ mode, idleLabel }: RecordingIndicatorProps) {
   const dotClass =
     mode === "recording"
       ? "bg-red-500 animate-pulse"
@@ -23,7 +24,7 @@ export default function RecordingIndicator({ mode }: RecordingIndicatorProps) {
           ? "Typing..."
         : mode === "error"
           ? "Pipeline error"
-          : "Hold Cmd+Shift+Space";
+          : idleLabel;
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800">
