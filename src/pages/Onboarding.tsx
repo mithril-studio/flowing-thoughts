@@ -98,7 +98,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     setError(null);
     try {
       await invoke("save_onboarding_state", {
-        license_key: licenseKey.trim(),
+        licenseKey: licenseKey.trim(),
         onboarding_complete: true,
       });
       onComplete();
@@ -114,7 +114,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     setError(null);
     try {
       await invoke("save_onboarding_state", {
-        license_key: licenseKey.trim(),
+        licenseKey: licenseKey.trim(),
         onboarding_complete: true,
       });
       await invoke("run_injection_test");
