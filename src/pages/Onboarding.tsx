@@ -5,6 +5,11 @@ interface PersistedStateView {
   onboarding_complete: boolean;
   license_key: string | null;
   has_openai_api_key: boolean;
+  settings?: {
+    extras?: {
+      dangerously_skip_permissions?: boolean;
+    };
+  };
 }
 
 interface OnboardingProps {
@@ -16,6 +21,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [licenseKey, setLicenseKey] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [accessibilityGranted, setAccessibilityGranted] = useState(false);
+  const [dangerouslySkipPermissions, setDangerouslySkipPermissions] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -35,6 +41,10 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   useEffect(() => {
     invoke<PersistedStateView>("get_persisted_state")
       .then((state) => {
+        const skipPermissions = Boolean(
+          state.settings?.extras?.dangerously_skip_permissions
+        );
+        setDangerouslySkipPermissions(skipPermissions);
         const persistedLicense = state.license_key?.trim() ?? "";
         const hasLicense = persistedLicense.length >= 8;
         if (hasLicense) {
@@ -51,7 +61,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           return;
         }
 
-        setStep(3);
+        setStep(skipPermissions ? 4 : 3);
       })
       .catch(() => {
         // Keep default step when backend command is unavailable.
@@ -85,6 +95,10 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   const checkAccessibility = async () => {
+    if (dangerouslySkipPermissions) {
+      setStep(4);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -137,7 +151,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         licenseKey: licenseKey.trim(),
         onboardingComplete: true,
       });
-      await invoke("run_injection_test");
+      if (!dangerouslySkipPermissions) {
+        await invoke("run_injection_test");
+      }
       onComplete();
     } catch (e) {
       setError(String(e));
@@ -217,6 +233,11 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             >
               Continue Anyway
             </button>
+            {dangerouslySkipPermissions && (
+              <p className="text-xs text-amber-300 mt-2">
+                Permission checks are skipped by settings.
+              </p>
+            )}
             {accessibilityGranted && (
               <p className="text-xs text-emerald-400 mt-2">Accessibility permission detected.</p>
             )}

@@ -10,6 +10,7 @@ pub struct HistoryEntry {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct GeneralSettings {
     pub window_movable: bool,
     pub launch_at_login: bool,
@@ -27,6 +28,7 @@ impl Default for GeneralSettings {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ShortcutsSettings {
     pub preset: String,
 }
@@ -40,6 +42,7 @@ impl Default for ShortcutsSettings {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MicrophoneSettings {
     pub input_device: String,
     pub noise_suppression_enabled: bool,
@@ -55,6 +58,7 @@ impl Default for MicrophoneSettings {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LanguageSettings {
     pub mode: String,
 }
@@ -68,6 +72,7 @@ impl Default for LanguageSettings {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SoundSettings {
     pub feedback_sounds_enabled: bool,
 }
@@ -81,9 +86,11 @@ impl Default for SoundSettings {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ExtrasSettings {
     pub auto_add_to_dictionary: bool,
     pub smart_formatting: bool,
+    pub dangerously_skip_permissions: bool,
 }
 
 impl Default for ExtrasSettings {
@@ -91,6 +98,7 @@ impl Default for ExtrasSettings {
         Self {
             auto_add_to_dictionary: false,
             smart_formatting: true,
+            dangerously_skip_permissions: false,
         }
     }
 }
@@ -197,5 +205,6 @@ mod tests {
         assert_eq!(parsed.settings.shortcuts.preset, "cmd_shift_space");
         assert_eq!(parsed.settings.language.mode, "system");
         assert!(parsed.settings.extras.smart_formatting);
+        assert!(!parsed.settings.extras.dangerously_skip_permissions);
     }
 }

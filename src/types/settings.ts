@@ -20,6 +20,7 @@ export interface AppSettings {
   extras: {
     auto_add_to_dictionary: boolean;
     smart_formatting: boolean;
+    dangerously_skip_permissions: boolean;
   };
 }
 
@@ -50,5 +51,6 @@ export const defaultAppSettings: AppSettings = {
   extras: {
     auto_add_to_dictionary: false,
     smart_formatting: true,
+    dangerously_skip_permissions: false,
   },
 };

@@ -28,6 +28,7 @@ describe("Settings", () => {
     expect(screen.getByText("Language")).toBeInTheDocument();
     expect(screen.getByText("Sound Settings")).toBeInTheDocument();
     expect(screen.getByText("Extras")).toBeInTheDocument();
+    expect(screen.getByText("Dangerously skip permissions")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Window movable" }));
 

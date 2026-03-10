@@ -161,6 +161,22 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           }
           disabled={busy}
         />
+        <Toggle
+          label="Dangerously skip permissions"
+          checked={local.extras.dangerously_skip_permissions}
+          onChange={(checked) =>
+            update({
+              ...local,
+              extras: { ...local.extras, dangerously_skip_permissions: checked },
+            })
+          }
+          disabled={busy}
+        />
+        {local.extras.dangerously_skip_permissions && (
+          <p className="text-xs text-amber-300">
+            Warning: This bypasses permission checks in onboarding and may cause injection failures.
+          </p>
+        )}
       </section>
 
       {warnings.length > 0 && (
