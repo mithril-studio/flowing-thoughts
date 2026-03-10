@@ -3,6 +3,7 @@ export interface AppSettings {
     window_movable: boolean;
     launch_at_login: boolean;
     show_in_dock: boolean;
+    window_position: "center" | "top_left" | "top_right" | "bottom_left" | "bottom_right" | string;
   };
   shortcuts: {
     preset: "cmd_shift_space" | "fn" | string;
@@ -34,6 +35,7 @@ export const defaultAppSettings: AppSettings = {
     window_movable: true,
     launch_at_login: false,
     show_in_dock: true,
+    window_position: "center",
   },
   shortcuts: {
     preset: "cmd_shift_space",

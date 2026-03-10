@@ -23,6 +23,7 @@ describe("Settings", () => {
     render(<Settings settings={defaultAppSettings} onSettingsChange={onSettingsChange} />);
 
     expect(screen.getByText("General")).toBeInTheDocument();
+    expect(screen.getByText("Window position")).toBeInTheDocument();
     expect(screen.getByText("Shortcuts")).toBeInTheDocument();
     expect(screen.getByText("Microphone")).toBeInTheDocument();
     expect(screen.getByText("Language")).toBeInTheDocument();

@@ -82,6 +82,26 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           }
           disabled={busy}
         />
+        <div className="space-y-1">
+          <p className="text-xs text-neutral-400">Window position</p>
+          <select
+            value={local.general.window_position}
+            disabled={busy}
+            onChange={(e) =>
+              update({
+                ...local,
+                general: { ...local.general, window_position: e.target.value },
+              })
+            }
+            className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-200"
+          >
+            <option value="center">Center</option>
+            <option value="top_left">Top left</option>
+            <option value="top_right">Top right</option>
+            <option value="bottom_left">Bottom left</option>
+            <option value="bottom_right">Bottom right</option>
+          </select>
+        </div>
       </section>
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">

@@ -15,6 +15,7 @@ pub struct GeneralSettings {
     pub window_movable: bool,
     pub launch_at_login: bool,
     pub show_in_dock: bool,
+    pub window_position: String,
 }
 
 impl Default for GeneralSettings {
@@ -23,6 +24,7 @@ impl Default for GeneralSettings {
             window_movable: true,
             launch_at_login: false,
             show_in_dock: true,
+            window_position: "center".to_string(),
         }
     }
 }
@@ -202,6 +204,7 @@ mod tests {
         }"#;
         let parsed: PersistedState = serde_json::from_str(raw).expect("should parse");
         assert!(parsed.settings.general.window_movable);
+        assert_eq!(parsed.settings.general.window_position, "center");
         assert_eq!(parsed.settings.shortcuts.preset, "cmd_shift_space");
         assert_eq!(parsed.settings.language.mode, "system");
         assert!(parsed.settings.extras.smart_formatting);

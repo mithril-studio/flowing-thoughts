@@ -1,7 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    ActivationPolicy, AppHandle, Emitter, Manager, WebviewWindow,
+    ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -156,6 +156,10 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.microphone.input_device.trim().is_empty() {
         settings.microphone.input_device = "system_default".to_string();
     }
+    let valid_positions = ["center", "top_left", "top_right", "bottom_left", "bottom_right"];
+    if !valid_positions.contains(&settings.general.window_position.as_str()) {
+        settings.general.window_position = "center".to_string();
+    }
 }
 
 fn apply_window_movable(window: &WebviewWindow, movable: bool) {
@@ -163,6 +167,45 @@ fn apply_window_movable(window: &WebviewWindow, movable: bool) {
         "window.dispatchEvent(new CustomEvent('ovw-window-movable', {{ detail: {{ movable: {} }} }}));",
         if movable { "true" } else { "false" }
     ));
+}
+
+fn apply_window_position(window: &WebviewWindow, position: &str) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| format!("Failed to read current monitor: {e}"))?
+        .ok_or_else(|| "No monitor available for positioning".to_string())?;
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+    let window_size = window
+        .outer_size()
+        .map_err(|e| format!("Failed to read window size: {e}"))?;
+
+    let margin = 24_i32;
+    let monitor_w = monitor_size.width as i32;
+    let monitor_h = monitor_size.height as i32;
+    let win_w = window_size.width as i32;
+    let win_h = window_size.height as i32;
+
+    let (offset_x, offset_y) = match position {
+        "top_left" => (margin, margin),
+        "top_right" => ((monitor_w - win_w - margin).max(margin), margin),
+        "bottom_left" => (margin, (monitor_h - win_h - margin).max(margin)),
+        "bottom_right" => (
+            (monitor_w - win_w - margin).max(margin),
+            (monitor_h - win_h - margin).max(margin),
+        ),
+        _ => (
+            ((monitor_w - win_w) / 2).max(0),
+            ((monitor_h - win_h) / 2).max(0),
+        ),
+    };
+
+    window
+        .set_position(Position::Physical(PhysicalPosition {
+            x: monitor_pos.x + offset_x,
+            y: monitor_pos.y + offset_y,
+        }))
+        .map_err(|e| format!("Failed to set window position: {e}"))
 }
 
 #[cfg(target_os = "macos")]
@@ -262,6 +305,9 @@ fn update_app_settings(
     let mut warnings = Vec::new();
     if let Some(window) = app.get_webview_window("main") {
         apply_window_movable(&window, next_settings.general.window_movable);
+        if let Err(e) = apply_window_position(&window, &next_settings.general.window_position) {
+            warnings.push(e);
+        }
     }
     if let Err(e) = apply_show_in_dock(&app, next_settings.general.show_in_dock) {
         warnings.push(e);
@@ -787,6 +833,10 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(state) = persisted.lock() {
                     apply_window_movable(&window, state.settings.general.window_movable);
+                    let _ = apply_window_position(
+                        &window,
+                        &state.settings.general.window_position,
+                    );
                 }
                 let _ = window.show();
                 let _ = window.set_focus();
