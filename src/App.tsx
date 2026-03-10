@@ -4,8 +4,10 @@ import TabBar, { type Tab } from "./components/TabBar";
 import Home from "./pages/Home";
 import Snippets from "./pages/Snippets";
 import Notes from "./pages/Notes";
+import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
+import { defaultAppSettings, type AppSettings } from "./types/settings";
 
 interface PersistedStateView {
   onboarding_complete: boolean;
@@ -15,14 +17,20 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>("home");
   const [isLoading, setIsLoading] = useState(true);
   const [isOnboardingComplete, setIsOnboardingComplete] = useState(false);
+  const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
 
   useEffect(() => {
-    invoke<PersistedStateView>("get_persisted_state")
-      .then((state) => {
+    Promise.all([
+      invoke<PersistedStateView>("get_persisted_state"),
+      invoke<AppSettings>("get_app_settings").catch(() => defaultAppSettings),
+    ])
+      .then(([state, settings]) => {
         setIsOnboardingComplete(state.onboarding_complete);
+        setAppSettings(settings);
       })
       .catch(() => {
         setIsOnboardingComplete(false);
+        setAppSettings(defaultAppSettings);
       })
       .finally(() => {
         setIsLoading(false);
@@ -33,22 +41,45 @@ function App() {
     home: <Home />,
     snippets: <Snippets />,
     notes: <Notes />,
+    settings: (
+      <Settings
+        settings={appSettings}
+        onSettingsChange={(next) => setAppSettings(next)}
+      />
+    ),
   };
+
+  const dragStrip = appSettings.general.window_movable ? (
+    <div
+      data-tauri-drag-region
+      className="h-6 shrink-0 border-b border-neutral-900 bg-neutral-950/95"
+      title="Drag to move window"
+    />
+  ) : null;
 
   if (isLoading) {
     return (
-      <div className="h-screen bg-neutral-950 text-neutral-400 flex items-center justify-center text-sm">
-        Loading...
+      <div className="flex flex-col h-screen bg-neutral-950 text-neutral-400">
+        {dragStrip}
+        <div className="flex-1 flex items-center justify-center text-sm">Loading...</div>
       </div>
     );
   }
 
   if (!isOnboardingComplete) {
-    return <Onboarding onComplete={() => setIsOnboardingComplete(true)} />;
+    return (
+      <div className="flex flex-col h-screen bg-neutral-950 text-white">
+        {dragStrip}
+        <div className="flex-1">
+          <Onboarding onComplete={() => setIsOnboardingComplete(true)} />
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-white">
+      {dragStrip}
       <div className="flex-1 overflow-hidden">{pages[activeTab]}</div>
       <TabBar active={activeTab} onTabChange={setActiveTab} />
     </div>

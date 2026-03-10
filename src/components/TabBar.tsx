@@ -1,4 +1,4 @@
-type Tab = "home" | "snippets" | "notes";
+type Tab = "home" | "snippets" | "notes" | "settings";
 
 interface TabBarProps {
   active: Tab;
@@ -9,6 +9,7 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "🏠" },
   { id: "snippets", label: "Snippets", icon: "✂️" },
   { id: "notes", label: "Notes", icon: "📝" },
+  { id: "settings", label: "Settings", icon: "⚙️" },
 ];
 
 export default function TabBar({ active, onTabChange }: TabBarProps) {

@@ -147,7 +147,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   return (
-    <div className="h-screen bg-neutral-950 text-white px-6 py-8 flex items-center justify-center">
+    <div className="h-full bg-neutral-950 text-white px-6 py-8 flex items-center justify-center">
       <div className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-5">
         <h1 className="text-lg font-semibold">Setup Open Voice Wispr</h1>
         <p className="text-xs text-neutral-400 mt-1">Step {step} of 4</p>
