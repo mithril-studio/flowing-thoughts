@@ -100,4 +100,48 @@ describe("Onboarding", () => {
       expect(screen.getByText("Click test, then focus any text field. The app will paste a test sentence.")).toBeInTheDocument();
     });
   });
+
+  it("sends camelCase args when completing setup without test", async () => {
+    const onComplete = vi.fn();
+    render(<Onboarding onComplete={onComplete} />);
+    expect(await screen.findByText("Enter your license key")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("License key"), {
+      target: { value: "LICENSE-1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Enter your OpenAI API key")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("sk-..."), {
+      target: { value: "sk-test-1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save API Key" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Grant Accessibility permission so the app can type text")
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue Anyway" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Complete Setup Without Test")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Complete Setup Without Test" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "save_onboarding_state",
+        expect.objectContaining({
+          licenseKey: "LICENSE-1234",
+          onboardingComplete: true,
+        })
+      );
+      expect(onComplete).toHaveBeenCalled();
+    });
+  });
 });
