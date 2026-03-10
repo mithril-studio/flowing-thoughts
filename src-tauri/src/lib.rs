@@ -1,7 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager,
+    ActivationPolicy, AppHandle, Emitter, Manager, WebviewWindow,
 };
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -43,6 +43,38 @@ struct PipelineErrorEvent {
     session_id: u64,
     stage: &'static str,
     message: String,
+}
+
+fn apply_smart_formatting(text: &str) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return compact;
+    }
+    let mut chars = compact.chars();
+    let first = chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>())
+        .unwrap_or_default();
+    let rest: String = chars.collect();
+    let mut output = format!("{first}{rest}");
+    if !output.ends_with('.') && !output.ends_with('!') && !output.ends_with('?') {
+        output.push('.');
+    }
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_smart_formatting;
+
+    #[test]
+    fn smart_formatting_normalizes_spacing_and_terminal_punctuation() {
+        assert_eq!(
+            apply_smart_formatting("hello   world"),
+            "Hello world."
+        );
+        assert_eq!(apply_smart_formatting("already done?"), "Already done?");
+    }
 }
 
 #[tauri::command]
@@ -88,6 +120,7 @@ struct PersistedStateView {
     license_key: Option<String>,
     has_openai_api_key: bool,
     history: Vec<storage::HistoryEntry>,
+    settings: storage::AppSettings,
 }
 
 #[tauri::command]
@@ -103,6 +136,147 @@ fn get_persisted_state(
         license_key: state.license_key.clone(),
         has_openai_api_key: state.openai_api_key.is_some(),
         history: state.history.clone(),
+        settings: state.settings.clone(),
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AppSettingsUpdateResult {
+    settings: storage::AppSettings,
+    warnings: Vec<String>,
+}
+
+fn sanitize_settings(settings: &mut storage::AppSettings) {
+    if settings.shortcuts.preset != "cmd_shift_space" && settings.shortcuts.preset != "fn" {
+        settings.shortcuts.preset = "cmd_shift_space".to_string();
+    }
+    if settings.language.mode != "system" && settings.language.mode != "en" {
+        settings.language.mode = "system".to_string();
+    }
+    if settings.microphone.input_device.trim().is_empty() {
+        settings.microphone.input_device = "system_default".to_string();
+    }
+}
+
+fn apply_window_movable(window: &WebviewWindow, movable: bool) {
+    let _ = window.eval(&format!(
+        "window.dispatchEvent(new CustomEvent('ovw-window-movable', {{ detail: {{ movable: {} }} }}));",
+        if movable { "true" } else { "false" }
+    ));
+}
+
+#[cfg(target_os = "macos")]
+fn apply_launch_at_login(enabled: bool) -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+    let exe_path = executable
+        .to_str()
+        .ok_or_else(|| "Executable path contains invalid UTF-8".to_string())?;
+    let script = if enabled {
+        format!(
+            "tell application \"System Events\"\n\
+             set existingItems to login items where name is \"Open Voice Wispr\"\n\
+             repeat with itemRef in existingItems\n\
+             delete itemRef\n\
+             end repeat\n\
+             make login item at end with properties {{name:\"Open Voice Wispr\", path:\"{exe_path}\", hidden:false}}\n\
+             end tell"
+        )
+    } else {
+        "tell application \"System Events\"\n\
+         set existingItems to login items where name is \"Open Voice Wispr\"\n\
+         repeat with itemRef in existingItems\n\
+         delete itemRef\n\
+         end repeat\n\
+         end tell"
+            .to_string()
+    };
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| format!("Failed to apply launch-at-login setting: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Launch-at-login update failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_launch_at_login(_enabled: bool) -> Result<(), String> {
+    Err("Launch at login setting is only supported on macOS".to_string())
+}
+
+fn apply_show_in_dock(app: &AppHandle, show_in_dock: bool) -> Result<(), String> {
+    let policy = if show_in_dock {
+        ActivationPolicy::Regular
+    } else {
+        ActivationPolicy::Accessory
+    };
+    app.set_activation_policy(policy)
+        .map_err(|e| format!("Failed to apply dock visibility: {e}"))
+}
+
+#[tauri::command]
+fn get_app_settings(
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+) -> Result<storage::AppSettings, String> {
+    let mut state = persisted
+        .inner()
+        .lock()
+        .map_err(|_| "Persisted state lock poisoned".to_string())?;
+    sanitize_settings(&mut state.settings);
+    Ok(state.settings.clone())
+}
+
+#[tauri::command]
+fn update_app_settings(
+    settings: storage::AppSettings,
+    app: tauri::AppHandle,
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    hotkey_mode: tauri::State<'_, Arc<Mutex<hotkey::HotkeyMode>>>,
+) -> Result<AppSettingsUpdateResult, String> {
+    let mut next_settings = settings;
+    sanitize_settings(&mut next_settings);
+
+    {
+        let mut state = persisted
+            .inner()
+            .lock()
+            .map_err(|_| "Persisted state lock poisoned".to_string())?;
+        state.settings = next_settings.clone();
+        storage::save(&state)?;
+    }
+
+    if hotkey::mode_from_env().is_none() {
+        if let Ok(mut mode) = hotkey_mode.inner().lock() {
+            *mode = hotkey::HotkeyMode::from_preset(&next_settings.shortcuts.preset);
+        }
+    }
+
+    let mut warnings = Vec::new();
+    if let Some(window) = app.get_webview_window("main") {
+        apply_window_movable(&window, next_settings.general.window_movable);
+    }
+    if let Err(e) = apply_show_in_dock(&app, next_settings.general.show_in_dock) {
+        warnings.push(e);
+    }
+    if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
+        warnings.push(e);
+    }
+
+    for message in &warnings {
+        let _ = storage::append_log("WARN", message);
+    }
+
+    Ok(AppSettingsUpdateResult {
+        settings: next_settings,
+        warnings,
     })
 }
 
@@ -223,13 +397,23 @@ fn open_logs_folder() -> Result<(), String> {
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
     let next_session_id = Arc::new(Mutex::new(1_u64));
-    let persisted = Arc::new(Mutex::new(storage::load().unwrap_or_default()));
+    let persisted_state = {
+        let mut loaded = storage::load().unwrap_or_default();
+        sanitize_settings(&mut loaded.settings);
+        loaded
+    };
+    let configured_hotkey_mode =
+        hotkey::HotkeyMode::from_preset(&persisted_state.settings.shortcuts.preset);
+    let runtime_hotkey_mode = hotkey::mode_from_env().unwrap_or(configured_hotkey_mode);
+    let persisted = Arc::new(Mutex::new(persisted_state));
+    let hotkey_mode = Arc::new(Mutex::new(runtime_hotkey_mode));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(session_state.clone())
         .manage(persisted.clone())
+        .manage(hotkey_mode.clone())
         .setup(move |app| {
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -256,7 +440,7 @@ pub fn run() {
                 .build(app)?;
 
             // Start fn key listener
-            let hotkey_rx = hotkey::start_listener();
+            let hotkey_rx = hotkey::start_listener(hotkey_mode.clone());
             let app_handle = app.handle().clone();
             let shared_session_state = session_state.clone();
             let shared_next_session_id = next_session_id.clone();
@@ -437,20 +621,34 @@ pub fn run() {
                             let persisted_for_task = shared_persisted.clone();
 
                             tauri::async_runtime::spawn(async move {
-                                let runtime_api_key = persisted_for_task
-                                    .lock()
-                                    .ok()
-                                    .and_then(|state| state.openai_api_key.clone());
+                                let (runtime_api_key, language_mode, smart_formatting) =
+                                    persisted_for_task
+                                        .lock()
+                                        .ok()
+                                        .map(|state| {
+                                            (
+                                                state.openai_api_key.clone(),
+                                                state.settings.language.mode.clone(),
+                                                state.settings.extras.smart_formatting,
+                                            )
+                                        })
+                                        .unwrap_or((None, "system".to_string(), true));
 
                                 match transcribe::transcribe_audio(
                                     session_id,
                                     &capture.wav_path,
                                     capture.duration_ms,
                                     runtime_api_key.as_deref(),
+                                    Some(&language_mode),
                                 )
                                 .await
                                 {
                                     Ok(text) => {
+                                        let text = if smart_formatting {
+                                            apply_smart_formatting(&text)
+                                        } else {
+                                            text
+                                        };
                                         {
                                             let mut session_state_guard =
                                                 session_state_for_task.lock().unwrap();
@@ -587,8 +785,14 @@ pub fn run() {
 
             // Show window on first launch
             if let Some(window) = app.get_webview_window("main") {
+                if let Ok(state) = persisted.lock() {
+                    apply_window_movable(&window, state.settings.general.window_movable);
+                }
                 let _ = window.show();
                 let _ = window.set_focus();
+            }
+            if let Ok(state) = persisted.lock() {
+                let _ = apply_show_in_dock(&app.handle().clone(), state.settings.general.show_in_dock);
             }
 
             Ok(())
@@ -602,7 +806,9 @@ pub fn run() {
             check_accessibility_permission,
             open_accessibility_settings,
             run_injection_test,
-            open_logs_folder
+            open_logs_folder,
+            get_app_settings,
+            update_app_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

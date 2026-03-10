@@ -1,5 +1,5 @@
 use rdev::{listen, Event, EventType, Key};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -10,32 +10,45 @@ pub enum HotkeyEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HotkeyMode {
+pub enum HotkeyMode {
     CmdShiftSpace,
     Fn,
 }
 
 impl HotkeyMode {
-    fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().trim() {
             "fn" => Self::Fn,
+            "cmd+shift+space" => Self::CmdShiftSpace,
+            "cmd_shift_space" => Self::CmdShiftSpace,
             _ => Self::CmdShiftSpace,
         }
     }
 
-    fn from_env() -> Self {
-        let raw = std::env::var("OVW_HOTKEY")
-            .unwrap_or_else(|_| "cmd+shift+space".to_string());
-        Self::parse(&raw)
+    pub fn from_preset(preset: &str) -> Self {
+        Self::parse(preset)
+    }
+}
+
+pub fn mode_from_env() -> Option<HotkeyMode> {
+    std::env::var("OVW_HOTKEY")
+        .ok()
+        .map(|raw| HotkeyMode::parse(&raw))
+}
+
+#[cfg(test)]
+pub fn mode_to_preset(mode: HotkeyMode) -> &'static str {
+    match mode {
+        HotkeyMode::CmdShiftSpace => "cmd_shift_space",
+        HotkeyMode::Fn => "fn",
     }
 }
 
 /// Spawn a background thread that listens for global hotkeys.
 /// Default hotkey mode: hold Cmd+Shift+Space to record.
 /// Optional override for development: set `OVW_HOTKEY=fn`.
-pub fn start_listener() -> mpsc::Receiver<HotkeyEvent> {
+pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<HotkeyEvent> {
     let (tx, rx) = mpsc::channel();
-    let mode = HotkeyMode::from_env();
 
     thread::spawn(move || {
         let mut cmd_down = false;
@@ -46,6 +59,10 @@ pub fn start_listener() -> mpsc::Receiver<HotkeyEvent> {
         let start_debounce = Duration::from_millis(80);
 
         if let Err(e) = listen(move |event: Event| {
+            let mode = mode_state
+                .lock()
+                .map(|guard| *guard)
+                .unwrap_or(HotkeyMode::CmdShiftSpace);
             match mode {
                 HotkeyMode::Fn => match event.event_type {
                     EventType::KeyPress(Key::Function) => {
@@ -120,7 +137,7 @@ fn is_shift_key(key: Key) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::HotkeyMode;
+    use super::{mode_to_preset, HotkeyMode};
 
     #[test]
     fn hotkey_mode_parse_supports_fn_override() {
@@ -131,7 +148,14 @@ mod tests {
     #[test]
     fn hotkey_mode_parse_defaults_to_cmd_shift_space() {
         assert_eq!(HotkeyMode::parse("cmd+shift+space"), HotkeyMode::CmdShiftSpace);
+        assert_eq!(HotkeyMode::parse("cmd_shift_space"), HotkeyMode::CmdShiftSpace);
         assert_eq!(HotkeyMode::parse("anything-else"), HotkeyMode::CmdShiftSpace);
         assert_eq!(HotkeyMode::parse(""), HotkeyMode::CmdShiftSpace);
+    }
+
+    #[test]
+    fn hotkey_mode_preset_mapping_round_trips() {
+        assert_eq!(mode_to_preset(HotkeyMode::Fn), "fn");
+        assert_eq!(mode_to_preset(HotkeyMode::CmdShiftSpace), "cmd_shift_space");
     }
 }

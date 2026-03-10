@@ -9,11 +9,115 @@ pub struct HistoryEntry {
     pub timestamp: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GeneralSettings {
+    pub window_movable: bool,
+    pub launch_at_login: bool,
+    pub show_in_dock: bool,
+}
+
+impl Default for GeneralSettings {
+    fn default() -> Self {
+        Self {
+            window_movable: true,
+            launch_at_login: false,
+            show_in_dock: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShortcutsSettings {
+    pub preset: String,
+}
+
+impl Default for ShortcutsSettings {
+    fn default() -> Self {
+        Self {
+            preset: "cmd_shift_space".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MicrophoneSettings {
+    pub input_device: String,
+    pub noise_suppression_enabled: bool,
+}
+
+impl Default for MicrophoneSettings {
+    fn default() -> Self {
+        Self {
+            input_device: "system_default".to_string(),
+            noise_suppression_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LanguageSettings {
+    pub mode: String,
+}
+
+impl Default for LanguageSettings {
+    fn default() -> Self {
+        Self {
+            mode: "system".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SoundSettings {
+    pub feedback_sounds_enabled: bool,
+}
+
+impl Default for SoundSettings {
+    fn default() -> Self {
+        Self {
+            feedback_sounds_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExtrasSettings {
+    pub auto_add_to_dictionary: bool,
+    pub smart_formatting: bool,
+}
+
+impl Default for ExtrasSettings {
+    fn default() -> Self {
+        Self {
+            auto_add_to_dictionary: false,
+            smart_formatting: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct AppSettings {
+    #[serde(default)]
+    pub general: GeneralSettings,
+    #[serde(default)]
+    pub shortcuts: ShortcutsSettings,
+    #[serde(default)]
+    pub microphone: MicrophoneSettings,
+    #[serde(default)]
+    pub language: LanguageSettings,
+    #[serde(default)]
+    pub sound: SoundSettings,
+    #[serde(default)]
+    pub extras: ExtrasSettings,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct PersistedState {
     pub license_key: Option<String>,
     pub onboarding_complete: bool,
     pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub settings: AppSettings,
     pub history: Vec<HistoryEntry>,
 }
 
@@ -74,4 +178,24 @@ pub fn append_log(level: &str, message: &str) -> Result<(), String> {
     file.write_all(line.as_bytes())
         .map_err(|e| format!("Failed to append log line: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistedState;
+
+    #[test]
+    fn load_legacy_json_without_settings_uses_defaults() {
+        let raw = r#"{
+            "license_key":"LICENSE-1234",
+            "onboarding_complete":true,
+            "openai_api_key":"sk-test",
+            "history":[]
+        }"#;
+        let parsed: PersistedState = serde_json::from_str(raw).expect("should parse");
+        assert!(parsed.settings.general.window_movable);
+        assert_eq!(parsed.settings.shortcuts.preset, "cmd_shift_space");
+        assert_eq!(parsed.settings.language.mode, "system");
+        assert!(parsed.settings.extras.smart_formatting);
+    }
 }

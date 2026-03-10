@@ -13,11 +13,19 @@ fn should_retry_status(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
+fn normalize_language_mode(mode: &str) -> Option<&'static str> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "en" | "english" => Some("en"),
+        _ => None,
+    }
+}
+
 pub async fn transcribe_audio(
     session_id: u64,
     wav_path: &Path,
     duration_ms: u64,
     api_key_override: Option<&str>,
+    language_mode: Option<&str>,
 ) -> Result<String, String> {
     // Small delay keeps state transitions readable while the request starts.
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -46,9 +54,12 @@ pub async fn transcribe_audio(
             .file_name("capture.wav")
             .mime_str("audio/wav")
             .map_err(|e| format!("Failed to build audio upload part: {e}"))?;
-        let form = Form::new()
+        let mut form = Form::new()
             .text("model", "whisper-1")
             .part("file", part);
+        if let Some(mode) = language_mode.and_then(normalize_language_mode) {
+            form = form.text("language", mode.to_string());
+        }
 
         let response = client
             .post("https://api.openai.com/v1/audio/transcriptions")
@@ -95,7 +106,7 @@ pub async fn transcribe_audio(
 
 #[cfg(test)]
 mod tests {
-    use super::should_retry_status;
+    use super::{normalize_language_mode, should_retry_status};
     use reqwest::StatusCode;
 
     #[test]
@@ -110,5 +121,13 @@ mod tests {
         assert!(!should_retry_status(StatusCode::UNAUTHORIZED));
         assert!(!should_retry_status(StatusCode::BAD_REQUEST));
         assert!(!should_retry_status(StatusCode::NOT_FOUND));
+    }
+
+    #[test]
+    fn language_mode_normalization() {
+        assert_eq!(normalize_language_mode("en"), Some("en"));
+        assert_eq!(normalize_language_mode("english"), Some("en"));
+        assert_eq!(normalize_language_mode("system"), None);
+        assert_eq!(normalize_language_mode(""), None);
     }
 }
