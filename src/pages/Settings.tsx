@@ -209,20 +209,20 @@ function Toggle({
 }) {
   return (
     <label className="flex items-center justify-between gap-3 text-sm text-neutral-200">
-      <span>{label}</span>
+      <span className="min-w-0 flex-1">{label}</span>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`relative h-6 w-10 rounded-full transition-colors ${
+        className={`relative h-6 w-11 shrink-0 overflow-hidden rounded-full transition-colors ${
           checked ? "bg-emerald-500" : "bg-neutral-700"
         } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
       >
         <span
           className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-            checked ? "translate-x-4" : "translate-x-0.5"
+            checked ? "translate-x-5" : "translate-x-0.5"
           }`}
         />
       </button>

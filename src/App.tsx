@@ -8,6 +8,7 @@ import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
 import { defaultAppSettings, type AppSettings } from "./types/settings";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface PersistedStateView {
   onboarding_complete: boolean;
@@ -49,13 +50,31 @@ function App() {
     ),
   };
 
-  const dragStrip = appSettings.general.window_movable ? (
+  const startDrag = async () => {
+    if (!appSettings.general.window_movable) return;
+    try {
+      await getCurrentWindow().startDragging();
+    } catch {
+      // Ignore outside Tauri/runtime unsupported cases.
+    }
+  };
+
+  const dragStrip = (
     <div
       data-tauri-drag-region
-      className="h-6 shrink-0 border-b border-neutral-900 bg-neutral-950/95"
-      title="Drag to move window"
-    />
-  ) : null;
+      onMouseDown={() => {
+        void startDrag();
+      }}
+      className={`h-8 shrink-0 border-b border-neutral-900 flex items-center px-3 text-[11px] tracking-wide uppercase ${
+        appSettings.general.window_movable
+          ? "bg-neutral-900/90 text-neutral-500 cursor-move select-none"
+          : "bg-neutral-950 text-neutral-700 cursor-default"
+      }`}
+      title={appSettings.general.window_movable ? "Drag to move window" : "Window movement locked"}
+    >
+      {appSettings.general.window_movable ? "Drag Here" : "Window Locked"}
+    </div>
+  );
 
   if (isLoading) {
     return (
