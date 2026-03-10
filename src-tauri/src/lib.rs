@@ -449,6 +449,53 @@ fn start_window_drag(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to start window drag: {e}"))
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct AccessibilityHelpInfo {
+    executable_path: String,
+    is_dev_build: bool,
+    note: String,
+}
+
+#[tauri::command]
+fn get_accessibility_help_info() -> Result<AccessibilityHelpInfo, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+    let executable_path = exe
+        .to_str()
+        .ok_or_else(|| "Executable path contains invalid UTF-8".to_string())?
+        .to_string();
+    let is_dev_build = cfg!(debug_assertions);
+    let note = if is_dev_build {
+        "Dev build detected. In macOS Accessibility, allow Terminal/iTerm and the debug binary path."
+            .to_string()
+    } else {
+        "Bundled app detected. Allow Open Voice Wispr in macOS Accessibility.".to_string()
+    };
+    Ok(AccessibilityHelpInfo {
+        executable_path,
+        is_dev_build,
+        note,
+    })
+}
+
+#[tauri::command]
+fn reveal_current_executable() -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+    let status = Command::new("open")
+        .arg("-R")
+        .arg(exe)
+        .status()
+        .map_err(|e| format!("Failed to reveal executable in Finder: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Reveal executable command failed with status: {status}"
+        ))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
@@ -868,6 +915,8 @@ pub fn run() {
             run_injection_test,
             open_logs_folder,
             start_window_drag,
+            get_accessibility_help_info,
+            reveal_current_executable,
             get_app_settings,
             update_app_settings
         ])

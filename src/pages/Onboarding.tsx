@@ -12,6 +12,12 @@ interface PersistedStateView {
   };
 }
 
+interface AccessibilityHelpInfo {
+  executable_path: string;
+  is_dev_build: boolean;
+  note: string;
+}
+
 interface OnboardingProps {
   onComplete: () => void;
 }
@@ -22,6 +28,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [apiKey, setApiKey] = useState("");
   const [accessibilityGranted, setAccessibilityGranted] = useState(false);
   const [dangerouslySkipPermissions, setDangerouslySkipPermissions] = useState(false);
+  const [accessibilityHelp, setAccessibilityHelp] = useState<AccessibilityHelpInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -65,6 +72,12 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       })
       .catch(() => {
         // Keep default step when backend command is unavailable.
+      });
+
+    invoke<AccessibilityHelpInfo>("get_accessibility_help_info")
+      .then((info) => setAccessibilityHelp(info))
+      .catch(() => {
+        // Non-blocking helper info.
       });
   }, []);
 
@@ -233,6 +246,20 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             >
               Continue Anyway
             </button>
+            <button
+              onClick={() => invoke("reveal_current_executable").catch((e) => setError(String(e)))}
+              className="w-full mt-2 text-sm py-2 rounded-md border border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
+            >
+              Reveal Running App in Finder
+            </button>
+            {accessibilityHelp && (
+              <div className="mt-2 rounded-md border border-neutral-800 bg-neutral-950 p-2">
+                <p className="text-[11px] text-neutral-400">{accessibilityHelp.note}</p>
+                <p className="text-[11px] text-neutral-500 mt-1 break-all">
+                  {accessibilityHelp.executable_path}
+                </p>
+              </div>
+            )}
             {dangerouslySkipPermissions && (
               <p className="text-xs text-amber-300 mt-2">
                 Permission checks are skipped by settings.
