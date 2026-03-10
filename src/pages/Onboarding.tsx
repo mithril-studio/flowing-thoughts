@@ -19,6 +19,19 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const invokeWithTimeout = async <T,>(
+    command: string,
+    args?: Record<string, unknown>,
+    timeoutMs = 8000
+  ): Promise<T> => {
+    return Promise.race([
+      invoke<T>(command, args),
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`"${command}" timed out after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
+  };
+
   useEffect(() => {
     invoke<PersistedStateView>("get_persisted_state")
       .then((state) => {
@@ -65,9 +78,30 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     setBusy(true);
     setError(null);
     try {
-      const granted = await invoke<boolean>("check_accessibility_permission");
+      const granted = await invokeWithTimeout<boolean>("check_accessibility_permission");
       setAccessibilityGranted(granted);
       if (granted) setStep(4);
+      if (!granted) {
+        setError(
+          "Accessibility is still disabled. You can enable it in System Settings or continue anyway."
+        );
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const completeWithoutInjectionTest = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("save_onboarding_state", {
+        license_key: licenseKey.trim(),
+        onboarding_complete: true,
+      });
+      onComplete();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -157,6 +191,12 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                 {busy ? "Checking..." : "Check Access"}
               </button>
             </div>
+            <button
+              onClick={() => setStep(4)}
+              className="w-full mt-2 text-sm py-2 rounded-md border border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
+            >
+              Continue Anyway
+            </button>
             {accessibilityGranted && (
               <p className="text-xs text-emerald-400 mt-2">Accessibility permission detected.</p>
             )}
@@ -174,6 +214,13 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               className="w-full text-sm py-2 rounded-md bg-white text-black font-medium hover:bg-neutral-200 disabled:opacity-60"
             >
               {busy ? "Running..." : "Run End-to-End Test"}
+            </button>
+            <button
+              onClick={completeWithoutInjectionTest}
+              disabled={busy}
+              className="w-full mt-2 text-sm py-2 rounded-md border border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800 disabled:opacity-60"
+            >
+              Complete Setup Without Test
             </button>
           </div>
         )}

@@ -6,6 +6,7 @@ use tauri::{
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 mod audio;
 mod hotkey;
@@ -127,30 +128,70 @@ fn save_onboarding_state(
 
 #[tauri::command]
 fn check_accessibility_permission() -> Result<bool, String> {
-    let output = Command::new("osascript")
+    let mut child = Command::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\" to return UI elements enabled")
-        .output()
-        .map_err(|e| format!("Failed to check accessibility permission: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("Accessibility check failed: {stderr}"));
+        .spawn()
+        .map_err(|e| format!("Failed to start accessibility check: {e}"))?;
+
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(
+                "Accessibility check timed out. Open Settings and enable access manually."
+                    .to_string(),
+            );
+        }
+
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("Failed to read accessibility check output: {e}"))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let message = if stderr.is_empty() {
+                        "Unknown AppleScript error".to_string()
+                    } else {
+                        stderr
+                    };
+                    return Err(format!("Accessibility check failed: {message}"));
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                return Ok(stdout.trim().eq_ignore_ascii_case("true"));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("Failed to poll accessibility check: {e}")),
+        }
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout.trim().eq_ignore_ascii_case("true"))
 }
 
 #[tauri::command]
 fn open_accessibility_settings() -> Result<(), String> {
-    let status = Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    let targets = [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy",
+    ];
+    for target in targets {
+        let status = Command::new("open").arg(target).status();
+        if let Ok(exit) = status {
+            if exit.success() {
+                return Ok(());
+            }
+        }
+    }
+
+    let fallback = Command::new("open")
+        .args(["-b", "com.apple.systempreferences"])
         .status()
-        .map_err(|e| format!("Failed to open accessibility settings: {e}"))?;
-    if status.success() {
+        .map_err(|e| format!("Failed to open System Settings: {e}"))?;
+    if fallback.success() {
         Ok(())
     } else {
         Err(format!(
-            "Open accessibility settings command failed with status: {status}"
+            "Unable to open Accessibility settings automatically. Open System Settings manually (Privacy & Security > Accessibility). Exit status: {fallback}"
         ))
     }
 }

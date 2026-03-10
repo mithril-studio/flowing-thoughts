@@ -69,4 +69,35 @@ describe("Onboarding", () => {
 
     expect(screen.getByText("Please enter a valid OpenAI API key.")).toBeInTheDocument();
   });
+
+  it("allows continuing past accessibility step", async () => {
+    render(<Onboarding onComplete={vi.fn()} />);
+    expect(await screen.findByText("Enter your license key")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("License key"), {
+      target: { value: "LICENSE-1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Enter your OpenAI API key")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("sk-..."), {
+      target: { value: "sk-test-1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save API Key" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Grant Accessibility permission so the app can type text")
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue Anyway" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Click test, then focus any text field. The app will paste a test sentence.")).toBeInTheDocument();
+    });
+  });
 });
