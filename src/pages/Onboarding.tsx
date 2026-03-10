@@ -35,13 +35,23 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   useEffect(() => {
     invoke<PersistedStateView>("get_persisted_state")
       .then((state) => {
-        if (state.license_key) {
-          setLicenseKey(state.license_key);
+        const persistedLicense = state.license_key?.trim() ?? "";
+        const hasLicense = persistedLicense.length >= 8;
+        if (hasLicense) {
+          setLicenseKey(persistedLicense);
+        }
+
+        if (!hasLicense) {
+          setStep(1);
+          return;
+        }
+
+        if (!state.has_openai_api_key) {
           setStep(2);
+          return;
         }
-        if (state.has_openai_api_key) {
-          setStep(3);
-        }
+
+        setStep(3);
       })
       .catch(() => {
         // Keep default step when backend command is unavailable.
@@ -94,6 +104,11 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   const completeWithoutInjectionTest = async () => {
+    if (licenseKey.trim().length < 8) {
+      setError("Missing license key. Please complete step 1 first.");
+      setStep(1);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -110,6 +125,11 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   const runTest = async () => {
+    if (licenseKey.trim().length < 8) {
+      setError("Missing license key. Please complete step 1 first.");
+      setStep(1);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {

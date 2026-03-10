@@ -144,4 +144,24 @@ describe("Onboarding", () => {
       expect(onComplete).toHaveBeenCalled();
     });
   });
+
+  it("does not skip license step when only api key is persisted", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          onboarding_complete: false,
+          license_key: null,
+          has_openai_api_key: true,
+          history: [],
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<Onboarding onComplete={vi.fn()} />);
+
+    expect(await screen.findByText("Enter your license key")).toBeInTheDocument();
+    expect(screen.getByText("Step 1 of 4")).toBeInTheDocument();
+  });
 });
