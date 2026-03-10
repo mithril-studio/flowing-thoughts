@@ -7,6 +7,10 @@
   - Run real tests/build checks (no mocked pipeline tests as acceptance).
   - Commit with a focused message.
 - Do not start the next task until the current task is tested and committed.
+- Permission prompts policy:
+  - Only ask for elevated permissions for `push` to `main` requests.
+  - Only ask for elevated permissions in plan mode.
+  - Otherwise skip permission prompts and continue with default sandbox execution.
 
 ## Steps
 
