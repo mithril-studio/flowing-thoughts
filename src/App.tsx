@@ -8,7 +8,6 @@ import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
 import { defaultAppSettings, type AppSettings } from "./types/settings";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface PersistedStateView {
   onboarding_complete: boolean;
@@ -53,7 +52,7 @@ function App() {
   const startDrag = async () => {
     if (!appSettings.general.window_movable) return;
     try {
-      await getCurrentWindow().startDragging();
+      await invoke("start_window_drag");
     } catch {
       // Ignore outside Tauri/runtime unsupported cases.
     }

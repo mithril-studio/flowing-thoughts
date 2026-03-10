@@ -439,6 +439,16 @@ fn open_logs_folder() -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn start_window_drag(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+    window
+        .start_dragging()
+        .map_err(|e| format!("Failed to start window drag: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
@@ -857,6 +867,7 @@ pub fn run() {
             open_accessibility_settings,
             run_injection_test,
             open_logs_folder,
+            start_window_drag,
             get_app_settings,
             update_app_settings
         ])
