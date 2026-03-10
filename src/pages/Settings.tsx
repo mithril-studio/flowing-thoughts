@@ -216,13 +216,13 @@ function Toggle({
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 shrink-0 overflow-hidden rounded-full transition-colors ${
+        className={`h-6 w-11 shrink-0 rounded-full px-0.5 flex items-center transition-colors ${
           checked ? "bg-emerald-500" : "bg-neutral-700"
         } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
       >
         <span
-          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-            checked ? "translate-x-5" : "translate-x-0.5"
+          className={`h-5 w-5 rounded-full bg-white transition-all ${
+            checked ? "ml-auto" : ""
           }`}
         />
       </button>
