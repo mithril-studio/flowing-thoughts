@@ -11,13 +11,22 @@ interface SettingsProps {
   onSettingsChange: (settings: AppSettings) => void;
 }
 
+interface AccessibilityHelpInfo {
+  executable_path: string;
+  is_dev_build: boolean;
+  note: string;
+}
+
 export default function Settings({ settings, onSettingsChange }: SettingsProps) {
   const [local, setLocal] = useState<AppSettings>(settings ?? defaultAppSettings);
   const [busy, setBusy] = useState(false);
   const [apiBusy, setApiBusy] = useState(false);
+  const [setupBusy, setSetupBusy] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [hasApiKey, setHasApiKey] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
+  const [accessibilityGranted, setAccessibilityGranted] = useState<boolean | null>(null);
+  const [helpInfo, setHelpInfo] = useState<AccessibilityHelpInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
@@ -30,6 +39,14 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       .then((value) => setHasApiKey(Boolean(value)))
       .catch(() => {
         setHasApiKey(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<AccessibilityHelpInfo>("get_accessibility_help_info")
+      .then((info) => setHelpInfo(info))
+      .catch(() => {
+        // Non-blocking helper content.
       });
   }, []);
 
@@ -74,9 +91,84 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     }
   };
 
+  const checkAccessibility = async () => {
+    setSetupBusy(true);
+    setError(null);
+    try {
+      const granted = await invoke<boolean>("check_accessibility_permission");
+      setAccessibilityGranted(granted);
+    } catch (e) {
+      setError(String(e));
+      setAccessibilityGranted(false);
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto px-4 py-4 space-y-4">
       <h2 className="text-sm font-medium text-white">Settings</h2>
+
+      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
+        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Setup Steps</h3>
+        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2">
+          <p className="text-sm text-neutral-200">Accessibility</p>
+          <p className="text-xs text-neutral-400">
+            Status:{" "}
+            {accessibilityGranted === null
+              ? "Not checked"
+              : accessibilityGranted
+                ? "Granted"
+                : "Not granted"}
+          </p>
+          <div className="grid grid-cols-1 gap-2">
+            <button
+              type="button"
+              onClick={checkAccessibility}
+              disabled={setupBusy}
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800 disabled:opacity-60"
+            >
+              {setupBusy ? "Checking..." : "Check Accessibility"}
+            </button>
+            <button
+              type="button"
+              onClick={() => invoke("open_accessibility_settings").catch((e) => setError(String(e)))}
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
+            >
+              Open Accessibility Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => invoke("reveal_current_executable").catch((e) => setError(String(e)))}
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
+            >
+              Reveal Running App in Finder
+            </button>
+          </div>
+          {helpInfo && (
+            <p className="text-[11px] text-neutral-500 break-all">
+              {helpInfo.note} {helpInfo.executable_path}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2">
+          <p className="text-sm text-neutral-200">Shortcut Step</p>
+          <p className="text-xs text-neutral-400">
+            Active shortcut: {local.shortcuts.preset === "fn" ? "Fn (hold)" : "Cmd+Shift+Space (hold)"}
+          </p>
+          <button
+            type="button"
+            onClick={() => invoke("open_input_monitoring_settings").catch((e) => setError(String(e)))}
+            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
+          >
+            Open Input Monitoring Settings
+          </button>
+          <p className="text-[11px] text-neutral-500">
+            Ensure your terminal or app is allowed in both Accessibility and Input Monitoring.
+          </p>
+        </div>
+      </section>
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
         <h3 className="text-xs text-neutral-400 uppercase tracking-wide">General</h3>

@@ -496,6 +496,34 @@ fn reveal_current_executable() -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn open_input_monitoring_settings() -> Result<(), String> {
+    let targets = [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy",
+    ];
+    for target in targets {
+        let status = Command::new("open").arg(target).status();
+        if let Ok(exit) = status {
+            if exit.success() {
+                return Ok(());
+            }
+        }
+    }
+
+    let fallback = Command::new("open")
+        .args(["-b", "com.apple.systempreferences"])
+        .status()
+        .map_err(|e| format!("Failed to open System Settings: {e}"))?;
+    if fallback.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unable to open Input Monitoring settings automatically. Open System Settings manually (Privacy & Security > Input Monitoring). Exit status: {fallback}"
+        ))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
@@ -917,6 +945,7 @@ pub fn run() {
             start_window_drag,
             get_accessibility_help_info,
             reveal_current_executable,
+            open_input_monitoring_settings,
             get_app_settings,
             update_app_settings
         ])
