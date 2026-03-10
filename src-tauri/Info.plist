@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Open Voice Wispr needs microphone access to record your voice for transcription.</string>
+    <string>FlowingThoughts needs microphone access to record your voice for transcription.</string>
     <key>LSUIElement</key>
     <true/>
 </dict>

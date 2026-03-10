@@ -1,4 +1,4 @@
-# Open Voice Wispr — Build Plan
+# FlowingThoughts — Build Plan
 
 **What:** macOS voice dictation app. Global hotkey → record → transcribe → type into active app.
 **Stack:** Tauri 2 + React + TypeScript
@@ -93,7 +93,7 @@ Step 2: "Enter your OpenAI API key"
 
 Step 3: "Grant Accessibility Permission"
         [Open System Settings]  ← button triggers the macOS prompt
-        "Open Voice Wispr needs this to type text into your apps."
+        "FlowingThoughts needs this to type text into your apps."
         [auto-detect when granted, advance to next step]
 
 Step 4: "You're ready. Hold Cmd+Shift+Space and speak."
@@ -114,7 +114,7 @@ Don't over-engineer this. It's a €20 one-time purchase. The goal is "validate 
 That's it for Phase 1. No offline grace period logic, no periodic re-validation, no device limit handling. If someone shares their key — it's €20, not worth the engineering cost to prevent.
 
 **LemonSqueezy setup:**
-- Product: Open Voice Wispr
+- Product: FlowingThoughts
 - Price: €20 one-time
 - License key: Auto-generated on purchase
 

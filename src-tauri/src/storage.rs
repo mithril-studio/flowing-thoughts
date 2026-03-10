@@ -136,7 +136,7 @@ fn persisted_file_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Open Voice Wispr")
+        .join("FlowingThoughts")
         .join("state.json"))
 }
 
@@ -145,7 +145,7 @@ fn logs_file_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Open Voice Wispr")
+        .join("FlowingThoughts")
         .join("logs.txt"))
 }
 

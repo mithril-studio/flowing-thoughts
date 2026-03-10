@@ -1,4 +1,4 @@
-# Open Voice Wispr
+# FlowingThoughts
 
 Desktop voice dictation app for macOS, built with Tauri + React.
 

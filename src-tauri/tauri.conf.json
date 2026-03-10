@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Open Voice Wispr",
+  "productName": "FlowingThoughts",
   "version": "0.1.0",
-  "identifier": "com.openvoicewispr.desktop",
+  "identifier": "com.flowingthoughts.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Open Voice Wispr",
+        "title": "FlowingThoughts",
         "width": 360,
         "height": 480,
         "resizable": false,

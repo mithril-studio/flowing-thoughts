@@ -1,4 +1,4 @@
-# Open Voice Wispr Execution Plan (25-30% -> 95%)
+# FlowingThoughts Execution Plan (25-30% -> 95%)
 
 ## Delivery Rules
 

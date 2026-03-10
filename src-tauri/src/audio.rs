@@ -90,7 +90,7 @@ pub fn stop_and_finalize(
         return Err("No audio was captured".to_string());
     }
 
-    let output_dir = std::env::temp_dir().join("open-voice-wispr");
+    let output_dir = std::env::temp_dir().join("flowing-thoughts");
     fs::create_dir_all(&output_dir)
         .map_err(|e| format!("Failed to create temp audio directory: {e}"))?;
 

@@ -218,16 +218,16 @@ fn apply_launch_at_login(enabled: bool) -> Result<(), String> {
     let script = if enabled {
         format!(
             "tell application \"System Events\"\n\
-             set existingItems to login items where name is \"Open Voice Wispr\"\n\
+             set existingItems to login items where name is \"FlowingThoughts\"\n\
              repeat with itemRef in existingItems\n\
              delete itemRef\n\
              end repeat\n\
-             make login item at end with properties {{name:\"Open Voice Wispr\", path:\"{exe_path}\", hidden:false}}\n\
+             make login item at end with properties {{name:\"FlowingThoughts\", path:\"{exe_path}\", hidden:false}}\n\
              end tell"
         )
     } else {
         "tell application \"System Events\"\n\
-         set existingItems to login items where name is \"Open Voice Wispr\"\n\
+         set existingItems to login items where name is \"FlowingThoughts\"\n\
          repeat with itemRef in existingItems\n\
          delete itemRef\n\
          end repeat\n\
@@ -418,7 +418,7 @@ fn open_accessibility_settings() -> Result<(), String> {
 
 #[tauri::command]
 fn run_injection_test() -> Result<(), String> {
-    text_inject::inject_text("Open Voice Wispr test successful.")
+    text_inject::inject_text("FlowingThoughts test successful.")
 }
 
 #[tauri::command]
@@ -427,7 +427,7 @@ fn open_logs_folder() -> Result<(), String> {
     let logs_dir = std::path::PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Open Voice Wispr");
+        .join("FlowingThoughts");
     let status = Command::new("open")
         .arg(logs_dir)
         .status()
@@ -469,7 +469,7 @@ fn get_accessibility_help_info() -> Result<AccessibilityHelpInfo, String> {
         "Dev build detected. In macOS Accessibility, allow Terminal/iTerm and the debug binary path."
             .to_string()
     } else {
-        "Bundled app detected. Allow Open Voice Wispr in macOS Accessibility.".to_string()
+        "Bundled app detected. Allow FlowingThoughts in macOS Accessibility.".to_string()
     };
     Ok(AccessibilityHelpInfo {
         executable_path,

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    open_voice_wispr_lib::run()
+    flowing_thoughts_lib::run()
 }

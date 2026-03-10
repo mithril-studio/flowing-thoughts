@@ -1,12 +1,12 @@
 [package]
-name = "open-voice-wispr"
+name = "flowing-thoughts"
 version = "0.1.0"
 description = "Voice dictation for macOS — hold to record, release to type"
 authors = ["Joost Dolstra"]
 edition = "2021"
 
 [lib]
-name = "open_voice_wispr_lib"
+name = "flowing_thoughts_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -1107,6 +1107,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowing-thoughts"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "cpal",
+ "hound",
+ "rdev",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tauri-plugin-store",
+ "tokio",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2749,24 +2767,6 @@ dependencies = [
  "is-wsl",
  "libc",
  "pathdiff",
-]
-
-[[package]]
-name = "open-voice-wispr"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "cpal",
- "hound",
- "rdev",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tauri-plugin-store",
- "tokio",
 ]
 
 [[package]]
