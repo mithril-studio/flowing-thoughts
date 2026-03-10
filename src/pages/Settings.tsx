@@ -14,12 +14,24 @@ interface SettingsProps {
 export default function Settings({ settings, onSettingsChange }: SettingsProps) {
   const [local, setLocal] = useState<AppSettings>(settings ?? defaultAppSettings);
   const [busy, setBusy] = useState(false);
+  const [apiBusy, setApiBusy] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [apiMessage, setApiMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     setLocal(settings ?? defaultAppSettings);
   }, [settings]);
+
+  useEffect(() => {
+    invoke<boolean>("has_openai_api_key")
+      .then((value) => setHasApiKey(Boolean(value)))
+      .catch(() => {
+        setHasApiKey(false);
+      });
+  }, []);
 
   const persist = async (next: AppSettings) => {
     setBusy(true);
@@ -41,6 +53,25 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const update = (next: AppSettings) => {
     setLocal(next);
     void persist(next);
+  };
+
+  const saveApiKey = async () => {
+    if (!apiKey.trim().startsWith("sk-")) {
+      setApiMessage("Please enter a valid OpenAI API key.");
+      return;
+    }
+    setApiBusy(true);
+    setApiMessage(null);
+    try {
+      await invoke("set_openai_api_key", { key: apiKey.trim() });
+      setHasApiKey(true);
+      setApiKey("");
+      setApiMessage("API key saved.");
+    } catch (e) {
+      setApiMessage(String(e));
+    } finally {
+      setApiBusy(false);
+    }
   };
 
   return (
@@ -128,6 +159,32 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           }
           disabled={busy}
         />
+      </section>
+
+      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
+        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">API</h3>
+        <p className="text-xs text-neutral-300">
+          OpenAI API key:{" "}
+          <span className={hasApiKey ? "text-emerald-300" : "text-neutral-400"}>
+            {hasApiKey ? "configured" : "not configured"}
+          </span>
+        </p>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="sk-..."
+          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500"
+        />
+        <button
+          type="button"
+          onClick={saveApiKey}
+          disabled={apiBusy}
+          className="w-full rounded-md bg-white px-3 py-2 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-60"
+        >
+          {apiBusy ? "Saving..." : "Save API Key"}
+        </button>
+        {apiMessage && <p className="text-xs text-neutral-300">{apiMessage}</p>}
       </section>
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">

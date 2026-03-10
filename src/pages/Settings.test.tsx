@@ -11,12 +11,17 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 describe("Settings", () => {
   it("renders core sections and updates movable toggle", async () => {
-    invokeMock.mockResolvedValue({
-      settings: {
-        ...defaultAppSettings,
-        general: { ...defaultAppSettings.general, window_movable: false },
-      },
-      warnings: [],
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "has_openai_api_key") {
+        return Promise.resolve(true);
+      }
+      return Promise.resolve({
+        settings: {
+          ...defaultAppSettings,
+          general: { ...defaultAppSettings.general, window_movable: false },
+        },
+        warnings: [],
+      });
     });
 
     const onSettingsChange = vi.fn();
@@ -29,6 +34,8 @@ describe("Settings", () => {
     expect(screen.getByText("Language")).toBeInTheDocument();
     expect(screen.getByText("Sound Settings")).toBeInTheDocument();
     expect(screen.getByText("Extras")).toBeInTheDocument();
+    expect(screen.getByText("API")).toBeInTheDocument();
+    expect(screen.getByText("Save API Key")).toBeInTheDocument();
     expect(screen.getByText("Dangerously skip permissions")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Window movable" }));
