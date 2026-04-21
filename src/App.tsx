@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 import TabBar, { type Tab } from "./components/TabBar";
+import UpdateBanner from "./components/UpdateBanner";
 import Home from "./pages/Home";
 import Snippets from "./pages/Snippets";
 import Notes from "./pages/Notes";
@@ -111,6 +112,7 @@ function App() {
     return (
       <div className="flex flex-col h-screen bg-neutral-950 text-neutral-400">
         {dragStrip}
+        <UpdateBanner />
         <div className="flex-1 flex items-center justify-center text-sm">Loading...</div>
       </div>
     );
@@ -120,6 +122,7 @@ function App() {
     return (
       <div className="flex flex-col h-screen bg-neutral-950 text-white">
         {dragStrip}
+        <UpdateBanner />
         <div className="flex-1">
           <Onboarding onComplete={() => setIsOnboardingComplete(true)} />
         </div>
