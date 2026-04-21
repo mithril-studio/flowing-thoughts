@@ -1,10 +1,19 @@
 use crate::local_transcribe;
 use crate::model_manager::ModelId;
+use crate::storage::Provider;
 use crate::transcribe;
 use std::path::PathBuf;
 use std::time::Instant;
 
+pub const MODEL_GROQ_API: &str = "groq-api";
 pub const MODEL_OPENAI_API: &str = "openai-api";
+
+fn api_label(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Groq => MODEL_GROQ_API,
+        Provider::Openai => MODEL_OPENAI_API,
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LabResult {
@@ -36,9 +45,11 @@ pub async fn run_parallel(
     session_id: u64,
     wav_path: PathBuf,
     duration_ms: u64,
+    api_provider: Provider,
     api_key: Option<String>,
     language_mode: String,
 ) -> Vec<LabResult> {
+    let api_label_str = api_label(api_provider);
     let api_task = {
         let wav_path = wav_path.clone();
         let language_mode = language_mode.clone();
@@ -46,7 +57,7 @@ pub async fn run_parallel(
             let started = Instant::now();
             if api_key.is_none() {
                 return failure(
-                    MODEL_OPENAI_API,
+                    api_label_str,
                     0,
                     "API key not configured — skipped".to_string(),
                 );
@@ -55,14 +66,15 @@ pub async fn run_parallel(
                 session_id,
                 &wav_path,
                 duration_ms,
+                api_provider,
                 api_key.as_deref(),
                 Some(&language_mode),
             )
             .await;
             let latency = started.elapsed().as_millis() as u64;
             match result {
-                Ok(text) => success(MODEL_OPENAI_API, text, latency),
-                Err(e) => failure(MODEL_OPENAI_API, latency, e),
+                Ok(text) => success(api_label_str, text, latency),
+                Err(e) => failure(api_label_str, latency, e),
             }
         })
     };
@@ -87,7 +99,7 @@ pub async fn run_parallel(
 
     let api_out = match api_task.await {
         Ok(result) => result,
-        Err(e) => failure(MODEL_OPENAI_API, 0, format!("API task panicked: {e}")),
+        Err(e) => failure(api_label_str, 0, format!("API task panicked: {e}")),
     };
 
     let mut results = vec![api_out];

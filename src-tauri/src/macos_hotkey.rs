@@ -1,0 +1,291 @@
+//! Native macOS CGEventTap-based hotkey listener.
+//!
+//! Replaces the `rdev` crate on macOS because `rdev::listen` calls
+//! `TSMGetInputSourceProperty` from its listener thread, which asserts it is
+//! the main thread on macOS 26+ and aborts the process the first time any
+//! key event arrives (EXC_BREAKPOINT from `_dispatch_assert_queue_fail`).
+//!
+//! This implementation reads only the raw keycode and modifier flags from
+//! each event, never asks macOS for key names, and therefore never touches
+//! TSM APIs.
+
+#![cfg(target_os = "macos")]
+
+use std::os::raw::c_void;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use core_foundation::base::TCFType;
+use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+
+use crate::hotkey::{HotkeyEvent, HotkeyMode};
+
+// --- Raw CoreGraphics bindings -------------------------------------------
+//
+// We only need a small slice of the CGEventTap API; the `core-graphics`
+// crate's high-level wrappers don't cover the parts we need (flags-changed
+// events, raw keycode field access), so we declare the minimum FFI here.
+
+#[repr(C)]
+struct OpaqueCGEvent {
+    _private: [u8; 0],
+}
+type CGEventRef = *mut OpaqueCGEvent;
+
+#[repr(C)]
+struct OpaqueCFMachPort {
+    _private: [u8; 0],
+}
+type CFMachPortRef = *mut OpaqueCFMachPort;
+
+#[repr(C)]
+struct OpaqueCFRunLoopSource {
+    _private: [u8; 0],
+}
+type CFRunLoopSourceRef = *mut OpaqueCFRunLoopSource;
+
+type CGEventTapCallBack = extern "C" fn(
+    proxy: *mut c_void,
+    event_type: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef;
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventTapCreate(
+        tap: u32,
+        place: u32,
+        options: u32,
+        events_of_interest: u64,
+        callback: CGEventTapCallBack,
+        user_info: *mut c_void,
+    ) -> CFMachPortRef;
+
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+
+    fn CGEventGetFlags(event: CGEventRef) -> u64;
+
+    fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFMachPortCreateRunLoopSource(
+        allocator: *mut c_void,
+        port: CFMachPortRef,
+        order: isize,
+    ) -> CFRunLoopSourceRef;
+
+    fn CFRunLoopAddSource(
+        rl: *mut c_void,
+        source: CFRunLoopSourceRef,
+        mode: *const c_void,
+    );
+}
+
+// --- Constants -----------------------------------------------------------
+
+const K_CG_HID_EVENT_TAP: u32 = 0;
+const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
+
+const K_CG_EVENT_KEY_DOWN: u32 = 10;
+const K_CG_EVENT_KEY_UP: u32 = 11;
+const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFFFFFE;
+const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFFFFFF;
+
+const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+
+// NSEvent modifier flag mask for the Fn / Globe key.
+const NS_EVENT_MODIFIER_FLAG_FUNCTION: u64 = 1 << 23;
+// Standard Cocoa modifier masks.
+const NS_EVENT_MODIFIER_FLAG_COMMAND: u64 = 1 << 20;
+const NS_EVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
+
+// Virtual keycodes from <HIToolbox/Events.h>.
+const KC_SPACE: i64 = 49;
+
+fn event_mask() -> u64 {
+    (1u64 << K_CG_EVENT_KEY_DOWN)
+        | (1u64 << K_CG_EVENT_KEY_UP)
+        | (1u64 << K_CG_EVENT_FLAGS_CHANGED)
+}
+
+// --- Listener state ------------------------------------------------------
+//
+// The C tap callback needs a way to reach the hotkey mode + sender, so we
+// park them in a heap-allocated context struct and pass a raw pointer as
+// the `user_info` argument. The context lives as long as the listener
+// thread (i.e. the process), so leaking it via Box::into_raw is fine.
+
+struct TapContext {
+    mode_state: Arc<Mutex<HotkeyMode>>,
+    tx: mpsc::Sender<HotkeyEvent>,
+    state: Mutex<HotkeyFsm>,
+}
+
+#[derive(Default)]
+struct HotkeyFsm {
+    recording_active: bool,
+    last_start_at: Option<Instant>,
+    fn_was_down: bool,
+    cmd_was_down: bool,
+    shift_was_down: bool,
+    space_was_down: bool,
+}
+
+impl HotkeyFsm {
+    fn start_debounce(&mut self) -> bool {
+        let now = Instant::now();
+        let ok = self
+            .last_start_at
+            .map(|last| now.duration_since(last) >= Duration::from_millis(80))
+            .unwrap_or(true);
+        if ok {
+            self.last_start_at = Some(now);
+        }
+        ok
+    }
+}
+
+extern "C" fn tap_callback(
+    _proxy: *mut c_void,
+    event_type: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef {
+    // If macOS disabled our tap (timeout or user interrupt), the runloop
+    // keeps delivering events to us — re-enable and pass through.
+    if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+    {
+        // We don't have the port here; the runloop driver will reinstall.
+        return event;
+    }
+
+    if user_info.is_null() {
+        return event;
+    }
+    // SAFETY: we allocated this Box and leaked it; pointer is valid.
+    let ctx: &TapContext = unsafe { &*(user_info as *const TapContext) };
+
+    let mode = ctx
+        .mode_state
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(HotkeyMode::Fn);
+
+    let mut fsm = match ctx.state.lock() {
+        Ok(g) => g,
+        Err(_) => return event,
+    };
+
+    // SAFETY: `event` is a valid CGEventRef provided by the OS for the
+    // duration of this callback.
+    let flags = unsafe { CGEventGetFlags(event) };
+    let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
+
+    match mode {
+        HotkeyMode::Fn => {
+            let fn_down = (flags & NS_EVENT_MODIFIER_FLAG_FUNCTION) != 0;
+            if fn_down && !fsm.fn_was_down {
+                fsm.fn_was_down = true;
+                if !fsm.recording_active && fsm.start_debounce() {
+                    fsm.recording_active = true;
+                    let _ = ctx.tx.send(HotkeyEvent::RecordStart);
+                }
+            } else if !fn_down && fsm.fn_was_down {
+                fsm.fn_was_down = false;
+                if fsm.recording_active {
+                    fsm.recording_active = false;
+                    let _ = ctx.tx.send(HotkeyEvent::RecordStop);
+                }
+            }
+        }
+        HotkeyMode::CmdShiftSpace => {
+            let cmd_down = (flags & NS_EVENT_MODIFIER_FLAG_COMMAND) != 0;
+            let shift_down = (flags & NS_EVENT_MODIFIER_FLAG_SHIFT) != 0;
+            fsm.cmd_was_down = cmd_down;
+            fsm.shift_was_down = shift_down;
+
+            if event_type == K_CG_EVENT_KEY_DOWN && keycode == KC_SPACE {
+                fsm.space_was_down = true;
+            } else if event_type == K_CG_EVENT_KEY_UP && keycode == KC_SPACE {
+                fsm.space_was_down = false;
+            }
+
+            let combo = fsm.cmd_was_down && fsm.shift_was_down && fsm.space_was_down;
+            if combo && !fsm.recording_active && fsm.start_debounce() {
+                fsm.recording_active = true;
+                let _ = ctx.tx.send(HotkeyEvent::RecordStart);
+            } else if !combo && fsm.recording_active {
+                fsm.recording_active = false;
+                let _ = ctx.tx.send(HotkeyEvent::RecordStop);
+            }
+        }
+    }
+
+    event
+}
+
+pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<HotkeyEvent> {
+    let (tx, rx) = mpsc::channel();
+
+    let ctx = Box::new(TapContext {
+        mode_state,
+        tx,
+        state: Mutex::new(HotkeyFsm::default()),
+    });
+    // Pass the context pointer through the thread boundary as `usize`.
+    // The raw `*mut c_void` isn't `Send`, and wrapping it in a newtype
+    // with an unsafe Send impl still trips the closure Send check; going
+    // through usize avoids the issue entirely.
+    let ctx_addr = Box::into_raw(ctx) as usize;
+
+    thread::spawn(move || {
+        let ctx_ptr = ctx_addr as *mut c_void;
+        // SAFETY: CGEventTapCreate requires Accessibility permission. If
+        // it's missing we get NULL back and log — no crash.
+        let tap = unsafe {
+            CGEventTapCreate(
+                K_CG_HID_EVENT_TAP,
+                K_CG_HEAD_INSERT_EVENT_TAP,
+                K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+                event_mask(),
+                tap_callback,
+                ctx_ptr,
+            )
+        };
+        if tap.is_null() {
+            eprintln!(
+                "CGEventTapCreate returned null — grant FlowingThoughts Accessibility permission."
+            );
+            return;
+        }
+
+        let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0) };
+        if source.is_null() {
+            eprintln!("CFMachPortCreateRunLoopSource returned null");
+            return;
+        }
+
+        let run_loop = CFRunLoop::get_current();
+        unsafe {
+            CFRunLoopAddSource(
+                run_loop.as_concrete_TypeRef() as *mut c_void,
+                source,
+                kCFRunLoopCommonModes as *const c_void,
+            );
+            CGEventTapEnable(tap, true);
+        }
+
+        // This blocks forever and drives the callback. Drops out only if the
+        // runloop is torn down (process exit).
+        CFRunLoop::run_current();
+    });
+
+    rx
+}

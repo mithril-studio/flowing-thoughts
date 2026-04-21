@@ -41,7 +41,7 @@ export const defaultAppSettings: AppSettings = {
     window_position: "center",
   },
   shortcuts: {
-    preset: "cmd_shift_space",
+    preset: "fn",
   },
   microphone: {
     input_device: "system_default",
@@ -55,7 +55,7 @@ export const defaultAppSettings: AppSettings = {
   },
   extras: {
     auto_add_to_dictionary: false,
-    smart_formatting: true,
+    smart_formatting: false,
     dangerously_skip_permissions: false,
   },
   transcription: {

@@ -40,7 +40,7 @@ pub struct ShortcutsSettings {
 impl Default for ShortcutsSettings {
     fn default() -> Self {
         Self {
-            preset: "cmd_shift_space".to_string(),
+            preset: "fn".to_string(),
         }
     }
 }
@@ -115,7 +115,7 @@ impl Default for ExtrasSettings {
     fn default() -> Self {
         Self {
             auto_add_to_dictionary: false,
-            smart_formatting: true,
+            smart_formatting: false,
             dangerously_skip_permissions: false,
         }
     }
@@ -139,11 +139,47 @@ pub struct AppSettings {
     pub transcription: TranscriptionSettings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Groq,
+    Openai,
+}
+
+impl Default for Provider {
+    fn default() -> Self {
+        Provider::Groq
+    }
+}
+
+impl Provider {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "groq" => Some(Provider::Groq),
+            "openai" => Some(Provider::Openai),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provider::Groq => "groq",
+            Provider::Openai => "openai",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct PersistedState {
     pub license_key: Option<String>,
     pub onboarding_complete: bool,
+    // Legacy `api_key` field (pre-provider split) is treated as a Groq key.
+    #[serde(default, alias = "api_key")]
+    pub groq_api_key: Option<String>,
+    #[serde(default)]
     pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub active_provider: Provider,
     #[serde(default)]
     pub settings: AppSettings,
     pub history: Vec<HistoryEntry>,
@@ -181,6 +217,12 @@ pub fn load(conn: &Connection) -> Result<PersistedState, String> {
     if let Some(raw) = db::kv_get(conn, "openai_api_key")? {
         state.openai_api_key = serde_json::from_str(&raw).unwrap_or(None);
     }
+    if let Some(raw) = db::kv_get(conn, "groq_api_key")? {
+        state.groq_api_key = serde_json::from_str(&raw).unwrap_or(None);
+    }
+    if let Some(raw) = db::kv_get(conn, "active_provider")? {
+        state.active_provider = Provider::parse(raw.trim_matches('"')).unwrap_or_default();
+    }
     if let Some(raw) = db::kv_get(conn, "onboarding_complete")? {
         state.onboarding_complete = raw == "true";
     }
@@ -205,6 +247,13 @@ pub fn save(conn: &Connection, state: &PersistedState) -> Result<(), String> {
         &serde_json::to_string(&state.openai_api_key)
             .map_err(|e| format!("Failed to serialize openai_api_key: {e}"))?,
     )?;
+    db::kv_set(
+        conn,
+        "groq_api_key",
+        &serde_json::to_string(&state.groq_api_key)
+            .map_err(|e| format!("Failed to serialize groq_api_key: {e}"))?,
+    )?;
+    db::kv_set(conn, "active_provider", state.active_provider.as_str())?;
     db::kv_set(
         conn,
         "onboarding_complete",
@@ -279,22 +328,37 @@ pub fn append_log(level: &str, message: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::PersistedState;
+    use super::{PersistedState, Provider};
 
     #[test]
     fn load_legacy_json_without_settings_uses_defaults() {
         let raw = r#"{
             "license_key":"LICENSE-1234",
             "onboarding_complete":true,
-            "openai_api_key":"sk-test",
+            "api_key":"gsk-test",
             "history":[]
         }"#;
         let parsed: PersistedState = serde_json::from_str(raw).expect("should parse");
         assert!(parsed.settings.general.window_movable);
         assert_eq!(parsed.settings.general.window_position, "center");
-        assert_eq!(parsed.settings.shortcuts.preset, "cmd_shift_space");
+        assert_eq!(parsed.settings.shortcuts.preset, "fn");
         assert_eq!(parsed.settings.language.mode, "system");
-        assert!(parsed.settings.extras.smart_formatting);
+        assert!(!parsed.settings.extras.smart_formatting);
         assert!(!parsed.settings.extras.dangerously_skip_permissions);
+        // Legacy `api_key` migrates into the Groq slot.
+        assert_eq!(parsed.groq_api_key.as_deref(), Some("gsk-test"));
+        assert_eq!(parsed.openai_api_key, None);
+        assert_eq!(parsed.active_provider, Provider::Groq);
+    }
+
+    #[test]
+    fn provider_parse_round_trips() {
+        assert_eq!(Provider::parse("groq"), Some(Provider::Groq));
+        assert_eq!(Provider::parse("Groq"), Some(Provider::Groq));
+        assert_eq!(Provider::parse("openai"), Some(Provider::Openai));
+        assert_eq!(Provider::parse("OpenAI"), Some(Provider::Openai));
+        assert_eq!(Provider::parse("bogus"), None);
+        assert_eq!(Provider::Groq.as_str(), "groq");
+        assert_eq!(Provider::Openai.as_str(), "openai");
     }
 }

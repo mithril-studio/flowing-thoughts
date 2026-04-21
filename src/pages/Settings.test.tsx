@@ -16,8 +16,12 @@ vi.mock("@tauri-apps/api/event", () => ({
 describe("Settings", () => {
   it("renders core sections and updates movable toggle", async () => {
     invokeMock.mockImplementation((command: string) => {
-      if (command === "has_openai_api_key") {
-        return Promise.resolve(true);
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          groq_api_key_configured: true,
+          openai_api_key_configured: false,
+          active_provider: "groq",
+        });
       }
       if (command === "list_installed_models") {
         return Promise.resolve([]);
@@ -49,7 +53,8 @@ describe("Settings", () => {
     expect(screen.getByText("Extras")).toBeInTheDocument();
     expect(screen.getAllByText("API").length).toBeGreaterThan(0);
     expect(screen.getByText("Transcription")).toBeInTheDocument();
-    expect(screen.getByText("Save API Key")).toBeInTheDocument();
+    expect(screen.getByText("Save Groq API Key")).toBeInTheDocument();
+    expect(screen.getByText("Active provider")).toBeInTheDocument();
     expect(screen.getByText("Dangerously skip permissions")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Window movable" }));
@@ -66,6 +71,38 @@ describe("Settings", () => {
         })
       );
       expect(onSettingsChange).toHaveBeenCalled();
+    });
+  });
+
+  it("switches active provider via set_active_provider", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          groq_api_key_configured: true,
+          openai_api_key_configured: true,
+          active_provider: "groq",
+        });
+      }
+      if (command === "list_installed_models") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_accessibility_help_info") {
+        return Promise.resolve({ executable_path: "", is_dev_build: true, note: "" });
+      }
+      if (command === "set_active_provider") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve({ settings: defaultAppSettings, warnings: [] });
+    });
+
+    render(<Settings settings={defaultAppSettings} onSettingsChange={vi.fn()} />);
+
+    const openaiRadio = await screen.findByRole("radio", { name: /OpenAI/i });
+    fireEvent.click(openaiRadio);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_active_provider", { provider: "openai" });
     });
   });
 });
