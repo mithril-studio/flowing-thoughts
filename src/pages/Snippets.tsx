@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 interface Snippet {
   id: string;
@@ -6,8 +7,6 @@ interface Snippet {
   value: string;
   type: "name" | "link" | "custom";
 }
-
-const STORAGE_KEY = "snippets";
 
 export default function Snippets() {
   const [snippets, setSnippets] = useState<Snippet[]>([]);
@@ -17,40 +16,30 @@ export default function Snippets() {
   const [value, setValue] = useState("");
   const [type, setType] = useState<Snippet["type"]>("name");
 
-  // Load snippets from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      setSnippets(JSON.parse(saved));
-    }
+    invoke<Snippet[]>("list_snippets")
+      .then(setSnippets)
+      .catch((err) => console.error("Failed to load snippets:", err));
   }, []);
 
-  // Save snippets to localStorage on change
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snippets));
-  }, [snippets]);
-
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!label.trim() || !value.trim()) return;
 
-    if (editId) {
-      setSnippets((prev) =>
-        prev.map((s) =>
-          s.id === editId ? { ...s, label: label.trim(), value: value.trim(), type } : s
-        )
-      );
-    } else {
-      setSnippets((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          label: label.trim(),
-          value: value.trim(),
-          type,
-        },
-      ]);
+    const snippet: Snippet = {
+      id: editId ?? crypto.randomUUID(),
+      label: label.trim(),
+      value: value.trim(),
+      type,
+    };
+
+    try {
+      await invoke("save_snippet", { snippet });
+      const next = await invoke<Snippet[]>("list_snippets");
+      setSnippets(next);
+      resetForm();
+    } catch (err) {
+      console.error("Failed to save snippet:", err);
     }
-    resetForm();
   };
 
   const handleEdit = (snippet: Snippet) => {
@@ -61,8 +50,13 @@ export default function Snippets() {
     setShowForm(true);
   };
 
-  const handleDelete = (id: string) => {
-    setSnippets((prev) => prev.filter((s) => s.id !== id));
+  const handleDelete = async (id: string) => {
+    try {
+      await invoke("delete_snippet", { id });
+      setSnippets((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      console.error("Failed to delete snippet:", err);
+    }
   };
 
   const resetForm = () => {

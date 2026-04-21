@@ -1,3 +1,5 @@
+use crate::db;
+use rusqlite::Connection;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -167,6 +169,9 @@ pub struct PersistedState {
     pub history: Vec<HistoryEntry>,
 }
 
+const HISTORY_UI_CAP: i64 = 200;
+const MIGRATION_FLAG_KEY: &str = "migrated_from_state_json";
+
 fn persisted_file_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     Ok(PathBuf::from(home)
@@ -185,26 +190,105 @@ fn logs_file_path() -> Result<PathBuf, String> {
         .join("logs.txt"))
 }
 
-pub fn load() -> Result<PersistedState, String> {
-    let path = persisted_file_path()?;
-    if !path.exists() {
-        return Ok(PersistedState::default());
+pub fn load(conn: &Connection) -> Result<PersistedState, String> {
+    migrate_from_json_if_needed(conn)?;
+
+    let mut state = PersistedState::default();
+
+    if let Some(raw) = db::kv_get(conn, "license_key")? {
+        state.license_key = serde_json::from_str(&raw).unwrap_or(None);
     }
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read persisted state file: {e}"))?;
-    serde_json::from_str::<PersistedState>(&raw)
-        .map_err(|e| format!("Failed to parse persisted state JSON: {e}"))
+    if let Some(raw) = db::kv_get(conn, "openai_api_key")? {
+        state.openai_api_key = serde_json::from_str(&raw).unwrap_or(None);
+    }
+    if let Some(raw) = db::kv_get(conn, "groq_api_key")? {
+        state.groq_api_key = serde_json::from_str(&raw).unwrap_or(None);
+    }
+    if let Some(raw) = db::kv_get(conn, "active_provider")? {
+        state.active_provider = Provider::parse(raw.trim_matches('"')).unwrap_or_default();
+    }
+    if let Some(raw) = db::kv_get(conn, "onboarding_complete")? {
+        state.onboarding_complete = raw == "true";
+    }
+    if let Some(raw) = db::kv_get(conn, "app_settings")? {
+        state.settings = serde_json::from_str(&raw).unwrap_or_default();
+    }
+    state.history = db::list_history(conn, HISTORY_UI_CAP)?;
+
+    Ok(state)
 }
 
-pub fn save(state: &PersistedState) -> Result<(), String> {
-    let path = persisted_file_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create app state directory: {e}"))?;
+pub fn save(conn: &Connection, state: &PersistedState) -> Result<(), String> {
+    db::kv_set(
+        conn,
+        "license_key",
+        &serde_json::to_string(&state.license_key)
+            .map_err(|e| format!("Failed to serialize license_key: {e}"))?,
+    )?;
+    db::kv_set(
+        conn,
+        "openai_api_key",
+        &serde_json::to_string(&state.openai_api_key)
+            .map_err(|e| format!("Failed to serialize openai_api_key: {e}"))?,
+    )?;
+    db::kv_set(
+        conn,
+        "groq_api_key",
+        &serde_json::to_string(&state.groq_api_key)
+            .map_err(|e| format!("Failed to serialize groq_api_key: {e}"))?,
+    )?;
+    db::kv_set(conn, "active_provider", state.active_provider.as_str())?;
+    db::kv_set(
+        conn,
+        "onboarding_complete",
+        if state.onboarding_complete {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
+    db::kv_set(
+        conn,
+        "app_settings",
+        &serde_json::to_string(&state.settings)
+            .map_err(|e| format!("Failed to serialize app_settings: {e}"))?,
+    )?;
+    // History is append-only via record_history — not overwritten here.
+    Ok(())
+}
+
+pub fn record_history(conn: &Connection, entry: &HistoryEntry) -> Result<(), String> {
+    db::insert_history(conn, entry)
+}
+
+fn migrate_from_json_if_needed(conn: &Connection) -> Result<(), String> {
+    if db::kv_get(conn, MIGRATION_FLAG_KEY)?.is_some() {
+        return Ok(());
     }
-    let raw = serde_json::to_string_pretty(state)
-        .map_err(|e| format!("Failed to serialize persisted state: {e}"))?;
-    fs::write(path, raw).map_err(|e| format!("Failed to write persisted state file: {e}"))?;
+
+    let path = persisted_file_path()?;
+    if !path.exists() {
+        db::kv_set(conn, MIGRATION_FLAG_KEY, "1")?;
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read legacy state.json: {e}"))?;
+    let legacy: PersistedState = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse legacy state.json: {e}"))?;
+
+    save(conn, &legacy)?;
+    // History arrives newest-first in the JSON; reverse so SQLite AUTOINCREMENT
+    // preserves chronological order (oldest id = oldest entry).
+    for entry in legacy.history.iter().rev() {
+        db::insert_history(conn, entry)?;
+    }
+
+    db::kv_set(conn, MIGRATION_FLAG_KEY, "1")?;
+
+    let backup = path.with_extension("json.migrated");
+    let _ = fs::rename(&path, &backup);
+
     Ok(())
 }
 
