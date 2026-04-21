@@ -1,7 +1,10 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,11 +15,29 @@ pub struct ActiveRecording {
     samples: Arc<Mutex<Vec<i16>>>,
     sample_rate: u32,
     channels: u16,
+    amplitude: Arc<AtomicU32>,
+}
+
+impl ActiveRecording {
+    /// Latest peak sample level from the last input callback, in the range
+    /// `[0.0, 1.0]`. Used by the UI to animate the speaking indicator.
+    pub fn amplitude_handle(&self) -> Arc<AtomicU32> {
+        self.amplitude.clone()
+    }
 }
 
 pub struct AudioCapture {
     pub wav_path: PathBuf,
     pub duration_ms: u64,
+}
+
+/// Convert an `AtomicU32` amplitude slot back to a `0.0..=1.0` float.
+pub fn read_amplitude(slot: &AtomicU32) -> f32 {
+    f32::from_bits(slot.load(Ordering::Relaxed)).clamp(0.0, 1.0)
+}
+
+fn store_amplitude(slot: &AtomicU32, value: f32) {
+    slot.store(value.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
 pub fn start_recording() -> Result<ActiveRecording, String> {
@@ -31,6 +52,7 @@ pub fn start_recording() -> Result<ActiveRecording, String> {
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
     let samples = Arc::new(Mutex::new(Vec::<i16>::new()));
+    let amplitude = Arc::new(AtomicU32::new(0));
     let err_fn = |err| eprintln!("Audio input stream error: {err}");
 
     let stream = match config.sample_format() {
@@ -38,18 +60,21 @@ pub fn start_recording() -> Result<ActiveRecording, String> {
             &device,
             &config.clone().into(),
             samples.clone(),
+            amplitude.clone(),
             err_fn,
         )?,
         cpal::SampleFormat::U16 => build_u16_stream(
             &device,
             &config.clone().into(),
             samples.clone(),
+            amplitude.clone(),
             err_fn,
         )?,
         cpal::SampleFormat::F32 => build_f32_stream(
             &device,
             &config.clone().into(),
             samples.clone(),
+            amplitude.clone(),
             err_fn,
         )?,
         other => {
@@ -66,6 +91,7 @@ pub fn start_recording() -> Result<ActiveRecording, String> {
         samples,
         sample_rate,
         channels,
+        amplitude,
     })
 }
 
@@ -137,6 +163,7 @@ fn build_i16_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<i16>>>,
+    amplitude: Arc<AtomicU32>,
     err_fn: fn(cpal::StreamError),
 ) -> Result<cpal::Stream, String> {
     device
@@ -146,6 +173,14 @@ fn build_i16_stream(
                 if let Ok(mut buf) = samples.lock() {
                     buf.extend_from_slice(data);
                 }
+                let mut peak = 0.0f32;
+                for &s in data {
+                    let v = (s as f32 / f32::from(i16::MAX)).abs();
+                    if v > peak {
+                        peak = v;
+                    }
+                }
+                store_amplitude(&amplitude, peak);
             },
             err_fn,
             None,
@@ -157,6 +192,7 @@ fn build_u16_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<i16>>>,
+    amplitude: Arc<AtomicU32>,
     err_fn: fn(cpal::StreamError),
 ) -> Result<cpal::Stream, String> {
     device
@@ -166,6 +202,15 @@ fn build_u16_stream(
                 if let Ok(mut buf) = samples.lock() {
                     buf.extend(data.iter().map(|&s| (i32::from(s) - 32768) as i16));
                 }
+                let mut peak = 0.0f32;
+                for &s in data {
+                    let centered = i32::from(s) - 32768;
+                    let v = (centered as f32 / 32768.0).abs();
+                    if v > peak {
+                        peak = v;
+                    }
+                }
+                store_amplitude(&amplitude, peak);
             },
             err_fn,
             None,
@@ -177,6 +222,7 @@ fn build_f32_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<i16>>>,
+    amplitude: Arc<AtomicU32>,
     err_fn: fn(cpal::StreamError),
 ) -> Result<cpal::Stream, String> {
     device
@@ -189,6 +235,14 @@ fn build_f32_stream(
                         (clamped * f32::from(i16::MAX)) as i16
                     }));
                 }
+                let mut peak = 0.0f32;
+                for &s in data {
+                    let v = s.abs();
+                    if v > peak {
+                        peak = v;
+                    }
+                }
+                store_amplitude(&amplitude, peak);
             },
             err_fn,
             None,

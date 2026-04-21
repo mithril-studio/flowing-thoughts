@@ -4,9 +4,39 @@ use std::time::Duration;
 use reqwest::multipart::{Form, Part};
 use reqwest::StatusCode;
 
+use crate::storage::Provider;
+
 #[derive(serde::Deserialize)]
-struct OpenAiTranscriptionResponse {
+struct TranscriptionResponse {
     text: String,
+}
+
+// Both providers speak the OpenAI `/v1/audio/transcriptions` multipart shape —
+// same form fields, different host + model.
+const GROQ_ENDPOINT: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
+const GROQ_MODEL: &str = "whisper-large-v3-turbo";
+const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/audio/transcriptions";
+const OPENAI_MODEL: &str = "whisper-1";
+
+fn endpoint_for(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Groq => GROQ_ENDPOINT,
+        Provider::Openai => OPENAI_ENDPOINT,
+    }
+}
+
+fn model_for(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Groq => GROQ_MODEL,
+        Provider::Openai => OPENAI_MODEL,
+    }
+}
+
+fn env_var_for(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Groq => "GROQ_API_KEY",
+        Provider::Openai => "OPENAI_API_KEY",
+    }
 }
 
 fn should_retry_status(status: StatusCode) -> bool {
@@ -24,17 +54,23 @@ pub async fn transcribe_audio(
     session_id: u64,
     wav_path: &Path,
     duration_ms: u64,
+    provider: Provider,
     api_key_override: Option<&str>,
     language_mode: Option<&str>,
 ) -> Result<String, String> {
     // Small delay keeps state transitions readable while the request starts.
     tokio::time::sleep(Duration::from_millis(150)).await;
 
+    let env_var = env_var_for(provider);
     let api_key = if let Some(value) = api_key_override {
         value.to_string()
     } else {
-        std::env::var("OPENAI_API_KEY").map_err(|_| {
-            "No API key configured. Set one in onboarding or OPENAI_API_KEY.".to_string()
+        std::env::var(env_var).map_err(|_| {
+            format!(
+                "No {} API key configured. Set one in onboarding or {}.",
+                provider.as_str(),
+                env_var
+            )
         })?
     };
     let audio_bytes = std::fs::read(wav_path)
@@ -55,14 +91,14 @@ pub async fn transcribe_audio(
             .mime_str("audio/wav")
             .map_err(|e| format!("Failed to build audio upload part: {e}"))?;
         let mut form = Form::new()
-            .text("model", "whisper-1")
+            .text("model", model_for(provider))
             .part("file", part);
         if let Some(mode) = language_mode.and_then(normalize_language_mode) {
             form = form.text("language", mode.to_string());
         }
 
         let response = client
-            .post("https://api.openai.com/v1/audio/transcriptions")
+            .post(endpoint_for(provider))
             .bearer_auth(&api_key)
             .multipart(form)
             .send()
@@ -70,7 +106,7 @@ pub async fn transcribe_audio(
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                let parsed: OpenAiTranscriptionResponse = resp
+                let parsed: TranscriptionResponse = resp
                     .json()
                     .await
                     .map_err(|e| format!("Failed to parse transcription response: {e}"))?;
@@ -83,7 +119,8 @@ pub async fn transcribe_audio(
                     .await
                     .unwrap_or_else(|_| "Unable to read error body".to_string());
                 last_error = format!(
-                    "OpenAI transcription failed ({status}) for session {session_id}, duration {duration_ms}ms: {body}"
+                    "{} transcription failed ({status}) for session {session_id}, duration {duration_ms}ms: {body}",
+                    provider.as_str()
                 );
                 if !should_retry_status(status) {
                     break;
@@ -106,8 +143,17 @@ pub async fn transcribe_audio(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_language_mode, should_retry_status};
+    use super::{endpoint_for, model_for, normalize_language_mode, should_retry_status};
+    use crate::storage::Provider;
     use reqwest::StatusCode;
+
+    #[test]
+    fn provider_routing_picks_right_endpoint_and_model() {
+        assert_eq!(endpoint_for(Provider::Groq), super::GROQ_ENDPOINT);
+        assert_eq!(model_for(Provider::Groq), "whisper-large-v3-turbo");
+        assert_eq!(endpoint_for(Provider::Openai), super::OPENAI_ENDPOINT);
+        assert_eq!(model_for(Provider::Openai), "whisper-1");
+    }
 
     #[test]
     fn retries_on_rate_limit_and_server_errors() {

@@ -5,11 +5,11 @@ interface TabBarProps {
   onTabChange: (tab: Tab) => void;
 }
 
-const tabs: { id: Tab; label: string; icon: string }[] = [
-  { id: "home", label: "Home", icon: "🏠" },
-  { id: "snippets", label: "Snippets", icon: "✂️" },
-  { id: "notes", label: "Notes", icon: "📝" },
-  { id: "settings", label: "Settings", icon: "⚙️" },
+const tabs: { id: Tab; label: string }[] = [
+  { id: "home", label: "Home" },
+  { id: "snippets", label: "Snippets" },
+  { id: "notes", label: "Notes" },
+  { id: "settings", label: "Settings" },
 ];
 
 export default function TabBar({ active, onTabChange }: TabBarProps) {
@@ -19,14 +19,13 @@ export default function TabBar({ active, onTabChange }: TabBarProps) {
         <button
           key={tab.id}
           onClick={() => onTabChange(tab.id)}
-          className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 text-xs transition-colors ${
+          className={`flex-1 flex items-center justify-center py-3 text-[13px] transition-colors ${
             active === tab.id
               ? "text-white"
               : "text-neutral-500 hover:text-neutral-300"
           }`}
         >
-          <span className="text-base">{tab.icon}</span>
-          <span>{tab.label}</span>
+          {tab.label}
         </button>
       ))}
     </nav>
