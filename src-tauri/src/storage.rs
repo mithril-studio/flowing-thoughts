@@ -97,6 +97,20 @@ pub struct ExtrasSettings {
     pub dangerously_skip_permissions: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TranscriptionSettings {
+    pub provider: String,
+}
+
+impl Default for TranscriptionSettings {
+    fn default() -> Self {
+        Self {
+            provider: "api".to_string(),
+        }
+    }
+}
+
 impl Default for ExtrasSettings {
     fn default() -> Self {
         Self {
@@ -121,6 +135,8 @@ pub struct AppSettings {
     pub sound: SoundSettings,
     #[serde(default)]
     pub extras: ExtrasSettings,
+    #[serde(default)]
+    pub transcription: TranscriptionSettings,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]

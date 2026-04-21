@@ -4,9 +4,11 @@ import TabBar, { type Tab } from "./components/TabBar";
 import Home from "./pages/Home";
 import Snippets from "./pages/Snippets";
 import Notes from "./pages/Notes";
+import Lab from "./pages/Lab";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { defaultAppSettings, type AppSettings } from "./types/settings";
 
 interface PersistedStateView {
@@ -40,10 +42,29 @@ function App() {
       });
   }, []);
 
+  const isLabMode = appSettings.transcription.provider === "local";
+
+  useEffect(() => {
+    if (!isLabMode) return;
+    const unlisten = listen("lab-results-ready", () => {
+      setActiveTab("lab");
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [isLabMode]);
+
+  useEffect(() => {
+    if (!isLabMode && activeTab === "lab") {
+      setActiveTab("home");
+    }
+  }, [isLabMode, activeTab]);
+
   const pages: Record<Tab, React.ReactNode> = {
     home: <Home shortcutLabel={shortcutLabel} />,
     snippets: <Snippets />,
     notes: <Notes />,
+    lab: <Lab />,
     settings: (
       <Settings
         settings={appSettings}
@@ -102,7 +123,7 @@ function App() {
     <div className="flex flex-col h-screen bg-neutral-950 text-white">
       {dragStrip}
       <div className="flex-1 overflow-hidden">{pages[activeTab]}</div>
-      <TabBar active={activeTab} onTabChange={setActiveTab} />
+      <TabBar active={activeTab} onTabChange={setActiveTab} showLab={isLabMode} />
     </div>
   );
 }

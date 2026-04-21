@@ -1,18 +1,28 @@
-type Tab = "home" | "snippets" | "notes" | "settings";
+type Tab = "home" | "snippets" | "notes" | "lab" | "settings";
 
 interface TabBarProps {
   active: Tab;
   onTabChange: (tab: Tab) => void;
+  showLab?: boolean;
 }
 
-const tabs: { id: Tab; label: string; icon: string }[] = [
+const BASE_TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "🏠" },
   { id: "snippets", label: "Snippets", icon: "✂️" },
   { id: "notes", label: "Notes", icon: "📝" },
   { id: "settings", label: "Settings", icon: "⚙️" },
 ];
 
-export default function TabBar({ active, onTabChange }: TabBarProps) {
+const LAB_TAB: { id: Tab; label: string; icon: string } = {
+  id: "lab",
+  label: "Lab",
+  icon: "🧪",
+};
+
+export default function TabBar({ active, onTabChange, showLab }: TabBarProps) {
+  const tabs = showLab
+    ? [...BASE_TABS.slice(0, 3), LAB_TAB, BASE_TABS[3]]
+    : BASE_TABS;
   return (
     <nav className="flex border-t border-neutral-800 bg-neutral-950">
       {tabs.map((tab) => (
