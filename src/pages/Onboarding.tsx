@@ -197,6 +197,14 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             >
               Continue
             </button>
+            <a
+              href="https://flowingthoughts.lemonsqueezy.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block mt-2 text-xs text-neutral-500 hover:text-neutral-300 underline"
+            >
+              Don't have a license? Buy for €20 →
+            </a>
           </div>
         )}
 
@@ -217,6 +225,14 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             >
               {busy ? "Saving..." : "Save API Key"}
             </button>
+            <a
+              href="https://platform.openai.com/api-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block mt-2 text-xs text-neutral-500 hover:text-neutral-300 underline"
+            >
+              How to get an API key →
+            </a>
           </div>
         )}
 

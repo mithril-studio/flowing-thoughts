@@ -23,7 +23,7 @@ pub fn start_recording() -> Result<ActiveRecording, String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
-        .ok_or_else(|| "No default input device available".to_string())?;
+        .ok_or_else(|| "Microphone access required. Open System Settings > Privacy & Security > Microphone and enable FlowingThoughts.".to_string())?;
     let config = device
         .default_input_config()
         .map_err(|e| format!("Failed to read default input config: {e}"))?;

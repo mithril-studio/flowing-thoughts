@@ -731,6 +731,7 @@ pub fn run() {
                                         capture.duration_ms
                                     ),
                                 );
+                                let _ = std::fs::remove_file(&capture.wav_path);
                                 let mut session_state_guard = shared_session_state.lock().unwrap();
                                 if matches!(
                                     *session_state_guard,
@@ -759,6 +760,7 @@ pub fn run() {
                             let app_handle_for_task = app_handle.clone();
                             let session_state_for_task = shared_session_state.clone();
                             let persisted_for_task = shared_persisted.clone();
+                            let wav_path_for_task = capture.wav_path.clone();
 
                             tauri::async_runtime::spawn(async move {
                                 let (runtime_api_key, language_mode, smart_formatting) =
@@ -902,6 +904,9 @@ pub fn run() {
                                         );
                                     }
                                 }
+
+                                // Clean up the temporary WAV file
+                                let _ = std::fs::remove_file(&wav_path_for_task);
 
                                 let mut session_state_guard = session_state_for_task.lock().unwrap();
                                 if matches!(

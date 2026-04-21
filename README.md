@@ -7,8 +7,6 @@ Current interaction model:
 - Release the combo to stop and trigger transcription pipeline
 - Render completed transcript in the Home timeline
 
-The app is in active build. Audio capture, Whisper API calls, and text injection are still being finalized.
-
 ## Current Status
 
 Implemented:
@@ -17,11 +15,9 @@ Implemented:
 - Frontend event wiring for session phases and completed transcripts
 - Timeline UI for completed transcripts
 - First-run onboarding flow (license, API key, accessibility check, injection test)
-
-In progress:
-- Real microphone capture (`audio.rs`)
-- Whisper API transcription (`transcribe.rs`, currently uses `OPENAI_API_KEY`)
-- macOS text injection into focused apps (`text_inject.rs`, clipboard + paste)
+- Microphone capture (`audio.rs`)
+- Whisper API transcription (`transcribe.rs`)
+- macOS text injection into focused apps (`text_inject.rs`, clipboard + paste with clipboard preservation)
 - Onboarding gates (license, OpenAI key, accessibility checks)
 
 ## Architecture
@@ -33,9 +29,9 @@ For manual cross-app verification, use [Compatibility Matrix](./docs/COMPATIBILI
 
 - `src-tauri/src/lib.rs`: backend bootstrap + session orchestrator
 - `src-tauri/src/hotkey.rs`: global hotkey listener
-- `src-tauri/src/audio.rs`: audio capture module (WIP)
-- `src-tauri/src/transcribe.rs`: transcription worker (WIP)
-- `src-tauri/src/text_inject.rs`: text injection module (WIP)
+- `src-tauri/src/audio.rs`: audio capture module
+- `src-tauri/src/transcribe.rs`: transcription worker
+- `src-tauri/src/text_inject.rs`: text injection module
 - `src/pages/Home.tsx`: session status + transcript timeline
 
 ## Development
