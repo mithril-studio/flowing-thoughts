@@ -4,13 +4,20 @@ use tauri::{
     ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 use std::process::Command;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+const HOLD_TO_START_MS: u64 = 500;
+
 mod audio;
 mod db;
 mod hotkey;
+#[cfg(target_os = "macos")]
+mod macos_ax;
+#[cfg(target_os = "macos")]
+mod macos_hotkey;
 mod storage;
 mod text_inject;
 mod transcribe;
@@ -25,6 +32,12 @@ enum SessionState {
 #[derive(Debug, Clone, serde::Serialize)]
 struct RecordingState {
     is_recording: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RecordingAmplitudeEvent {
+    session_id: u64,
+    amplitude: f32,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -47,21 +60,22 @@ struct PipelineErrorEvent {
 }
 
 fn apply_smart_formatting(text: &str) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.is_empty() {
-        return compact;
+    // Preserve all whitespace (spaces, tabs, newlines) — only capitalise the
+    // first visible character. Whisper already returns proper punctuation, so
+    // we don't force a trailing period.
+    let trimmed_start = text.trim_start_matches(|c: char| c.is_whitespace());
+    if trimmed_start.is_empty() {
+        return text.to_string();
     }
-    let mut chars = compact.chars();
+    let leading_ws_len = text.len() - trimmed_start.len();
+    let leading_ws = &text[..leading_ws_len];
+    let mut chars = trimmed_start.chars();
     let first = chars
         .next()
         .map(|c| c.to_uppercase().collect::<String>())
         .unwrap_or_default();
     let rest: String = chars.collect();
-    let mut output = format!("{first}{rest}");
-    if !output.ends_with('.') && !output.ends_with('!') && !output.ends_with('?') {
-        output.push('.');
-    }
-    output
+    format!("{leading_ws}{first}{rest}")
 }
 
 #[cfg(test)]
@@ -69,10 +83,14 @@ mod tests {
     use super::apply_smart_formatting;
 
     #[test]
-    fn smart_formatting_normalizes_spacing_and_terminal_punctuation() {
+    fn smart_formatting_preserves_whitespace_and_capitalises_first_letter() {
         assert_eq!(
             apply_smart_formatting("hello   world"),
-            "Hello world."
+            "Hello   world"
+        );
+        assert_eq!(
+            apply_smart_formatting("line one\nline two"),
+            "Line one\nline two"
         );
         assert_eq!(apply_smart_formatting("already done?"), "Already done?");
     }
@@ -87,20 +105,36 @@ fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> boo
 }
 
 #[tauri::command]
-fn set_openai_api_key(
+fn copy_to_clipboard(text: String) -> Result<(), String> {
+    text_inject::write_clipboard(&text)
+}
+
+fn parse_provider_arg(provider: &str) -> Result<storage::Provider, String> {
+    storage::Provider::parse(provider)
+        .ok_or_else(|| format!("Unknown provider '{provider}'. Expected 'groq' or 'openai'."))
+}
+
+#[tauri::command]
+fn set_api_key(
+    provider: String,
     key: String,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
     db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
 ) -> Result<(), String> {
+    let provider = parse_provider_arg(&provider)?;
     let trimmed = key.trim();
     if trimmed.is_empty() {
-        return Err("OpenAI API key cannot be empty".to_string());
+        return Err("API key cannot be empty".to_string());
     }
     let mut state = persisted
         .inner()
         .lock()
         .map_err(|_| "Persisted state lock poisoned".to_string())?;
-    state.openai_api_key = Some(trimmed.to_string());
+    match provider {
+        storage::Provider::Groq => state.groq_api_key = Some(trimmed.to_string()),
+        storage::Provider::Openai => state.openai_api_key = Some(trimmed.to_string()),
+    }
+    state.active_provider = provider;
     let conn = db_conn
         .inner()
         .lock()
@@ -110,21 +144,32 @@ fn set_openai_api_key(
 }
 
 #[tauri::command]
-fn has_openai_api_key(
+fn set_active_provider(
+    provider: String,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
-) -> Result<bool, String> {
-    let state = persisted
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let provider = parse_provider_arg(&provider)?;
+    let mut state = persisted
         .inner()
         .lock()
         .map_err(|_| "Persisted state lock poisoned".to_string())?;
-    Ok(state.openai_api_key.is_some())
+    state.active_provider = provider;
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    storage::save(&conn, &state)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct PersistedStateView {
     onboarding_complete: bool,
     license_key: Option<String>,
-    has_openai_api_key: bool,
+    groq_api_key_configured: bool,
+    openai_api_key_configured: bool,
+    active_provider: String,
     history: Vec<storage::HistoryEntry>,
     settings: storage::AppSettings,
 }
@@ -140,7 +185,9 @@ fn get_persisted_state(
     Ok(PersistedStateView {
         onboarding_complete: state.onboarding_complete,
         license_key: state.license_key.clone(),
-        has_openai_api_key: state.openai_api_key.is_some(),
+        groq_api_key_configured: state.groq_api_key.is_some(),
+        openai_api_key_configured: state.openai_api_key.is_some(),
+        active_provider: state.active_provider.as_str().to_string(),
         history: state.history.clone(),
         settings: state.settings.clone(),
     })
@@ -154,7 +201,7 @@ struct AppSettingsUpdateResult {
 
 fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.shortcuts.preset != "cmd_shift_space" && settings.shortcuts.preset != "fn" {
-        settings.shortcuts.preset = "cmd_shift_space".to_string();
+        settings.shortcuts.preset = "fn".to_string();
     }
     if settings.language.mode != "system" && settings.language.mode != "en" {
         settings.language.mode = "system".to_string();
@@ -339,20 +386,21 @@ fn update_app_settings(
 
 #[tauri::command]
 fn save_onboarding_state(
-    license_key: String,
+    license_key: Option<String>,
     onboarding_complete: bool,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
     db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
 ) -> Result<(), String> {
-    let trimmed = license_key.trim();
-    if trimmed.len() < 8 {
-        return Err("Please provide a valid license key".to_string());
-    }
     let mut state = persisted
         .inner()
         .lock()
         .map_err(|_| "Persisted state lock poisoned".to_string())?;
-    state.license_key = Some(trimmed.to_string());
+    if let Some(key) = license_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            state.license_key = Some(trimmed.to_string());
+        }
+    }
     state.onboarding_complete = onboarding_complete;
     let conn = db_conn
         .inner()
@@ -364,43 +412,17 @@ fn save_onboarding_state(
 
 #[tauri::command]
 fn check_accessibility_permission() -> Result<bool, String> {
-    let mut child = Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to return UI elements enabled")
-        .spawn()
-        .map_err(|e| format!("Failed to start accessibility check: {e}"))?;
-
-    let started = Instant::now();
-    loop {
-        if started.elapsed() > Duration::from_secs(5) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(
-                "Accessibility check timed out. Open Settings and enable access manually."
-                    .to_string(),
-            );
-        }
-
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| format!("Failed to read accessibility check output: {e}"))?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    let message = if stderr.is_empty() {
-                        "Unknown AppleScript error".to_string()
-                    } else {
-                        stderr
-                    };
-                    return Err(format!("Accessibility check failed: {message}"));
-                }
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                return Ok(stdout.trim().eq_ignore_ascii_case("true"));
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(e) => return Err(format!("Failed to poll accessibility check: {e}")),
-        }
+    #[cfg(target_os = "macos")]
+    {
+        // `prompt: true` registers FlowingThoughts in
+        // System Settings > Privacy & Security > Accessibility the first time
+        // it's called, and surfaces a system dialog if the user hasn't toggled
+        // us on yet. Calling it repeatedly is safe.
+        Ok(macos_ax::is_process_trusted(true))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(true)
     }
 }
 
@@ -670,6 +692,34 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Dock the floating indicator to the top-right of the primary
+            // monitor on launch — under the macOS menu bar, where system
+            // affordances live. User can drag it elsewhere.
+            if let Some(indicator) = app.get_webview_window("indicator") {
+                let _ = indicator.set_always_on_top(true);
+                if let Some(monitor) = indicator.current_monitor().ok().flatten() {
+                    let size = indicator.outer_size().unwrap_or_default();
+                    let mpos = monitor.position();
+                    let msize = monitor.size();
+                    let x = mpos.x
+                        + (msize.width as i32 - size.width as i32 - 24).max(0);
+                    let y = mpos.y + 48;
+                    let _ = indicator.set_position(Position::Physical(
+                        PhysicalPosition { x, y },
+                    ));
+                }
+                let _ = indicator.show();
+            }
+
+            // Register this process with the macOS Accessibility permission
+            // database so it shows up in System Settings > Privacy & Security
+            // > Accessibility with a toggle. Without this call, dev builds
+            // launched via `tauri dev` never appear in that list.
+            #[cfg(target_os = "macos")]
+            {
+                let _ = macos_ax::is_process_trusted(true);
+            }
+
             // Start fn key listener
             let hotkey_rx = hotkey::start_listener(hotkey_mode.clone());
             let app_handle = app.handle().clone();
@@ -680,8 +730,50 @@ pub fn run() {
 
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
+                let mut active_amplitude_stop: Option<Arc<std::sync::atomic::AtomicBool>> = None;
+                let mut pending_start_deadline: Option<Instant> = None;
 
-                while let Ok(event) = hotkey_rx.recv() {
+                loop {
+                    let recv_result = match pending_start_deadline {
+                        Some(deadline) => {
+                            let wait = deadline.saturating_duration_since(Instant::now());
+                            hotkey_rx.recv_timeout(wait)
+                        }
+                        None => hotkey_rx
+                            .recv()
+                            .map_err(|_| RecvTimeoutError::Disconnected),
+                    };
+
+                    let event = match recv_result {
+                        Err(RecvTimeoutError::Disconnected) => break,
+                        Err(RecvTimeoutError::Timeout) => {
+                            // Hold threshold elapsed without a cancel — commit the start.
+                            pending_start_deadline = None;
+                            hotkey::HotkeyEvent::RecordStart
+                        }
+                        Ok(hotkey::HotkeyEvent::RecordStart) => {
+                            // Debounce: arm a deadline instead of starting immediately.
+                            if pending_start_deadline.is_none()
+                                && matches!(
+                                    *shared_session_state.lock().unwrap(),
+                                    SessionState::Idle
+                                )
+                            {
+                                pending_start_deadline = Some(
+                                    Instant::now() + Duration::from_millis(HOLD_TO_START_MS),
+                                );
+                            }
+                            continue;
+                        }
+                        Ok(hotkey::HotkeyEvent::RecordStop) => {
+                            if pending_start_deadline.take().is_some() {
+                                // Released before threshold → never entered recording.
+                                continue;
+                            }
+                            hotkey::HotkeyEvent::RecordStop
+                        }
+                    };
+
                     match event {
                         hotkey::HotkeyEvent::RecordStart => {
                             let mut session_state_guard = shared_session_state.lock().unwrap();
@@ -697,6 +789,9 @@ pub fn run() {
                                 &format!("Session {session_id} starting audio capture"),
                             );
 
+                            if let Some(stop) = active_amplitude_stop.take() {
+                                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                             let recording = match audio::start_recording() {
                                 Ok(recording) => recording,
                                 Err(message) => {
@@ -725,6 +820,7 @@ pub fn run() {
                                     continue;
                                 }
                             };
+                            let amplitude_handle = recording.amplitude_handle();
                             active_recording = Some((session_id, recording));
 
                             *session_state_guard = SessionState::Recording { session_id };
@@ -741,8 +837,29 @@ pub fn run() {
                                 "session-phase",
                                 SessionPhaseEvent { phase: "recording" },
                             );
+
+                            let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                            active_amplitude_stop = Some(stop_flag.clone());
+                            let amplitude_app = app_handle.clone();
+                            let amplitude_session = session_id;
+                            thread::spawn(move || {
+                                while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                    let amp = audio::read_amplitude(&amplitude_handle);
+                                    let _ = amplitude_app.emit(
+                                        "recording-amplitude",
+                                        RecordingAmplitudeEvent {
+                                            session_id: amplitude_session,
+                                            amplitude: amp,
+                                        },
+                                    );
+                                    thread::sleep(Duration::from_millis(60));
+                                }
+                            });
                         }
                         hotkey::HotkeyEvent::RecordStop => {
+                            if let Some(stop) = active_amplitude_stop.take() {
+                                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                             let (session_id, recording) = {
                                 let mut session_state_guard = shared_session_state.lock().unwrap();
                                 let active_state = std::mem::replace(
@@ -856,23 +973,39 @@ pub fn run() {
                             let wav_path_for_task = capture.wav_path.clone();
 
                             tauri::async_runtime::spawn(async move {
-                                let (runtime_api_key, language_mode, smart_formatting) =
+                                let (provider, runtime_api_key, language_mode, smart_formatting) =
                                     persisted_for_task
                                         .lock()
                                         .ok()
                                         .map(|state| {
+                                            let provider = state.active_provider;
+                                            let key = match provider {
+                                                storage::Provider::Groq => {
+                                                    state.groq_api_key.clone()
+                                                }
+                                                storage::Provider::Openai => {
+                                                    state.openai_api_key.clone()
+                                                }
+                                            };
                                             (
-                                                state.openai_api_key.clone(),
+                                                provider,
+                                                key,
                                                 state.settings.language.mode.clone(),
                                                 state.settings.extras.smart_formatting,
                                             )
                                         })
-                                        .unwrap_or((None, "system".to_string(), true));
+                                        .unwrap_or((
+                                            storage::Provider::Groq,
+                                            None,
+                                            "system".to_string(),
+                                            true,
+                                        ));
 
                                 match transcribe::transcribe_audio(
                                     session_id,
                                     &capture.wav_path,
                                     capture.duration_ms,
+                                    provider,
                                     runtime_api_key.as_deref(),
                                     Some(&language_mode),
                                 )
@@ -1041,8 +1174,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_recording_state,
-            set_openai_api_key,
-            has_openai_api_key,
+            set_api_key,
+            set_active_provider,
             get_persisted_state,
             save_onboarding_state,
             check_accessibility_permission,
@@ -1055,6 +1188,7 @@ pub fn run() {
             open_input_monitoring_settings,
             get_app_settings,
             update_app_settings,
+            copy_to_clipboard,
             list_snippets,
             save_snippet,
             delete_snippet,

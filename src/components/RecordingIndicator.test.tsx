@@ -10,7 +10,7 @@ describe("RecordingIndicator", () => {
 
   it("shows recording text", () => {
     render(<RecordingIndicator mode="recording" idleLabel="Hold Cmd+Shift+Space" />);
-    expect(screen.getByText("Recording...")).toBeInTheDocument();
+    expect(screen.getByText("Listening...")).toBeInTheDocument();
   });
 
   it("shows transcribing text", () => {

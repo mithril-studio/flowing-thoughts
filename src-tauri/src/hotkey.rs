@@ -1,6 +1,9 @@
+#[cfg(not(target_os = "macos"))]
 use rdev::{listen, Event, EventType, Key};
 use std::sync::{mpsc, Arc, Mutex};
+#[cfg(not(target_os = "macos"))]
 use std::thread;
+#[cfg(not(target_os = "macos"))]
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -18,10 +21,8 @@ pub enum HotkeyMode {
 impl HotkeyMode {
     pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().trim() {
-            "fn" => Self::Fn,
-            "cmd+shift+space" => Self::CmdShiftSpace,
-            "cmd_shift_space" => Self::CmdShiftSpace,
-            _ => Self::CmdShiftSpace,
+            "cmd+shift+space" | "cmd_shift_space" => Self::CmdShiftSpace,
+            _ => Self::Fn,
         }
     }
 
@@ -45,8 +46,18 @@ pub fn mode_to_preset(mode: HotkeyMode) -> &'static str {
 }
 
 /// Spawn a background thread that listens for global hotkeys.
-/// Default hotkey mode: hold Cmd+Shift+Space to record.
-/// Optional override for development: set `OVW_HOTKEY=fn`.
+/// Default hotkey mode: hold Fn to record.
+///
+/// On macOS we use a native CGEventTap listener (`macos_hotkey`) because the
+/// `rdev` crate's listener thread crashes on macOS 26 (it calls a
+/// main-thread-only TSM API from a background thread). On other platforms
+/// we keep using rdev.
+#[cfg(target_os = "macos")]
+pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<HotkeyEvent> {
+    crate::macos_hotkey::start_listener(mode_state)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<HotkeyEvent> {
     let (tx, rx) = mpsc::channel();
 
@@ -127,10 +138,12 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
     rx
 }
 
+#[cfg(not(target_os = "macos"))]
 fn is_cmd_key(key: Key) -> bool {
     key == Key::MetaLeft || key == Key::MetaRight
 }
 
+#[cfg(not(target_os = "macos"))]
 fn is_shift_key(key: Key) -> bool {
     key == Key::ShiftLeft || key == Key::ShiftRight
 }
@@ -146,11 +159,11 @@ mod tests {
     }
 
     #[test]
-    fn hotkey_mode_parse_defaults_to_cmd_shift_space() {
+    fn hotkey_mode_parse_defaults_to_fn() {
         assert_eq!(HotkeyMode::parse("cmd+shift+space"), HotkeyMode::CmdShiftSpace);
         assert_eq!(HotkeyMode::parse("cmd_shift_space"), HotkeyMode::CmdShiftSpace);
-        assert_eq!(HotkeyMode::parse("anything-else"), HotkeyMode::CmdShiftSpace);
-        assert_eq!(HotkeyMode::parse(""), HotkeyMode::CmdShiftSpace);
+        assert_eq!(HotkeyMode::parse("anything-else"), HotkeyMode::Fn);
+        assert_eq!(HotkeyMode::parse(""), HotkeyMode::Fn);
     }
 
     #[test]

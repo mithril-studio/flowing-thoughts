@@ -3,10 +3,6 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use rdev::{simulate, EventType, Key};
-
-/// Save the current system clipboard contents (plain text).
-/// Returns `None` if the clipboard is empty or pbpaste fails.
 fn save_clipboard() -> Option<String> {
     let output = Command::new("pbpaste").output().ok()?;
     if output.status.success() && !output.stdout.is_empty() {
@@ -16,7 +12,6 @@ fn save_clipboard() -> Option<String> {
     }
 }
 
-/// Restore the system clipboard to the given text via pbcopy.
 fn restore_clipboard(text: &str) {
     if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
         if let Some(mut stdin) = child.stdin.take() {
@@ -27,29 +22,12 @@ fn restore_clipboard(text: &str) {
     }
 }
 
-/// Inject text into the focused app.
-///
-/// Strategy:
-/// 1) save current clipboard
-/// 2) copy text to system clipboard
-/// 3) simulate Cmd+V paste
-/// 4) restore original clipboard
-///
-/// This requires Accessibility permission for key simulation.
-pub fn inject_text(text: &str) -> Result<(), String> {
-    if text.trim().is_empty() {
-        return Err("Skipping empty text injection".to_string());
-    }
-
-    // Save current clipboard before overwriting
-    let original_clipboard = save_clipboard();
-
-    let mut pbcopy = Command::new("pbcopy")
+pub fn write_clipboard(text: &str) -> Result<(), String> {
+    let mut child = Command::new("pbcopy")
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to start pbcopy: {e}"))?;
-
-    let mut stdin = pbcopy
+    let mut stdin = child
         .stdin
         .take()
         .ok_or_else(|| "Failed to get pbcopy stdin".to_string())?;
@@ -57,35 +35,69 @@ pub fn inject_text(text: &str) -> Result<(), String> {
         .write_all(text.as_bytes())
         .map_err(|e| format!("Failed to write text to pbcopy: {e}"))?;
     drop(stdin);
-
-    let status = pbcopy
+    let status = child
         .wait()
         .map_err(|e| format!("Failed waiting for pbcopy: {e}"))?;
     if !status.success() {
-        // Restore clipboard even on failure
+        return Err(format!("pbcopy exited unsuccessfully: {status}"));
+    }
+    Ok(())
+}
+
+/// Ask the system (via AppleScript / System Events) to perform Cmd+V in the
+/// currently focused app. This sets modifier flags atomically, so it is much
+/// more reliable than simulating raw key events.
+fn applescript_paste() -> Result<(), String> {
+    let script = r#"tell application "System Events" to keystroke "v" using command down"#;
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| format!("Failed to run paste AppleScript: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "Paste failed. Make sure FlowingThoughts has Accessibility permission. Details: {stderr}"
+        ));
+    }
+    Ok(())
+}
+
+/// Inject `text` into the currently focused app.
+///
+/// Flow:
+/// 1. Remember the existing clipboard so we can restore it afterwards.
+/// 2. Place `text` on the clipboard.
+/// 3. Wait briefly so any modifier keys the user was still holding
+///    (e.g. Fn / Shift / Cmd from the recording hotkey) have time to clear.
+/// 4. Fire Cmd+V via AppleScript — this sets modifier flags atomically,
+///    so it ignores whatever keys are physically held.
+/// 5. Restore the original clipboard.
+pub fn inject_text(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("Skipping empty text injection".to_string());
+    }
+
+    let original_clipboard = save_clipboard();
+
+    if let Err(e) = write_clipboard(text) {
         if let Some(ref original) = original_clipboard {
             restore_clipboard(original);
         }
-        return Err(format!("pbcopy exited unsuccessfully: {status}"));
+        return Err(e);
     }
 
-    simulate(&EventType::KeyPress(Key::MetaLeft))
-        .map_err(|e| format!("Failed to press Meta key: {e:?}"))?;
-    thread::sleep(Duration::from_millis(8));
-    simulate(&EventType::KeyPress(Key::KeyV))
-        .map_err(|e| format!("Failed to press V key: {e:?}"))?;
-    thread::sleep(Duration::from_millis(8));
-    simulate(&EventType::KeyRelease(Key::KeyV))
-        .map_err(|e| format!("Failed to release V key: {e:?}"))?;
-    thread::sleep(Duration::from_millis(8));
-    simulate(&EventType::KeyRelease(Key::MetaLeft))
-        .map_err(|e| format!("Failed to release Meta key: {e:?}"))?;
+    // Give the OS a beat to register that the hotkey has been released
+    // and let the clipboard settle before the paste fires.
+    thread::sleep(Duration::from_millis(80));
 
-    // Wait for paste to complete, then restore original clipboard
+    let paste_result = applescript_paste();
+
+    // Always try to restore the clipboard, even on failure.
+    thread::sleep(Duration::from_millis(150));
     if let Some(ref original) = original_clipboard {
-        thread::sleep(Duration::from_millis(150));
         restore_clipboard(original);
     }
 
-    Ok(())
+    paste_result
 }

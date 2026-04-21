@@ -17,13 +17,46 @@ interface AccessibilityHelpInfo {
   note: string;
 }
 
+type Provider = "groq" | "openai";
+
+interface ProviderMeta {
+  label: string;
+  placeholder: string;
+  prefix: string;
+  docsUrl: string;
+}
+
+const PROVIDER_META: Record<Provider, ProviderMeta> = {
+  groq: {
+    label: "Groq",
+    placeholder: "gsk_...",
+    prefix: "gsk_",
+    docsUrl: "https://console.groq.com/keys",
+  },
+  openai: {
+    label: "OpenAI",
+    placeholder: "sk-...",
+    prefix: "sk-",
+    docsUrl: "https://platform.openai.com/api-keys",
+  },
+};
+
+interface PersistedStateView {
+  active_provider: Provider;
+  groq_api_key_configured: boolean;
+  openai_api_key_configured: boolean;
+}
+
 export default function Settings({ settings, onSettingsChange }: SettingsProps) {
   const [local, setLocal] = useState<AppSettings>(settings ?? defaultAppSettings);
   const [busy, setBusy] = useState(false);
   const [apiBusy, setApiBusy] = useState(false);
   const [setupBusy, setSetupBusy] = useState(false);
   const [apiKey, setApiKey] = useState("");
-  const [hasApiKey, setHasApiKey] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<Provider>("groq");
+  const [activeProvider, setActiveProvider] = useState<Provider>("groq");
+  const [groqConfigured, setGroqConfigured] = useState(false);
+  const [openaiConfigured, setOpenaiConfigured] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState<boolean | null>(null);
   const [helpInfo, setHelpInfo] = useState<AccessibilityHelpInfo | null>(null);
@@ -34,12 +67,23 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     setLocal(settings ?? defaultAppSettings);
   }, [settings]);
 
-  useEffect(() => {
-    invoke<boolean>("has_openai_api_key")
-      .then((value) => setHasApiKey(Boolean(value)))
+  const refreshProviderState = () => {
+    invoke<PersistedStateView>("get_persisted_state")
+      .then((state) => {
+        setGroqConfigured(Boolean(state.groq_api_key_configured));
+        setOpenaiConfigured(Boolean(state.openai_api_key_configured));
+        if (state.active_provider === "openai" || state.active_provider === "groq") {
+          setActiveProvider(state.active_provider);
+          setEditingProvider(state.active_provider);
+        }
+      })
       .catch(() => {
-        setHasApiKey(false);
+        // Non-blocking.
       });
+  };
+
+  useEffect(() => {
+    refreshProviderState();
   }, []);
 
   useEffect(() => {
@@ -72,18 +116,39 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     void persist(next);
   };
 
+  const editingMeta = PROVIDER_META[editingProvider];
+
   const saveApiKey = async () => {
-    if (!apiKey.trim().startsWith("sk-")) {
-      setApiMessage("Please enter a valid OpenAI API key.");
+    if (!apiKey.trim().startsWith(editingMeta.prefix)) {
+      setApiMessage(`Please enter a valid ${editingMeta.label} API key.`);
       return;
     }
     setApiBusy(true);
     setApiMessage(null);
     try {
-      await invoke("set_openai_api_key", { key: apiKey.trim() });
-      setHasApiKey(true);
+      await invoke("set_api_key", {
+        provider: editingProvider,
+        key: apiKey.trim(),
+      });
       setApiKey("");
-      setApiMessage("API key saved.");
+      setApiMessage(`${editingMeta.label} API key saved.`);
+      refreshProviderState();
+    } catch (e) {
+      setApiMessage(String(e));
+    } finally {
+      setApiBusy(false);
+    }
+  };
+
+  const switchActiveProvider = async (next: Provider) => {
+    if (next === activeProvider) return;
+    setApiBusy(true);
+    setApiMessage(null);
+    try {
+      await invoke("set_active_provider", { provider: next });
+      setActiveProvider(next);
+      setEditingProvider(next);
+      setApiMessage(`Switched to ${PROVIDER_META[next].label}.`);
     } catch (e) {
       setApiMessage(String(e));
     } finally {
@@ -255,17 +320,70 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
         <h3 className="text-xs text-neutral-400 uppercase tracking-wide">API</h3>
-        <p className="text-xs text-neutral-300">
-          OpenAI API key:{" "}
-          <span className={hasApiKey ? "text-emerald-300" : "text-neutral-400"}>
-            {hasApiKey ? "configured" : "not configured"}
-          </span>
-        </p>
+
+        <div className="space-y-2">
+          <p className="text-xs text-neutral-400">Active provider</p>
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Active provider">
+            {(Object.keys(PROVIDER_META) as Provider[]).map((key) => {
+              const selected = activeProvider === key;
+              const configured =
+                key === "groq" ? groqConfigured : openaiConfigured;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={apiBusy}
+                  onClick={() => switchActiveProvider(key)}
+                  className={`rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                    selected
+                      ? "border-emerald-500 bg-emerald-950/30 text-emerald-300"
+                      : "border-neutral-700 bg-neutral-950 text-neutral-300 hover:border-neutral-600"
+                  } ${apiBusy ? "opacity-60 cursor-not-allowed" : ""}`}
+                >
+                  <div className="font-medium">{PROVIDER_META[key].label}</div>
+                  <div className="text-[11px] text-neutral-500">
+                    {configured ? "configured" : "not configured"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs text-neutral-400">Edit key for</p>
+          <div className="grid grid-cols-2 gap-2">
+            {(Object.keys(PROVIDER_META) as Provider[]).map((key) => {
+              const selected = editingProvider === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setEditingProvider(key);
+                    setApiKey("");
+                    setApiMessage(null);
+                  }}
+                  className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                    selected
+                      ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                      : "border-neutral-700 bg-neutral-950 text-neutral-400 hover:border-neutral-600"
+                  }`}
+                >
+                  {PROVIDER_META[key].label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <input
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          placeholder="sk-..."
+          placeholder={editingMeta.placeholder}
           className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500"
         />
         <button
@@ -274,8 +392,16 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           disabled={apiBusy}
           className="w-full rounded-md bg-white px-3 py-2 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-60"
         >
-          {apiBusy ? "Saving..." : "Save API Key"}
+          {apiBusy ? "Saving..." : `Save ${editingMeta.label} API Key`}
         </button>
+        <a
+          href={editingMeta.docsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-[11px] text-neutral-500 hover:text-neutral-300 underline"
+        >
+          How to get a {editingMeta.label} API key →
+        </a>
         {apiMessage && <p className="text-xs text-neutral-300">{apiMessage}</p>}
       </section>
 

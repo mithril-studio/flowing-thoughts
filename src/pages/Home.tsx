@@ -21,6 +21,7 @@ interface HomeProps {
 
 export default function Home({ shortcutLabel }: HomeProps) {
   const [phase, setPhase] = useState<SessionPhase>("idle");
+  const [amplitude, setAmplitude] = useState(0);
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
 
@@ -43,6 +44,15 @@ export default function Home({ shortcutLabel }: HomeProps) {
       "session-phase",
       (event) => {
         setPhase(event.payload.phase);
+        if (event.payload.phase !== "recording") {
+          setAmplitude(0);
+        }
+      }
+    );
+    const unlistenAmplitude = listen<{ amplitude: number }>(
+      "recording-amplitude",
+      (event) => {
+        setAmplitude(event.payload.amplitude ?? 0);
       }
     );
     const unlistenComplete = listen<{
@@ -59,17 +69,20 @@ export default function Home({ shortcutLabel }: HomeProps) {
         ...prev,
       ]);
       setPhase("idle");
+      setAmplitude(0);
     });
     const unlistenErrorDetails = listen<{ stage: string; message: string }>(
       "pipeline-error",
       (event) => {
         setLastError(`[${event.payload.stage}] ${event.payload.message}`);
         setPhase("error");
+        setAmplitude(0);
       }
     );
 
     return () => {
       unlistenPhase.then((fn) => fn());
+      unlistenAmplitude.then((fn) => fn());
       unlistenComplete.then((fn) => fn());
       unlistenErrorDetails.then((fn) => fn());
     };
@@ -104,8 +117,12 @@ export default function Home({ shortcutLabel }: HomeProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Recording indicator */}
-      <div className="flex justify-center py-4">
-        <RecordingIndicator mode={phase} idleLabel={`Hold ${shortcutLabel}`} />
+      <div className="flex justify-center py-6">
+        <RecordingIndicator
+          mode={phase}
+          amplitude={amplitude}
+          idleLabel={`Hold ${shortcutLabel} to speak`}
+        />
       </div>
 
       {lastError && (
@@ -146,7 +163,9 @@ export default function Home({ shortcutLabel }: HomeProps) {
                 {entries.map((entry) => (
                   <button
                     key={entry.id}
-                    onClick={() => navigator.clipboard.writeText(entry.text)}
+                    onClick={() => {
+                      void invoke("copy_to_clipboard", { text: entry.text });
+                    }}
                     className="w-full text-left p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
                   >
                     <p className="text-sm text-neutral-200 leading-relaxed">

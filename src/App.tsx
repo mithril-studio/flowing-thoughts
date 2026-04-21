@@ -7,6 +7,7 @@ import Notes from "./pages/Notes";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultAppSettings, type AppSettings } from "./types/settings";
 
 interface PersistedStateView {
@@ -61,6 +62,14 @@ function App() {
     }
   };
 
+  const handleMinimize = () => {
+    void getCurrentWindow().minimize();
+  };
+
+  const handleHide = () => {
+    void getCurrentWindow().hide();
+  };
+
   const dragStrip = (
     <div
       data-tauri-drag-region
@@ -74,7 +83,27 @@ function App() {
       }`}
       title={appSettings.general.window_movable ? "Drag to move window" : "Window movement locked"}
     >
-      {appSettings.general.window_movable ? "Drag Here" : "Window Locked"}
+      <span>{appSettings.general.window_movable ? "Drag Here" : "Window Locked"}</span>
+      <div data-tauri-drag-region="false" className="ml-auto flex gap-1">
+        <button
+          type="button"
+          aria-label="Minimize"
+          title="Minimize"
+          onClick={handleMinimize}
+          className="w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:bg-neutral-800 hover:text-white cursor-default"
+        >
+          <span className="text-sm leading-none">−</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Hide window"
+          title="Hide (reopen from tray)"
+          onClick={handleHide}
+          className="w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:bg-red-600 hover:text-white cursor-default"
+        >
+          <span className="text-sm leading-none">×</span>
+        </button>
+      </div>
     </div>
   );
 
