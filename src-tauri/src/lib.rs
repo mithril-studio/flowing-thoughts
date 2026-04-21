@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod audio;
+mod db;
 mod hotkey;
 mod storage;
 mod text_inject;
@@ -497,6 +498,76 @@ fn reveal_current_executable() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn list_snippets(
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<db::Snippet>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::list_snippets(&conn)
+}
+
+#[tauri::command]
+fn save_snippet(
+    snippet: db::Snippet,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::save_snippet(&conn, &snippet)
+}
+
+#[tauri::command]
+fn delete_snippet(
+    id: String,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::delete_snippet(&conn, &id)
+}
+
+#[tauri::command]
+fn list_notes(
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<db::Note>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::list_notes(&conn)
+}
+
+#[tauri::command]
+fn save_note(
+    note: db::Note,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::save_note(&conn, &note)
+}
+
+#[tauri::command]
+fn delete_note(
+    id: String,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::delete_note(&conn, &id)
+}
+
+#[tauri::command]
 fn open_input_monitoring_settings() -> Result<(), String> {
     let targets = [
         "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
@@ -538,6 +609,9 @@ pub fn run() {
     let runtime_hotkey_mode = hotkey::mode_from_env().unwrap_or(configured_hotkey_mode);
     let persisted = Arc::new(Mutex::new(persisted_state));
     let hotkey_mode = Arc::new(Mutex::new(runtime_hotkey_mode));
+    let db_conn = Arc::new(Mutex::new(
+        db::open().expect("Failed to initialize SQLite database"),
+    ));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -552,6 +626,7 @@ pub fn run() {
         .manage(session_state.clone())
         .manage(persisted.clone())
         .manage(hotkey_mode.clone())
+        .manage(db_conn.clone())
         .setup(move |app| {
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -961,7 +1036,13 @@ pub fn run() {
             reveal_current_executable,
             open_input_monitoring_settings,
             get_app_settings,
-            update_app_settings
+            update_app_settings,
+            list_snippets,
+            save_snippet,
+            delete_snippet,
+            list_notes,
+            save_note,
+            delete_note
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

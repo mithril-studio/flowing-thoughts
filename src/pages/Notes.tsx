@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 interface Note {
   id: string;
@@ -7,8 +8,6 @@ interface Note {
   updatedAt: string;
 }
 
-const STORAGE_KEY = "notes";
-
 export default function Notes() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -16,19 +15,24 @@ export default function Notes() {
   const [body, setBody] = useState("");
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      setNotes(JSON.parse(saved));
-    }
+    invoke<Note[]>("list_notes")
+      .then(setNotes)
+      .catch((err) => console.error("Failed to load notes:", err));
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
-  }, [notes]);
 
   const activeNote = notes.find((n) => n.id === activeId);
 
-  const handleNew = () => {
+  const persistNote = async (note: Note) => {
+    try {
+      await invoke("save_note", { note });
+      const next = await invoke<Note[]>("list_notes");
+      setNotes(next);
+    } catch (err) {
+      console.error("Failed to save note:", err);
+    }
+  };
+
+  const handleNew = async () => {
     const note: Note = {
       id: crypto.randomUUID(),
       title: "",
@@ -39,6 +43,7 @@ export default function Notes() {
     setActiveId(note.id);
     setTitle("");
     setBody("");
+    await persistNote(note);
   };
 
   const handleSelect = (note: Note) => {
@@ -47,29 +52,33 @@ export default function Notes() {
     setBody(note.body);
   };
 
-  const handleBack = () => {
-    // Save current note before going back
+  const saveNote = async () => {
+    if (!activeId) return;
+    const note: Note = {
+      id: activeId,
+      title,
+      body,
+      updatedAt: new Date().toISOString(),
+    };
+    await persistNote(note);
+  };
+
+  const handleBack = async () => {
     if (activeId) {
-      saveNote();
+      await saveNote();
     }
     setActiveId(null);
   };
 
-  const saveNote = () => {
-    if (!activeId) return;
-    setNotes((prev) =>
-      prev.map((n) =>
-        n.id === activeId
-          ? { ...n, title, body, updatedAt: new Date().toISOString() }
-          : n
-      )
-    );
-  };
-
-  const handleDelete = (id: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== id));
-    if (activeId === id) {
-      setActiveId(null);
+  const handleDelete = async (id: string) => {
+    try {
+      await invoke("delete_note", { id });
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+      if (activeId === id) {
+        setActiveId(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete note:", err);
     }
   };
 
