@@ -30,15 +30,6 @@ enum SessionState {
     Recording { session_id: u64 },
     Transcribing { session_id: u64 },
     Injecting { session_id: u64 },
-    AwaitingLabChoice { session_id: u64 },
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct LabResultsReadyEvent {
-    session_id: u64,
-    dictation_id: String,
-    duration_ms: u64,
-    results: Vec<lab::LabResult>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -635,231 +626,6 @@ fn delete_model(model_id: String) -> Result<(), String> {
     model_manager::delete_model(id)
 }
 
-#[tauri::command]
-fn pick_lab_winner(
-    app: AppHandle,
-    dictation_id: String,
-    chosen_model: String,
-    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
-    session_state: tauri::State<'_, Arc<Mutex<SessionState>>>,
-    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
-) -> Result<String, String> {
-    let transcriptions = {
-        let conn = db_conn
-            .inner()
-            .lock()
-            .map_err(|_| "DB lock poisoned".to_string())?;
-        db::list_transcriptions_for(&conn, &dictation_id)?
-    };
-    let chosen = transcriptions
-        .iter()
-        .find(|t| t.model == chosen_model)
-        .ok_or_else(|| format!("No transcription for model {chosen_model}"))?;
-    let raw_text = chosen
-        .text
-        .clone()
-        .ok_or_else(|| "Chosen result has no text".to_string())?;
-
-    let smart_formatting = persisted
-        .inner()
-        .lock()
-        .ok()
-        .map(|s| s.settings.extras.smart_formatting)
-        .unwrap_or(true);
-    let text = if smart_formatting {
-        apply_smart_formatting(&raw_text)
-    } else {
-        raw_text
-    };
-
-    {
-        let conn = db_conn
-            .inner()
-            .lock()
-            .map_err(|_| "DB lock poisoned".to_string())?;
-        db::upsert_choice(
-            &conn,
-            &db::LabChoice {
-                dictation_id: dictation_id.clone(),
-                chosen_model: Some(chosen_model.clone()),
-                ground_truth: None,
-                chosen_at: chrono::Utc::now().to_rfc3339(),
-            },
-        )?;
-    }
-
-    let session_id_for_history = {
-        let conn = db_conn
-            .inner()
-            .lock()
-            .map_err(|_| "DB lock poisoned".to_string())?;
-        db::list_recent_dictations(&conn, 50)?
-            .into_iter()
-            .find(|d| d.id == dictation_id)
-            .map(|d| (d.session_id, d.wav_path))
-    };
-
-    let (session_id, wav_path_str) = match session_id_for_history {
-        Some(v) => v,
-        None => return Err("Dictation not found".to_string()),
-    };
-
-    let inject_result = text_inject::inject_text(&text);
-
-    let history_entry = storage::HistoryEntry {
-        session_id,
-        text: text.clone(),
-        timestamp: chrono::Utc::now().to_rfc3339(),
-    };
-    if let Ok(mut state) = persisted.inner().lock() {
-        state.history.insert(0, history_entry.clone());
-        if state.history.len() > 200 {
-            state.history.truncate(200);
-        }
-    }
-    if let Ok(conn) = db_conn.inner().lock() {
-        let _ = storage::record_history(&conn, &history_entry);
-    }
-
-    let _ = app.emit(
-        "transcription-complete",
-        TranscriptionCompleteEvent {
-            session_id,
-            text: text.clone(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
-        },
-    );
-
-    if let Some(path_str) = wav_path_str {
-        let path = std::path::PathBuf::from(&path_str);
-        let _ = std::fs::remove_file(&path);
-        if let Ok(conn) = db_conn.inner().lock() {
-            let _ = db::clear_wav_path(&conn, &dictation_id);
-        }
-    }
-
-    {
-        let mut guard = session_state
-            .inner()
-            .lock()
-            .map_err(|_| "Session state lock poisoned".to_string())?;
-        if matches!(
-            *guard,
-            SessionState::AwaitingLabChoice {
-                session_id: current_id
-            } if current_id == session_id
-        ) {
-            *guard = SessionState::Idle;
-        }
-    }
-    let _ = app.emit(
-        "session-phase",
-        SessionPhaseEvent { phase: "idle" },
-    );
-
-    if let Err(message) = inject_result {
-        let _ = app.emit(
-            "pipeline-error",
-            PipelineErrorEvent {
-                session_id,
-                stage: "inject",
-                message: message.clone(),
-            },
-        );
-        return Err(message);
-    }
-
-    Ok(text)
-}
-
-#[tauri::command]
-fn reject_all_lab(
-    app: AppHandle,
-    dictation_id: String,
-    ground_truth: Option<String>,
-    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
-    session_state: tauri::State<'_, Arc<Mutex<SessionState>>>,
-) -> Result<(), String> {
-    {
-        let conn = db_conn
-            .inner()
-            .lock()
-            .map_err(|_| "DB lock poisoned".to_string())?;
-        db::upsert_choice(
-            &conn,
-            &db::LabChoice {
-                dictation_id: dictation_id.clone(),
-                chosen_model: None,
-                ground_truth,
-                chosen_at: chrono::Utc::now().to_rfc3339(),
-            },
-        )?;
-    }
-
-    let session_row = {
-        let conn = db_conn
-            .inner()
-            .lock()
-            .map_err(|_| "DB lock poisoned".to_string())?;
-        db::list_recent_dictations(&conn, 50)?
-            .into_iter()
-            .find(|d| d.id == dictation_id)
-    };
-    if let Some(d) = session_row {
-        if let Some(path_str) = d.wav_path.as_ref() {
-            let _ = std::fs::remove_file(std::path::PathBuf::from(path_str));
-            if let Ok(conn) = db_conn.inner().lock() {
-                let _ = db::clear_wav_path(&conn, &dictation_id);
-            }
-        }
-        let mut guard = session_state
-            .inner()
-            .lock()
-            .map_err(|_| "Session state lock poisoned".to_string())?;
-        if matches!(
-            *guard,
-            SessionState::AwaitingLabChoice {
-                session_id: current_id
-            } if current_id == d.session_id
-        ) {
-            *guard = SessionState::Idle;
-        }
-    }
-
-    let _ = app.emit(
-        "session-phase",
-        SessionPhaseEvent { phase: "idle" },
-    );
-    Ok(())
-}
-
-#[tauri::command]
-fn save_correction(
-    dictation_id: String,
-    model: String,
-    wrong_text: String,
-    intended_text: String,
-    context_snippet: Option<String>,
-    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
-) -> Result<(), String> {
-    let conn = db_conn
-        .inner()
-        .lock()
-        .map_err(|_| "DB lock poisoned".to_string())?;
-    db::insert_correction(
-        &conn,
-        &db::Correction {
-            id: uuid::Uuid::new_v4().to_string(),
-            dictation_id,
-            model,
-            wrong_text,
-            intended_text,
-            context_snippet,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        },
-    )
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 struct LabSessionSummary {
     dictation: db::Dictation,
@@ -1318,116 +1084,109 @@ pub fn run() {
                                         "api".to_string(),
                                     ));
 
-                                if transcription_mode == "local" {
-                                    let dictation_id = uuid::Uuid::new_v4().to_string();
-                                    let started_at = chrono::Utc::now().to_rfc3339();
-                                    if let Ok(conn) = db_conn_for_task.lock() {
-                                        let _ = db::insert_dictation(
+                                // Always fan out to all 4 models for data collection.
+                                let dictation_id = uuid::Uuid::new_v4().to_string();
+                                let started_at = chrono::Utc::now().to_rfc3339();
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    let _ = db::insert_dictation(
+                                        &conn,
+                                        &db::Dictation {
+                                            id: dictation_id.clone(),
+                                            session_id,
+                                            started_at: started_at.clone(),
+                                            wav_path: Some(
+                                                wav_path_for_task
+                                                    .to_string_lossy()
+                                                    .into_owned(),
+                                            ),
+                                            duration_ms: Some(capture.duration_ms),
+                                            sample_rate: None,
+                                        },
+                                    );
+                                }
+
+                                let results = lab::run_parallel(
+                                    session_id,
+                                    wav_path_for_task.clone(),
+                                    capture.duration_ms,
+                                    provider,
+                                    runtime_api_key.clone(),
+                                    language_mode.clone(),
+                                )
+                                .await;
+
+                                {
+                                    let session_state_guard =
+                                        session_state_for_task.lock().unwrap();
+                                    if !matches!(
+                                        *session_state_guard,
+                                        SessionState::Transcribing {
+                                            session_id: current_id
+                                        } if current_id == session_id
+                                    ) {
+                                        // Stale session — still persist data, then bail.
+                                        if let Ok(conn) = db_conn_for_task.lock() {
+                                            for r in &results {
+                                                let _ = db::insert_transcription(
+                                                    &conn,
+                                                    &db::TranscriptionRow {
+                                                        id: uuid::Uuid::new_v4().to_string(),
+                                                        dictation_id: dictation_id.clone(),
+                                                        model: r.model.clone(),
+                                                        text: r.text.clone(),
+                                                        latency_ms: Some(r.latency_ms),
+                                                        error: r.error.clone(),
+                                                        created_at: chrono::Utc::now()
+                                                            .to_rfc3339(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    for r in &results {
+                                        let _ = db::insert_transcription(
                                             &conn,
-                                            &db::Dictation {
-                                                id: dictation_id.clone(),
-                                                session_id,
-                                                started_at: started_at.clone(),
-                                                wav_path: Some(
-                                                    wav_path_for_task
-                                                        .to_string_lossy()
-                                                        .into_owned(),
-                                                ),
-                                                duration_ms: Some(capture.duration_ms),
-                                                sample_rate: None,
+                                            &db::TranscriptionRow {
+                                                id: uuid::Uuid::new_v4().to_string(),
+                                                dictation_id: dictation_id.clone(),
+                                                model: r.model.clone(),
+                                                text: r.text.clone(),
+                                                latency_ms: Some(r.latency_ms),
+                                                error: r.error.clone(),
+                                                created_at: chrono::Utc::now().to_rfc3339(),
                                             },
                                         );
                                     }
-                                    let _ = app_handle_for_task.emit(
-                                        "session-phase",
-                                        SessionPhaseEvent {
-                                            phase: "awaiting-lab-choice",
-                                        },
-                                    );
-                                    let results = lab::run_parallel(
-                                        session_id,
-                                        wav_path_for_task.clone(),
-                                        capture.duration_ms,
-                                        provider,
-                                        runtime_api_key.clone(),
-                                        language_mode.clone(),
-                                    )
-                                    .await;
-                                    {
-                                        let session_state_guard =
-                                            session_state_for_task.lock().unwrap();
-                                        if !matches!(
-                                            *session_state_guard,
-                                            SessionState::Transcribing {
-                                                session_id: current_id
-                                            } if current_id == session_id
-                                        ) {
-                                            return;
-                                        }
-                                    }
-                                    if let Ok(conn) = db_conn_for_task.lock() {
-                                        for r in &results {
-                                            let _ = db::insert_transcription(
-                                                &conn,
-                                                &db::TranscriptionRow {
-                                                    id: uuid::Uuid::new_v4().to_string(),
-                                                    dictation_id: dictation_id.clone(),
-                                                    model: r.model.clone(),
-                                                    text: r.text.clone(),
-                                                    latency_ms: Some(r.latency_ms),
-                                                    error: r.error.clone(),
-                                                    created_at: chrono::Utc::now()
-                                                        .to_rfc3339(),
-                                                },
-                                            );
-                                        }
-                                    }
-                                    {
-                                        let mut session_state_guard =
-                                            session_state_for_task.lock().unwrap();
-                                        *session_state_guard =
-                                            SessionState::AwaitingLabChoice { session_id };
-                                    }
-                                    let _ = app_handle_for_task.emit(
-                                        "lab-results-ready",
-                                        LabResultsReadyEvent {
-                                            session_id,
-                                            dictation_id,
-                                            duration_ms: capture.duration_ms,
-                                            results,
-                                        },
-                                    );
-                                    return;
                                 }
 
-                                match transcribe::transcribe_audio(
-                                    session_id,
-                                    &capture.wav_path,
-                                    capture.duration_ms,
-                                    provider,
-                                    runtime_api_key.as_deref(),
-                                    Some(&language_mode),
-                                )
-                                .await
-                                {
-                                    Ok(text) => {
+                                // Pick primary result by transcription mode.
+                                let primary_label: &str = if transcription_mode == "local" {
+                                    "distil-small-en"
+                                } else {
+                                    match provider {
+                                        storage::Provider::Groq => "groq-api",
+                                        storage::Provider::Openai => "openai-api",
+                                    }
+                                };
+                                let primary = results
+                                    .iter()
+                                    .find(|r| r.model == primary_label);
+
+                                match primary {
+                                    Some(r) if r.text.is_some() => {
+                                        let raw = r.text.clone().unwrap();
                                         let text = if smart_formatting {
-                                            apply_smart_formatting(&text)
+                                            apply_smart_formatting(&raw)
                                         } else {
-                                            text
+                                            raw
                                         };
                                         {
                                             let mut session_state_guard =
                                                 session_state_for_task.lock().unwrap();
-                                            if !matches!(
-                                                *session_state_guard,
-                                                SessionState::Transcribing {
-                                                    session_id: current_id
-                                                } if current_id == session_id
-                                            ) {
-                                                // Late response from stale session, ignore.
-                                                return;
-                                            }
                                             *session_state_guard =
                                                 SessionState::Injecting { session_id };
                                         }
@@ -1439,11 +1198,10 @@ pub fn run() {
                                         let _ = storage::append_log(
                                             "INFO",
                                             &format!(
-                                                "Session {session_id} transcribed successfully, length {}",
+                                                "Session {session_id} transcribed via {primary_label}, length {}",
                                                 text.len()
                                             ),
                                         );
-
                                         let _ = app_handle_for_task.emit(
                                             "transcription-complete",
                                             TranscriptionCompleteEvent {
@@ -1491,20 +1249,12 @@ pub fn run() {
                                             SessionPhaseEvent { phase: "idle" },
                                         );
                                     }
-                                    Err(message) => {
-                                        let is_current = {
-                                            let session_state_guard =
-                                                session_state_for_task.lock().unwrap();
-                                            matches!(
-                                                *session_state_guard,
-                                                SessionState::Transcribing {
-                                                    session_id: current_id
-                                                } if current_id == session_id
-                                            )
-                                        };
-                                        if !is_current {
-                                            return;
-                                        }
+                                    _ => {
+                                        let message = primary
+                                            .and_then(|r| r.error.clone())
+                                            .unwrap_or_else(|| format!(
+                                                "Primary model {primary_label} produced no output"
+                                            ));
                                         let _ = app_handle_for_task.emit(
                                             "pipeline-error",
                                             PipelineErrorEvent {
@@ -1520,7 +1270,7 @@ pub fn run() {
                                         let _ = storage::append_log(
                                             "ERROR",
                                             &format!(
-                                                "Session {session_id} failed at transcribe: {message}"
+                                                "Session {session_id} failed at transcribe ({primary_label}): {message}"
                                             ),
                                         );
                                         let _ = app_handle_for_task.emit(
@@ -1530,10 +1280,14 @@ pub fn run() {
                                     }
                                 }
 
-                                // Clean up the temporary WAV file
+                                // Clean up the temporary WAV file.
                                 let _ = std::fs::remove_file(&wav_path_for_task);
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    let _ = db::clear_wav_path(&conn, &dictation_id);
+                                }
 
-                                let mut session_state_guard = session_state_for_task.lock().unwrap();
+                                let mut session_state_guard =
+                                    session_state_for_task.lock().unwrap();
                                 if matches!(
                                     *session_state_guard,
                                     SessionState::Transcribing {
@@ -1597,9 +1351,6 @@ pub fn run() {
             list_installed_models,
             download_model,
             delete_model,
-            pick_lab_winner,
-            reject_all_lab,
-            save_correction,
             list_lab_sessions,
             get_model_tally,
             get_top_mistranscribed

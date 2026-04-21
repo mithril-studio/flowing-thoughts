@@ -8,7 +8,6 @@ import Lab from "./pages/Lab";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultAppSettings, type AppSettings } from "./types/settings";
 
@@ -44,16 +43,6 @@ function App() {
   }, []);
 
   const isLabMode = appSettings.transcription.provider === "local";
-
-  useEffect(() => {
-    if (!isLabMode) return;
-    const unlisten = listen("lab-results-ready", () => {
-      setActiveTab("lab");
-    });
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
-  }, [isLabMode]);
 
   useEffect(() => {
     if (!isLabMode && activeTab === "lab") {
