@@ -1,4 +1,5 @@
-use rusqlite::{params, Connection};
+use crate::storage::HistoryEntry;
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -164,5 +165,59 @@ pub fn save_note(conn: &Connection, note: &Note) -> Result<(), String> {
 pub fn delete_note(conn: &Connection, id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM notes WHERE id = ?1", params![id])
         .map_err(|e| format!("Failed to delete note: {e}"))?;
+    Ok(())
+}
+
+pub fn insert_history(conn: &Connection, entry: &HistoryEntry) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO history (session_id, text, created_at) VALUES (?1, ?2, ?3)",
+        params![entry.session_id as i64, entry.text, entry.timestamp],
+    )
+    .map_err(|e| format!("Failed to insert history: {e}"))?;
+    Ok(())
+}
+
+pub fn list_history(conn: &Connection, limit: i64) -> Result<Vec<HistoryEntry>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_id, text, created_at FROM history
+             ORDER BY id DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| format!("Failed to prepare list_history: {e}"))?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            let session_id: i64 = row.get(0)?;
+            Ok(HistoryEntry {
+                session_id: session_id as u64,
+                text: row.get(1)?,
+                timestamp: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query history: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Failed to read history row: {e}"))?);
+    }
+    Ok(out)
+}
+
+pub fn kv_get(conn: &Connection, key: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT value FROM kv WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| format!("Failed to read kv[{key}]: {e}"))
+}
+
+pub fn kv_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO kv (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .map_err(|e| format!("Failed to write kv[{key}]: {e}"))?;
     Ok(())
 }

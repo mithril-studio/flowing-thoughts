@@ -90,6 +90,7 @@ fn get_recording_state(state: tauri::State<'_, Arc<Mutex<SessionState>>>) -> boo
 fn set_openai_api_key(
     key: String,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
 ) -> Result<(), String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -100,7 +101,11 @@ fn set_openai_api_key(
         .lock()
         .map_err(|_| "Persisted state lock poisoned".to_string())?;
     state.openai_api_key = Some(trimmed.to_string());
-    storage::save(&state)?;
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    storage::save(&conn, &state)?;
     Ok(())
 }
 
@@ -284,6 +289,7 @@ fn update_app_settings(
     app: tauri::AppHandle,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
     hotkey_mode: tauri::State<'_, Arc<Mutex<hotkey::HotkeyMode>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
 ) -> Result<AppSettingsUpdateResult, String> {
     let mut next_settings = settings;
     sanitize_settings(&mut next_settings);
@@ -294,7 +300,11 @@ fn update_app_settings(
             .lock()
             .map_err(|_| "Persisted state lock poisoned".to_string())?;
         state.settings = next_settings.clone();
-        storage::save(&state)?;
+        let conn = db_conn
+            .inner()
+            .lock()
+            .map_err(|_| "DB lock poisoned".to_string())?;
+        storage::save(&conn, &state)?;
     }
 
     if hotkey::mode_from_env().is_none() {
@@ -332,6 +342,7 @@ fn save_onboarding_state(
     license_key: String,
     onboarding_complete: bool,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
 ) -> Result<(), String> {
     let trimmed = license_key.trim();
     if trimmed.len() < 8 {
@@ -343,7 +354,11 @@ fn save_onboarding_state(
         .map_err(|_| "Persisted state lock poisoned".to_string())?;
     state.license_key = Some(trimmed.to_string());
     state.onboarding_complete = onboarding_complete;
-    storage::save(&state)?;
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    storage::save(&conn, &state)?;
     Ok(())
 }
 
@@ -599,8 +614,12 @@ fn open_input_monitoring_settings() -> Result<(), String> {
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
     let next_session_id = Arc::new(Mutex::new(1_u64));
+    let db_conn = Arc::new(Mutex::new(
+        db::open().expect("Failed to initialize SQLite database"),
+    ));
     let persisted_state = {
-        let mut loaded = storage::load().unwrap_or_default();
+        let conn = db_conn.lock().expect("DB lock poisoned during startup");
+        let mut loaded = storage::load(&conn).unwrap_or_default();
         sanitize_settings(&mut loaded.settings);
         loaded
     };
@@ -609,9 +628,6 @@ pub fn run() {
     let runtime_hotkey_mode = hotkey::mode_from_env().unwrap_or(configured_hotkey_mode);
     let persisted = Arc::new(Mutex::new(persisted_state));
     let hotkey_mode = Arc::new(Mutex::new(runtime_hotkey_mode));
-    let db_conn = Arc::new(Mutex::new(
-        db::open().expect("Failed to initialize SQLite database"),
-    ));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -660,6 +676,7 @@ pub fn run() {
             let shared_session_state = session_state.clone();
             let shared_next_session_id = next_session_id.clone();
             let shared_persisted = persisted.clone();
+            let shared_db_conn = db_conn.clone();
 
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
@@ -835,6 +852,7 @@ pub fn run() {
                             let app_handle_for_task = app_handle.clone();
                             let session_state_for_task = shared_session_state.clone();
                             let persisted_for_task = shared_persisted.clone();
+                            let db_conn_for_task = shared_db_conn.clone();
                             let wav_path_for_task = capture.wav_path.clone();
 
                             tauri::async_runtime::spawn(async move {
@@ -902,19 +920,19 @@ pub fn run() {
                                                 timestamp: chrono::Utc::now().to_rfc3339(),
                                             },
                                         );
+                                        let history_entry = storage::HistoryEntry {
+                                            session_id,
+                                            text: text.clone(),
+                                            timestamp: chrono::Utc::now().to_rfc3339(),
+                                        };
                                         if let Ok(mut state) = persisted_for_task.lock() {
-                                            state.history.insert(
-                                                0,
-                                                storage::HistoryEntry {
-                                                    session_id,
-                                                    text: text.clone(),
-                                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                                },
-                                            );
+                                            state.history.insert(0, history_entry.clone());
                                             if state.history.len() > 200 {
                                                 state.history.truncate(200);
                                             }
-                                            let _ = storage::save(&state);
+                                        }
+                                        if let Ok(conn) = db_conn_for_task.lock() {
+                                            let _ = storage::record_history(&conn, &history_entry);
                                         }
                                         if let Err(message) = inject_result {
                                             let _ = app_handle_for_task.emit(
