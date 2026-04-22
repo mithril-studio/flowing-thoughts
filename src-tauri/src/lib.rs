@@ -14,10 +14,13 @@ const HOLD_TO_START_MS: u64 = 500;
 mod audio;
 mod db;
 mod hotkey;
+mod lab;
+mod local_transcribe;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_hotkey;
+mod model_manager;
 mod storage;
 mod text_inject;
 mod transcribe;
@@ -605,6 +608,79 @@ fn delete_note(
 }
 
 #[tauri::command]
+fn list_installed_models() -> Result<Vec<model_manager::InstalledModel>, String> {
+    model_manager::list_installed()
+}
+
+#[tauri::command]
+async fn download_model(app: AppHandle, model_id: String) -> Result<(), String> {
+    let id = model_manager::ModelId::from_str(&model_id)
+        .ok_or_else(|| format!("Unknown model id: {model_id}"))?;
+    model_manager::download_model(app, id).await
+}
+
+#[tauri::command]
+fn delete_model(model_id: String) -> Result<(), String> {
+    let id = model_manager::ModelId::from_str(&model_id)
+        .ok_or_else(|| format!("Unknown model id: {model_id}"))?;
+    model_manager::delete_model(id)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct LabSessionSummary {
+    dictation: db::Dictation,
+    transcriptions: Vec<db::TranscriptionRow>,
+    choice: Option<db::LabChoice>,
+}
+
+#[tauri::command]
+fn list_lab_sessions(
+    limit: Option<i64>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<LabSessionSummary>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    let dictations = db::list_recent_dictations(&conn, limit.unwrap_or(50))?;
+    let mut out = Vec::with_capacity(dictations.len());
+    for d in dictations {
+        let transcriptions = db::list_transcriptions_for(&conn, &d.id)?;
+        let choice = db::get_choice(&conn, &d.id)?;
+        out.push(LabSessionSummary {
+            dictation: d,
+            transcriptions,
+            choice,
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn get_model_tally(
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<db::ModelTally>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::model_tally(&conn)
+}
+
+#[tauri::command]
+fn get_top_mistranscribed(
+    model: Option<String>,
+    limit: Option<i64>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<db::MistranscribedWord>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::top_mistranscribed_words(&conn, model.as_deref(), limit.unwrap_or(20))
+}
+
+#[tauri::command]
 fn open_input_monitoring_settings() -> Result<(), String> {
     let targets = [
         "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
@@ -1023,62 +1099,144 @@ pub fn run() {
                             let wav_path_for_task = capture.wav_path.clone();
 
                             tauri::async_runtime::spawn(async move {
-                                let (provider, runtime_api_key, language_mode, smart_formatting) =
-                                    persisted_for_task
-                                        .lock()
-                                        .ok()
-                                        .map(|state| {
-                                            let provider = state.active_provider;
-                                            let key = match provider {
-                                                storage::Provider::Groq => {
-                                                    state.groq_api_key.clone()
-                                                }
-                                                storage::Provider::Openai => {
-                                                    state.openai_api_key.clone()
-                                                }
-                                            };
-                                            (
-                                                provider,
-                                                key,
-                                                state.settings.language.mode.clone(),
-                                                state.settings.extras.smart_formatting,
-                                            )
-                                        })
-                                        .unwrap_or((
-                                            storage::Provider::Groq,
-                                            None,
-                                            "system".to_string(),
-                                            true,
-                                        ));
+                                let (
+                                    provider,
+                                    runtime_api_key,
+                                    language_mode,
+                                    smart_formatting,
+                                    transcription_mode,
+                                ) = persisted_for_task
+                                    .lock()
+                                    .ok()
+                                    .map(|state| {
+                                        let provider = state.active_provider;
+                                        let key = match provider {
+                                            storage::Provider::Groq => {
+                                                state.groq_api_key.clone()
+                                            }
+                                            storage::Provider::Openai => {
+                                                state.openai_api_key.clone()
+                                            }
+                                        };
+                                        (
+                                            provider,
+                                            key,
+                                            state.settings.language.mode.clone(),
+                                            state.settings.extras.smart_formatting,
+                                            state.settings.transcription.provider.clone(),
+                                        )
+                                    })
+                                    .unwrap_or((
+                                        storage::Provider::Groq,
+                                        None,
+                                        "system".to_string(),
+                                        true,
+                                        "api".to_string(),
+                                    ));
 
-                                match transcribe::transcribe_audio(
+                                // Always fan out to all 4 models for data collection.
+                                let dictation_id = uuid::Uuid::new_v4().to_string();
+                                let started_at = chrono::Utc::now().to_rfc3339();
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    let _ = db::insert_dictation(
+                                        &conn,
+                                        &db::Dictation {
+                                            id: dictation_id.clone(),
+                                            session_id,
+                                            started_at: started_at.clone(),
+                                            wav_path: Some(
+                                                wav_path_for_task
+                                                    .to_string_lossy()
+                                                    .into_owned(),
+                                            ),
+                                            duration_ms: Some(capture.duration_ms),
+                                            sample_rate: None,
+                                        },
+                                    );
+                                }
+
+                                let results = lab::run_parallel(
                                     session_id,
-                                    &capture.wav_path,
+                                    wav_path_for_task.clone(),
                                     capture.duration_ms,
                                     provider,
-                                    runtime_api_key.as_deref(),
-                                    Some(&language_mode),
+                                    runtime_api_key.clone(),
+                                    language_mode.clone(),
                                 )
-                                .await
+                                .await;
+
                                 {
-                                    Ok(text) => {
+                                    let session_state_guard =
+                                        session_state_for_task.lock().unwrap();
+                                    if !matches!(
+                                        *session_state_guard,
+                                        SessionState::Transcribing {
+                                            session_id: current_id
+                                        } if current_id == session_id
+                                    ) {
+                                        // Stale session — still persist data, then bail.
+                                        if let Ok(conn) = db_conn_for_task.lock() {
+                                            for r in &results {
+                                                let _ = db::insert_transcription(
+                                                    &conn,
+                                                    &db::TranscriptionRow {
+                                                        id: uuid::Uuid::new_v4().to_string(),
+                                                        dictation_id: dictation_id.clone(),
+                                                        model: r.model.clone(),
+                                                        text: r.text.clone(),
+                                                        latency_ms: Some(r.latency_ms),
+                                                        error: r.error.clone(),
+                                                        created_at: chrono::Utc::now()
+                                                            .to_rfc3339(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    for r in &results {
+                                        let _ = db::insert_transcription(
+                                            &conn,
+                                            &db::TranscriptionRow {
+                                                id: uuid::Uuid::new_v4().to_string(),
+                                                dictation_id: dictation_id.clone(),
+                                                model: r.model.clone(),
+                                                text: r.text.clone(),
+                                                latency_ms: Some(r.latency_ms),
+                                                error: r.error.clone(),
+                                                created_at: chrono::Utc::now().to_rfc3339(),
+                                            },
+                                        );
+                                    }
+                                }
+
+                                // Pick primary result by transcription mode.
+                                let primary_label: &str = if transcription_mode == "local" {
+                                    "distil-small-en"
+                                } else {
+                                    match provider {
+                                        storage::Provider::Groq => "groq-api",
+                                        storage::Provider::Openai => "openai-api",
+                                    }
+                                };
+                                let primary = results
+                                    .iter()
+                                    .find(|r| r.model == primary_label);
+
+                                match primary {
+                                    Some(r) if r.text.is_some() => {
+                                        let raw = r.text.clone().unwrap();
                                         let text = if smart_formatting {
-                                            apply_smart_formatting(&text)
+                                            apply_smart_formatting(&raw)
                                         } else {
-                                            text
+                                            raw
                                         };
                                         {
                                             let mut session_state_guard =
                                                 session_state_for_task.lock().unwrap();
-                                            if !matches!(
-                                                *session_state_guard,
-                                                SessionState::Transcribing {
-                                                    session_id: current_id
-                                                } if current_id == session_id
-                                            ) {
-                                                // Late response from stale session, ignore.
-                                                return;
-                                            }
                                             *session_state_guard =
                                                 SessionState::Injecting { session_id };
                                         }
@@ -1090,11 +1248,10 @@ pub fn run() {
                                         let _ = storage::append_log(
                                             "INFO",
                                             &format!(
-                                                "Session {session_id} transcribed successfully, length {}",
+                                                "Session {session_id} transcribed via {primary_label}, length {}",
                                                 text.len()
                                             ),
                                         );
-
                                         let _ = app_handle_for_task.emit(
                                             "transcription-complete",
                                             TranscriptionCompleteEvent {
@@ -1142,20 +1299,12 @@ pub fn run() {
                                             SessionPhaseEvent { phase: "idle" },
                                         );
                                     }
-                                    Err(message) => {
-                                        let is_current = {
-                                            let session_state_guard =
-                                                session_state_for_task.lock().unwrap();
-                                            matches!(
-                                                *session_state_guard,
-                                                SessionState::Transcribing {
-                                                    session_id: current_id
-                                                } if current_id == session_id
-                                            )
-                                        };
-                                        if !is_current {
-                                            return;
-                                        }
+                                    _ => {
+                                        let message = primary
+                                            .and_then(|r| r.error.clone())
+                                            .unwrap_or_else(|| format!(
+                                                "Primary model {primary_label} produced no output"
+                                            ));
                                         let _ = app_handle_for_task.emit(
                                             "pipeline-error",
                                             PipelineErrorEvent {
@@ -1171,7 +1320,7 @@ pub fn run() {
                                         let _ = storage::append_log(
                                             "ERROR",
                                             &format!(
-                                                "Session {session_id} failed at transcribe: {message}"
+                                                "Session {session_id} failed at transcribe ({primary_label}): {message}"
                                             ),
                                         );
                                         let _ = app_handle_for_task.emit(
@@ -1181,10 +1330,14 @@ pub fn run() {
                                     }
                                 }
 
-                                // Clean up the temporary WAV file
+                                // Clean up the temporary WAV file.
                                 let _ = std::fs::remove_file(&wav_path_for_task);
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    let _ = db::clear_wav_path(&conn, &dictation_id);
+                                }
 
-                                let mut session_state_guard = session_state_for_task.lock().unwrap();
+                                let mut session_state_guard =
+                                    session_state_for_task.lock().unwrap();
                                 if matches!(
                                     *session_state_guard,
                                     SessionState::Transcribing {
@@ -1244,7 +1397,13 @@ pub fn run() {
             delete_snippet,
             list_notes,
             save_note,
-            delete_note
+            delete_note,
+            list_installed_models,
+            download_model,
+            delete_model,
+            list_lab_sessions,
+            get_model_tally,
+            get_top_mistranscribed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

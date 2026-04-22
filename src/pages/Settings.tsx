@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   type AppSettings,
   type AppSettingsUpdateResult,
@@ -15,6 +16,27 @@ interface AccessibilityHelpInfo {
   executable_path: string;
   is_dev_build: boolean;
   note: string;
+}
+
+interface InstalledModel {
+  id: string;
+  display_name: string;
+  filename: string;
+  installed: boolean;
+  expected_size_bytes: number;
+  local_path: string | null;
+}
+
+interface DownloadProgress {
+  id: string;
+  bytes_downloaded: number;
+  total_bytes: number;
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)} GB`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)} MB`;
+  return `${(n / 1000).toFixed(0)} KB`;
 }
 
 type Provider = "groq" | "openai";
@@ -62,6 +84,10 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [helpInfo, setHelpInfo] = useState<AccessibilityHelpInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [models, setModels] = useState<InstalledModel[]>([]);
+  const [modelProgress, setModelProgress] = useState<Record<string, DownloadProgress>>({});
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
     setLocal(settings ?? defaultAppSettings);
@@ -93,6 +119,68 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
         // Non-blocking helper content.
       });
   }, []);
+
+  const fetchModels = async () => {
+    try {
+      const list = await invoke<InstalledModel[]>("list_installed_models");
+      setModels(list);
+    } catch (e) {
+      setModelError(String(e));
+    }
+  };
+
+  useEffect(() => {
+    void fetchModels();
+    const progressUnlisten = listen<DownloadProgress>("model-download-progress", (event) => {
+      setModelProgress((prev) => ({ ...prev, [event.payload.id]: event.payload }));
+    });
+    const completeUnlisten = listen<{ id: string }>("model-download-complete", (event) => {
+      setDownloadingModel((current) => (current === event.payload.id ? null : current));
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[event.payload.id];
+        return next;
+      });
+      void fetchModels();
+    });
+    const errorUnlisten = listen<{ id: string; error: string }>("model-download-error", (event) => {
+      setDownloadingModel((current) => (current === event.payload.id ? null : current));
+      setModelError(`${event.payload.id}: ${event.payload.error}`);
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[event.payload.id];
+        return next;
+      });
+    });
+    return () => {
+      void progressUnlisten.then((fn) => fn());
+      void completeUnlisten.then((fn) => fn());
+      void errorUnlisten.then((fn) => fn());
+    };
+  }, []);
+
+  const startDownload = async (id: string) => {
+    setModelError(null);
+    setDownloadingModel(id);
+    try {
+      await invoke("download_model", { modelId: id });
+    } catch (e) {
+      setModelError(String(e));
+      setDownloadingModel(null);
+    }
+  };
+
+  const removeModel = async (id: string) => {
+    setModelError(null);
+    try {
+      await invoke("delete_model", { modelId: id });
+      await fetchModels();
+    } catch (e) {
+      setModelError(String(e));
+    }
+  };
+
+  const anyModelInstalled = models.some((m) => m.installed);
 
   const persist = async (next: AppSettings) => {
     setBusy(true);
@@ -316,6 +404,109 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           }
           disabled={busy}
         />
+      </section>
+
+      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
+        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Transcription</h3>
+        <div className="grid grid-cols-2 gap-2">
+          <ProviderTile
+            title="API"
+            subtitle="OpenAI Whisper"
+            selected={local.transcription.provider === "api"}
+            disabled={busy}
+            onClick={() =>
+              update({
+                ...local,
+                transcription: { ...local.transcription, provider: "api" },
+              })
+            }
+          />
+          <ProviderTile
+            title="Local"
+            subtitle={anyModelInstalled ? "On-device" : "Install a model first"}
+            selected={local.transcription.provider === "local"}
+            disabled={busy || !anyModelInstalled}
+            onClick={() =>
+              update({
+                ...local,
+                transcription: { ...local.transcription, provider: "local" },
+              })
+            }
+          />
+        </div>
+        {local.transcription.provider === "local" && (
+          <p className="text-[11px] text-neutral-500">
+            Lab mode active: every dictation runs on API + 3 local models. Pick the best result.
+          </p>
+        )}
+        <div className="space-y-2 pt-1">
+          <p className="text-xs text-neutral-400">Local models</p>
+          {models.length === 0 && (
+            <p className="text-xs text-neutral-500">Loading…</p>
+          )}
+          {models.map((model) => {
+            const progress = modelProgress[model.id];
+            const isDownloading = downloadingModel === model.id;
+            const percent =
+              progress && progress.total_bytes > 0
+                ? Math.min(100, Math.floor((progress.bytes_downloaded / progress.total_bytes) * 100))
+                : 0;
+            return (
+              <div
+                key={model.id}
+                className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm text-neutral-200">{model.display_name}</p>
+                    <p className="text-[11px] text-neutral-500">
+                      {formatBytes(model.expected_size_bytes)}{" "}
+                      {model.installed ? (
+                        <span className="text-emerald-400">• installed</span>
+                      ) : (
+                        <span className="text-neutral-500">• not installed</span>
+                      )}
+                    </p>
+                  </div>
+                  {model.installed ? (
+                    <button
+                      type="button"
+                      onClick={() => removeModel(model.id)}
+                      className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-800"
+                    >
+                      Delete
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => startDownload(model.id)}
+                      disabled={isDownloading}
+                      className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-60"
+                    >
+                      {isDownloading ? "Downloading…" : "Download"}
+                    </button>
+                  )}
+                </div>
+                {isDownloading && progress && (
+                  <div className="space-y-1">
+                    <div className="h-1.5 w-full rounded-full bg-neutral-800">
+                      <div
+                        className="h-full rounded-full bg-emerald-500 transition-all"
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-neutral-500">
+                      {formatBytes(progress.bytes_downloaded)} / {formatBytes(progress.total_bytes)} ({percent}%)
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {modelError && (
+            <p className="text-xs text-red-300">{modelError}</p>
+          )}
+        </div>
       </section>
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
@@ -558,5 +749,37 @@ function DisabledToggle({ label }: { label: string }) {
       <span>{label}</span>
       <span className="text-[10px] uppercase tracking-wide text-neutral-600">Coming soon</span>
     </div>
+  );
+}
+
+function ProviderTile({
+  title,
+  subtitle,
+  selected,
+  disabled,
+  onClick,
+}: {
+  title: string;
+  subtitle: string;
+  selected: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-md border px-3 py-3 text-left transition-colors ${
+        selected
+          ? "border-emerald-500 bg-emerald-950/30"
+          : "border-neutral-700 bg-neutral-950 hover:border-neutral-600"
+      } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
+    >
+      <p className={`text-sm font-medium ${selected ? "text-emerald-300" : "text-neutral-200"}`}>
+        {title}
+      </p>
+      <p className="text-[11px] text-neutral-500">{subtitle}</p>
+    </button>
   );
 }

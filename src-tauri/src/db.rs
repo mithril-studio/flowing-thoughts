@@ -20,6 +20,46 @@ pub struct Note {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Dictation {
+    pub id: String,
+    pub session_id: u64,
+    pub started_at: String,
+    pub wav_path: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptionRow {
+    pub id: String,
+    pub dictation_id: String,
+    pub model: String,
+    pub text: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub error: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LabChoice {
+    pub dictation_id: String,
+    pub chosen_model: Option<String>,
+    pub ground_truth: Option<String>,
+    pub chosen_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Correction {
+    pub id: String,
+    pub dictation_id: String,
+    pub model: String,
+    pub wrong_text: String,
+    pub intended_text: String,
+    pub context_snippet: Option<String>,
+    pub created_at: String,
+}
+
 fn db_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     Ok(PathBuf::from(home)
@@ -80,6 +120,51 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              COMMIT;",
         )
         .map_err(|e| format!("Migration v1 failed: {e}"))?;
+    }
+
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS dictations (
+               id TEXT PRIMARY KEY,
+               session_id INTEGER NOT NULL,
+               started_at TEXT NOT NULL,
+               wav_path TEXT,
+               duration_ms INTEGER,
+               sample_rate INTEGER
+             );
+             CREATE TABLE IF NOT EXISTS transcriptions (
+               id TEXT PRIMARY KEY,
+               dictation_id TEXT NOT NULL REFERENCES dictations(id) ON DELETE CASCADE,
+               model TEXT NOT NULL,
+               text TEXT,
+               latency_ms INTEGER,
+               error TEXT,
+               created_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS choices (
+               dictation_id TEXT PRIMARY KEY REFERENCES dictations(id) ON DELETE CASCADE,
+               chosen_model TEXT,
+               ground_truth TEXT,
+               chosen_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS corrections (
+               id TEXT PRIMARY KEY,
+               dictation_id TEXT NOT NULL REFERENCES dictations(id) ON DELETE CASCADE,
+               model TEXT NOT NULL,
+               wrong_text TEXT NOT NULL,
+               intended_text TEXT NOT NULL,
+               context_snippet TEXT,
+               created_at TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_transcriptions_dictation
+               ON transcriptions(dictation_id);
+             CREATE INDEX IF NOT EXISTS idx_corrections_model_wrong
+               ON corrections(model, wrong_text);
+             PRAGMA user_version = 2;
+             COMMIT;",
+        )
+        .map_err(|e| format!("Migration v2 failed: {e}"))?;
     }
 
     Ok(())
@@ -220,4 +305,266 @@ pub fn kv_set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed to write kv[{key}]: {e}"))?;
     Ok(())
+}
+
+pub fn insert_dictation(conn: &Connection, dictation: &Dictation) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO dictations (id, session_id, started_at, wav_path, duration_ms, sample_rate)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            dictation.id,
+            dictation.session_id as i64,
+            dictation.started_at,
+            dictation.wav_path,
+            dictation.duration_ms.map(|v| v as i64),
+            dictation.sample_rate.map(|v| v as i64),
+        ],
+    )
+    .map_err(|e| format!("Failed to insert dictation: {e}"))?;
+    Ok(())
+}
+
+pub fn clear_wav_path(conn: &Connection, dictation_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE dictations SET wav_path = NULL WHERE id = ?1",
+        params![dictation_id],
+    )
+    .map_err(|e| format!("Failed to clear wav_path: {e}"))?;
+    Ok(())
+}
+
+pub fn insert_transcription(conn: &Connection, row: &TranscriptionRow) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO transcriptions (id, dictation_id, model, text, latency_ms, error, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            row.id,
+            row.dictation_id,
+            row.model,
+            row.text,
+            row.latency_ms.map(|v| v as i64),
+            row.error,
+            row.created_at,
+        ],
+    )
+    .map_err(|e| format!("Failed to insert transcription: {e}"))?;
+    Ok(())
+}
+
+pub fn list_transcriptions_for(
+    conn: &Connection,
+    dictation_id: &str,
+) -> Result<Vec<TranscriptionRow>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, dictation_id, model, text, latency_ms, error, created_at
+             FROM transcriptions
+             WHERE dictation_id = ?1
+             ORDER BY created_at ASC",
+        )
+        .map_err(|e| format!("Failed to prepare list_transcriptions_for: {e}"))?;
+    let rows = stmt
+        .query_map(params![dictation_id], |row| {
+            let latency: Option<i64> = row.get(4)?;
+            Ok(TranscriptionRow {
+                id: row.get(0)?,
+                dictation_id: row.get(1)?,
+                model: row.get(2)?,
+                text: row.get(3)?,
+                latency_ms: latency.map(|v| v as u64),
+                error: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query transcriptions: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Failed to read transcription row: {e}"))?);
+    }
+    Ok(out)
+}
+
+pub fn upsert_choice(conn: &Connection, choice: &LabChoice) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO choices (dictation_id, chosen_model, ground_truth, chosen_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(dictation_id) DO UPDATE SET
+           chosen_model = excluded.chosen_model,
+           ground_truth = excluded.ground_truth,
+           chosen_at = excluded.chosen_at",
+        params![
+            choice.dictation_id,
+            choice.chosen_model,
+            choice.ground_truth,
+            choice.chosen_at,
+        ],
+    )
+    .map_err(|e| format!("Failed to upsert choice: {e}"))?;
+    Ok(())
+}
+
+pub fn get_choice(conn: &Connection, dictation_id: &str) -> Result<Option<LabChoice>, String> {
+    conn.query_row(
+        "SELECT dictation_id, chosen_model, ground_truth, chosen_at
+         FROM choices WHERE dictation_id = ?1",
+        params![dictation_id],
+        |row| {
+            Ok(LabChoice {
+                dictation_id: row.get(0)?,
+                chosen_model: row.get(1)?,
+                ground_truth: row.get(2)?,
+                chosen_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("Failed to read choice: {e}"))
+}
+
+pub fn insert_correction(conn: &Connection, correction: &Correction) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO corrections (id, dictation_id, model, wrong_text, intended_text, context_snippet, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            correction.id,
+            correction.dictation_id,
+            correction.model,
+            correction.wrong_text,
+            correction.intended_text,
+            correction.context_snippet,
+            correction.created_at,
+        ],
+    )
+    .map_err(|e| format!("Failed to insert correction: {e}"))?;
+    Ok(())
+}
+
+pub fn list_recent_dictations(
+    conn: &Connection,
+    limit: i64,
+) -> Result<Vec<Dictation>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, session_id, started_at, wav_path, duration_ms, sample_rate
+             FROM dictations
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| format!("Failed to prepare list_recent_dictations: {e}"))?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            let session_id: i64 = row.get(1)?;
+            let duration: Option<i64> = row.get(4)?;
+            let sample_rate: Option<i64> = row.get(5)?;
+            Ok(Dictation {
+                id: row.get(0)?,
+                session_id: session_id as u64,
+                started_at: row.get(2)?,
+                wav_path: row.get(3)?,
+                duration_ms: duration.map(|v| v as u64),
+                sample_rate: sample_rate.map(|v| v as u32),
+            })
+        })
+        .map_err(|e| format!("Failed to query dictations: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Failed to read dictation row: {e}"))?);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelTally {
+    pub model: String,
+    pub wins: i64,
+    pub appearances: i64,
+    pub avg_latency_ms: Option<f64>,
+}
+
+pub fn model_tally(conn: &Connection) -> Result<Vec<ModelTally>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+               t.model,
+               SUM(CASE WHEN c.chosen_model = t.model THEN 1 ELSE 0 END) AS wins,
+               COUNT(*) AS appearances,
+               AVG(t.latency_ms) AS avg_latency
+             FROM transcriptions t
+             LEFT JOIN choices c ON c.dictation_id = t.dictation_id
+             GROUP BY t.model
+             ORDER BY wins DESC, appearances DESC",
+        )
+        .map_err(|e| format!("Failed to prepare model_tally: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ModelTally {
+                model: row.get(0)?,
+                wins: row.get(1)?,
+                appearances: row.get(2)?,
+                avg_latency_ms: row.get(3)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query model_tally: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Failed to read model_tally row: {e}"))?);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MistranscribedWord {
+    pub model: String,
+    pub wrong_text: String,
+    pub intended_text: String,
+    pub occurrences: i64,
+}
+
+pub fn top_mistranscribed_words(
+    conn: &Connection,
+    model_filter: Option<&str>,
+    limit: i64,
+) -> Result<Vec<MistranscribedWord>, String> {
+    let (sql, use_filter) = if model_filter.is_some() {
+        (
+            "SELECT model, wrong_text, intended_text, COUNT(*) AS occurrences
+             FROM corrections
+             WHERE model = ?1
+             GROUP BY model, wrong_text, intended_text
+             ORDER BY occurrences DESC
+             LIMIT ?2",
+            true,
+        )
+    } else {
+        (
+            "SELECT model, wrong_text, intended_text, COUNT(*) AS occurrences
+             FROM corrections
+             GROUP BY model, wrong_text, intended_text
+             ORDER BY occurrences DESC
+             LIMIT ?1",
+            false,
+        )
+    };
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("Failed to prepare top_mistranscribed_words: {e}"))?;
+    let mapper = |row: &rusqlite::Row<'_>| {
+        Ok(MistranscribedWord {
+            model: row.get(0)?,
+            wrong_text: row.get(1)?,
+            intended_text: row.get(2)?,
+            occurrences: row.get(3)?,
+        })
+    };
+    let rows_iter = if use_filter {
+        stmt.query_map(params![model_filter.unwrap(), limit], mapper)
+    } else {
+        stmt.query_map(params![limit], mapper)
+    }
+    .map_err(|e| format!("Failed to query corrections: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows_iter {
+        out.push(row.map_err(|e| format!("Failed to read correction row: {e}"))?);
+    }
+    Ok(out)
 }
