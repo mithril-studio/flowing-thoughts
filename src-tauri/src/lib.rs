@@ -1105,33 +1105,45 @@ pub fn run() {
                                     );
                                 }
 
-                                let results = lab::run_parallel(
+                                let primary_label: String = if transcription_mode == "local" {
+                                    "distil-small-en".to_string()
+                                } else {
+                                    match provider {
+                                        storage::Provider::Groq => "groq-api".to_string(),
+                                        storage::Provider::Openai => "openai-api".to_string(),
+                                    }
+                                };
+
+                                let (primary, pending) = lab::run_with_primary_first(
                                     session_id,
                                     wav_path_for_task.clone(),
                                     capture.duration_ms,
                                     provider,
                                     runtime_api_key.clone(),
                                     language_mode.clone(),
+                                    primary_label.clone(),
                                 )
                                 .await;
 
+                                // Detach the loser tasks: await them in the background,
+                                // persist all 4 results to the DB, then clean up the WAV.
                                 {
-                                    let session_state_guard =
-                                        session_state_for_task.lock().unwrap();
-                                    if !matches!(
-                                        *session_state_guard,
-                                        SessionState::Transcribing {
-                                            session_id: current_id
-                                        } if current_id == session_id
-                                    ) {
-                                        // Stale session — still persist data, then bail.
-                                        if let Ok(conn) = db_conn_for_task.lock() {
-                                            for r in &results {
+                                    let primary_for_detach = primary.clone();
+                                    let db_conn_for_detach = db_conn_for_task.clone();
+                                    let dictation_id_for_detach = dictation_id.clone();
+                                    let wav_path_for_detach = wav_path_for_task.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let losers = pending.join_all().await;
+                                        if let Ok(conn) = db_conn_for_detach.lock() {
+                                            let all_results = std::iter::once(&primary_for_detach)
+                                                .chain(losers.iter());
+                                            for r in all_results {
                                                 let _ = db::insert_transcription(
                                                     &conn,
                                                     &db::TranscriptionRow {
                                                         id: uuid::Uuid::new_v4().to_string(),
-                                                        dictation_id: dictation_id.clone(),
+                                                        dictation_id: dictation_id_for_detach
+                                                            .clone(),
                                                         model: r.model.clone(),
                                                         text: r.text.clone(),
                                                         latency_ms: Some(r.latency_ms),
@@ -1141,125 +1153,82 @@ pub fn run() {
                                                     },
                                                 );
                                             }
+                                            let _ = db::clear_wav_path(
+                                                &conn,
+                                                &dictation_id_for_detach,
+                                            );
                                         }
+                                        let _ = std::fs::remove_file(&wav_path_for_detach);
+                                    });
+                                }
+
+                                // Stale session — skip injection; detached task still persists + cleans up.
+                                {
+                                    let session_state_guard =
+                                        session_state_for_task.lock().unwrap();
+                                    if !matches!(
+                                        *session_state_guard,
+                                        SessionState::Transcribing {
+                                            session_id: current_id
+                                        } if current_id == session_id
+                                    ) {
                                         return;
                                     }
                                 }
 
-                                if let Ok(conn) = db_conn_for_task.lock() {
-                                    for r in &results {
-                                        let _ = db::insert_transcription(
-                                            &conn,
-                                            &db::TranscriptionRow {
-                                                id: uuid::Uuid::new_v4().to_string(),
-                                                dictation_id: dictation_id.clone(),
-                                                model: r.model.clone(),
-                                                text: r.text.clone(),
-                                                latency_ms: Some(r.latency_ms),
-                                                error: r.error.clone(),
-                                                created_at: chrono::Utc::now().to_rfc3339(),
-                                            },
-                                        );
+                                if primary.text.is_some() {
+                                    let raw = primary.text.clone().unwrap();
+                                    let text = if smart_formatting {
+                                        apply_smart_formatting(&raw)
+                                    } else {
+                                        raw
+                                    };
+                                    {
+                                        let mut session_state_guard =
+                                            session_state_for_task.lock().unwrap();
+                                        *session_state_guard =
+                                            SessionState::Injecting { session_id };
                                     }
-                                }
-
-                                // Pick primary result by transcription mode.
-                                let primary_label: &str = if transcription_mode == "local" {
-                                    "distil-small-en"
-                                } else {
-                                    match provider {
-                                        storage::Provider::Groq => "groq-api",
-                                        storage::Provider::Openai => "openai-api",
-                                    }
-                                };
-                                let primary = results
-                                    .iter()
-                                    .find(|r| r.model == primary_label);
-
-                                match primary {
-                                    Some(r) if r.text.is_some() => {
-                                        let raw = r.text.clone().unwrap();
-                                        let text = if smart_formatting {
-                                            apply_smart_formatting(&raw)
-                                        } else {
-                                            raw
-                                        };
-                                        {
-                                            let mut session_state_guard =
-                                                session_state_for_task.lock().unwrap();
-                                            *session_state_guard =
-                                                SessionState::Injecting { session_id };
-                                        }
-                                        let _ = app_handle_for_task.emit(
-                                            "session-phase",
-                                            SessionPhaseEvent { phase: "injecting" },
-                                        );
-                                        let inject_result = text_inject::inject_text(&text);
-                                        let _ = storage::append_log(
-                                            "INFO",
-                                            &format!(
-                                                "Session {session_id} transcribed via {primary_label}, length {}",
-                                                text.len()
-                                            ),
-                                        );
-                                        let _ = app_handle_for_task.emit(
-                                            "transcription-complete",
-                                            TranscriptionCompleteEvent {
-                                                session_id,
-                                                text: text.clone(),
-                                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                            },
-                                        );
-                                        let history_entry = storage::HistoryEntry {
+                                    let _ = app_handle_for_task.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "injecting" },
+                                    );
+                                    let inject_result = text_inject::inject_text(&text);
+                                    let _ = storage::append_log(
+                                        "INFO",
+                                        &format!(
+                                            "Session {session_id} transcribed via {primary_label}, length {}",
+                                            text.len()
+                                        ),
+                                    );
+                                    let _ = app_handle_for_task.emit(
+                                        "transcription-complete",
+                                        TranscriptionCompleteEvent {
                                             session_id,
                                             text: text.clone(),
                                             timestamp: chrono::Utc::now().to_rfc3339(),
-                                        };
-                                        if let Ok(mut state) = persisted_for_task.lock() {
-                                            state.history.insert(0, history_entry.clone());
-                                            if state.history.len() > 200 {
-                                                state.history.truncate(200);
-                                            }
+                                        },
+                                    );
+                                    let history_entry = storage::HistoryEntry {
+                                        session_id,
+                                        text: text.clone(),
+                                        timestamp: chrono::Utc::now().to_rfc3339(),
+                                    };
+                                    if let Ok(mut state) = persisted_for_task.lock() {
+                                        state.history.insert(0, history_entry.clone());
+                                        if state.history.len() > 200 {
+                                            state.history.truncate(200);
                                         }
-                                        if let Ok(conn) = db_conn_for_task.lock() {
-                                            let _ = storage::record_history(&conn, &history_entry);
-                                        }
-                                        if let Err(message) = inject_result {
-                                            let _ = app_handle_for_task.emit(
-                                                "pipeline-error",
-                                                PipelineErrorEvent {
-                                                    session_id,
-                                                    stage: "inject",
-                                                    message: message.clone(),
-                                                },
-                                            );
-                                            let _ = app_handle_for_task.emit(
-                                                "session-phase",
-                                                SessionPhaseEvent { phase: "error" },
-                                            );
-                                            let _ = storage::append_log(
-                                                "ERROR",
-                                                &format!(
-                                                    "Session {session_id} failed at inject: {message}"
-                                                ),
-                                            );
-                                        }
-                                        let _ = app_handle_for_task.emit(
-                                            "session-phase",
-                                            SessionPhaseEvent { phase: "idle" },
-                                        );
                                     }
-                                    _ => {
-                                        let message = primary
-                                            .and_then(|r| r.error.clone())
-                                            .unwrap_or_else(|| format!(
-                                                "Primary model {primary_label} produced no output"
-                                            ));
+                                    if let Ok(conn) = db_conn_for_task.lock() {
+                                        let _ = storage::record_history(&conn, &history_entry);
+                                    }
+                                    if let Err(message) = inject_result {
                                         let _ = app_handle_for_task.emit(
                                             "pipeline-error",
                                             PipelineErrorEvent {
                                                 session_id,
-                                                stage: "transcribe",
+                                                stage: "inject",
                                                 message: message.clone(),
                                             },
                                         );
@@ -1270,20 +1239,42 @@ pub fn run() {
                                         let _ = storage::append_log(
                                             "ERROR",
                                             &format!(
-                                                "Session {session_id} failed at transcribe ({primary_label}): {message}"
+                                                "Session {session_id} failed at inject: {message}"
                                             ),
                                         );
-                                        let _ = app_handle_for_task.emit(
-                                            "session-phase",
-                                            SessionPhaseEvent { phase: "idle" },
-                                        );
                                     }
-                                }
-
-                                // Clean up the temporary WAV file.
-                                let _ = std::fs::remove_file(&wav_path_for_task);
-                                if let Ok(conn) = db_conn_for_task.lock() {
-                                    let _ = db::clear_wav_path(&conn, &dictation_id);
+                                    let _ = app_handle_for_task.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "idle" },
+                                    );
+                                } else {
+                                    let message = primary.error.clone().unwrap_or_else(|| {
+                                        format!(
+                                            "Primary model {primary_label} produced no output"
+                                        )
+                                    });
+                                    let _ = app_handle_for_task.emit(
+                                        "pipeline-error",
+                                        PipelineErrorEvent {
+                                            session_id,
+                                            stage: "transcribe",
+                                            message: message.clone(),
+                                        },
+                                    );
+                                    let _ = app_handle_for_task.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "error" },
+                                    );
+                                    let _ = storage::append_log(
+                                        "ERROR",
+                                        &format!(
+                                            "Session {session_id} failed at transcribe ({primary_label}): {message}"
+                                        ),
+                                    );
+                                    let _ = app_handle_for_task.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "idle" },
+                                    );
                                 }
 
                                 let mut session_state_guard =
