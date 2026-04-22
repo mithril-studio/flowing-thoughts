@@ -261,6 +261,20 @@ pub fn record_history(conn: &Connection, entry: &HistoryEntry) -> Result<(), Str
     db::insert_history(conn, entry)
 }
 
+const INDICATOR_POSITION_KEY: &str = "indicator_position";
+
+pub fn load_indicator_position(conn: &Connection) -> Option<(i32, i32)> {
+    let raw = db::kv_get(conn, INDICATOR_POSITION_KEY).ok().flatten()?;
+    let parsed: (i32, i32) = serde_json::from_str(&raw).ok()?;
+    Some(parsed)
+}
+
+pub fn save_indicator_position(conn: &Connection, pos: (i32, i32)) -> Result<(), String> {
+    let raw = serde_json::to_string(&pos)
+        .map_err(|e| format!("Failed to serialize indicator position: {e}"))?;
+    db::kv_set(conn, INDICATOR_POSITION_KEY, &raw)
+}
+
 fn migrate_from_json_if_needed(conn: &Connection) -> Result<(), String> {
     if db::kv_get(conn, MIGRATION_FLAG_KEY)?.is_some() {
         return Ok(());

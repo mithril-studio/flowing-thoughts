@@ -693,23 +693,73 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Dock the floating indicator to the top-right of the primary
-            // monitor on launch — under the macOS menu bar, where system
-            // affordances live. User can drag it elsewhere.
+            let shared_db_conn = db_conn.clone();
+
+            // Dock the floating indicator to the top-left of the primary
+            // monitor on launch — under the macOS menu bar. If the user
+            // previously dragged it elsewhere, restore that position (clamped
+            // to the current monitor so a stored position from a now-missing
+            // display can't strand the window off-screen).
             if let Some(indicator) = app.get_webview_window("indicator") {
                 let _ = indicator.set_always_on_top(true);
                 if let Some(monitor) = indicator.current_monitor().ok().flatten() {
                     let size = indicator.outer_size().unwrap_or_default();
                     let mpos = monitor.position();
                     let msize = monitor.size();
-                    let x = mpos.x
-                        + (msize.width as i32 - size.width as i32 - 24).max(0);
-                    let y = mpos.y + 48;
+
+                    let saved = {
+                        let conn = shared_db_conn.lock().unwrap();
+                        storage::load_indicator_position(&conn)
+                    };
+
+                    let (x, y) = match saved {
+                        Some((sx, sy)) => {
+                            let min_x = mpos.x;
+                            let max_x = mpos.x + (msize.width as i32 - size.width as i32).max(0);
+                            let min_y = mpos.y;
+                            let max_y = mpos.y + (msize.height as i32 - size.height as i32).max(0);
+                            (sx.clamp(min_x, max_x), sy.clamp(min_y, max_y))
+                        }
+                        None => (mpos.x + 24, mpos.y + 48),
+                    };
                     let _ = indicator.set_position(Position::Physical(
                         PhysicalPosition { x, y },
                     ));
                 }
                 let _ = indicator.show();
+
+                // Persist the indicator position on drag. `Moved` fires many
+                // times during a drag; throttle to the last write plus a small
+                // delta so we don't hammer SQLite.
+                let persist_conn = shared_db_conn.clone();
+                let last_saved: Arc<Mutex<Option<(i32, i32, Instant)>>> =
+                    Arc::new(Mutex::new(None));
+                indicator.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Moved(pos) = event {
+                        let now = Instant::now();
+                        let mut guard = last_saved.lock().unwrap();
+                        let should_write = match *guard {
+                            Some((lx, ly, last)) => {
+                                let moved_enough =
+                                    (pos.x - lx).abs() >= 2 || (pos.y - ly).abs() >= 2;
+                                let elapsed_enough =
+                                    now.duration_since(last) >= Duration::from_millis(300);
+                                moved_enough && elapsed_enough
+                            }
+                            None => true,
+                        };
+                        if should_write {
+                            *guard = Some((pos.x, pos.y, now));
+                            drop(guard);
+                            if let Ok(conn) = persist_conn.lock() {
+                                let _ = storage::save_indicator_position(
+                                    &conn,
+                                    (pos.x, pos.y),
+                                );
+                            }
+                        }
+                    }
+                });
             }
 
             // Register this process with the macOS Accessibility permission
@@ -727,7 +777,6 @@ pub fn run() {
             let shared_session_state = session_state.clone();
             let shared_next_session_id = next_session_id.clone();
             let shared_persisted = persisted.clone();
-            let shared_db_conn = db_conn.clone();
 
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
