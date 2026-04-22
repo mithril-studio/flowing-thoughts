@@ -1,11 +1,26 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   type AppSettings,
   type AppSettingsUpdateResult,
   defaultAppSettings,
 } from "../types/settings";
+
+interface AppVersion {
+  version: string;
+  commit: string;
+}
+
+type UpdateCheckStatus =
+  | "idle"
+  | "checking"
+  | "latest"
+  | "available"
+  | "installing"
+  | "error";
 
 interface SettingsProps {
   settings: AppSettings;
@@ -88,6 +103,11 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [modelProgress, setModelProgress] = useState<Record<string, DownloadProgress>>({});
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>("idle");
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [versionCopied, setVersionCopied] = useState(false);
 
   useEffect(() => {
     setLocal(settings ?? defaultAppSettings);
@@ -119,6 +139,52 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
         // Non-blocking helper content.
       });
   }, []);
+
+  useEffect(() => {
+    invoke<AppVersion>("get_app_version")
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null));
+  }, []);
+
+  const checkForUpdates = async () => {
+    setUpdateStatus("checking");
+    setUpdateMessage(null);
+    setPendingUpdate(null);
+    try {
+      const result = await check();
+      if (result) {
+        setPendingUpdate(result);
+        setUpdateStatus("available");
+      } else {
+        setUpdateStatus("latest");
+      }
+    } catch (e) {
+      setUpdateMessage(String(e));
+      setUpdateStatus("error");
+    }
+  };
+
+  const installPendingUpdate = async () => {
+    if (!pendingUpdate) return;
+    setUpdateStatus("installing");
+    setUpdateMessage(null);
+    try {
+      await pendingUpdate.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      setUpdateMessage(String(e));
+      setUpdateStatus("error");
+    }
+  };
+
+  const copyVersion = () => {
+    if (!appVersion) return;
+    const label = `v${appVersion.version} (${appVersion.commit})`;
+    void invoke("copy_to_clipboard", { text: label }).then(() => {
+      setVersionCopied(true);
+      setTimeout(() => setVersionCopied(false), 1500);
+    });
+  };
 
   const fetchModels = async () => {
     try {
@@ -663,6 +729,64 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
             Warning: This bypasses permission checks in onboarding and may cause injection failures.
           </p>
         )}
+      </section>
+
+      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
+        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">About</h3>
+        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm text-neutral-200">FlowingThoughts</p>
+              <p className="text-[11px] text-neutral-500 font-mono">
+                {appVersion
+                  ? `v${appVersion.version} (${appVersion.commit})`
+                  : "Loading…"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={copyVersion}
+              disabled={!appVersion}
+              className={`text-xs px-2 py-1 rounded border transition-colors ${
+                versionCopied
+                  ? "border-emerald-600 bg-emerald-900/40 text-emerald-300"
+                  : "border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
+              } disabled:opacity-50`}
+            >
+              {versionCopied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <p className="text-xs text-neutral-400">
+              {updateStatus === "idle" && "Check for a newer release."}
+              {updateStatus === "checking" && "Checking for updates…"}
+              {updateStatus === "latest" && "You're on the latest version."}
+              {updateStatus === "available" &&
+                pendingUpdate &&
+                `Update available — v${pendingUpdate.version}.`}
+              {updateStatus === "installing" && "Installing update…"}
+              {updateStatus === "error" && (updateMessage ?? "Update check failed.")}
+            </p>
+            {updateStatus === "available" ? (
+              <button
+                type="button"
+                onClick={installPendingUpdate}
+                className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
+              >
+                Install & restart
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={checkForUpdates}
+                disabled={updateStatus === "checking" || updateStatus === "installing"}
+                className="text-xs px-3 py-1 rounded border border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+              >
+                {updateStatus === "checking" ? "Checking…" : "Check for updates"}
+              </button>
+            )}
+          </div>
+        </div>
       </section>
 
       {warnings.length > 0 && (

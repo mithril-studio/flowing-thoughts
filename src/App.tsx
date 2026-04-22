@@ -95,12 +95,19 @@ function App() {
       title={appSettings.general.window_movable ? "Drag to move window" : "Window movement locked"}
     >
       <span>{appSettings.general.window_movable ? "Drag Here" : "Window Locked"}</span>
-      <div data-tauri-drag-region="false" className="ml-auto flex gap-1">
+      <div
+        data-tauri-drag-region="false"
+        className="ml-auto flex gap-1"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <button
           type="button"
           aria-label="Minimize"
           title="Minimize"
-          onClick={handleMinimize}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleMinimize();
+          }}
           className="w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:bg-neutral-800 hover:text-white cursor-default"
         >
           <span className="text-sm leading-none">−</span>
@@ -109,7 +116,10 @@ function App() {
           type="button"
           aria-label="Hide window"
           title="Hide (reopen from tray)"
-          onClick={handleHide}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleHide();
+          }}
           className="w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:bg-red-600 hover:text-white cursor-default"
         >
           <span className="text-sm leading-none">×</span>
@@ -143,6 +153,7 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-white">
       {dragStrip}
+      <UpdateBanner />
       <div className="flex-1 overflow-hidden">{pages[activeTab]}</div>
       <TabBar active={activeTab} onTabChange={setActiveTab} showLab={isLabMode} />
     </div>

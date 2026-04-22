@@ -321,6 +321,20 @@ fn apply_show_in_dock(app: &AppHandle, show_in_dock: bool) -> Result<(), String>
         .map_err(|e| format!("Failed to apply dock visibility: {e}"))
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct AppVersion {
+    version: &'static str,
+    commit: &'static str,
+}
+
+#[tauri::command]
+fn get_app_version() -> AppVersion {
+    AppVersion {
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("GIT_COMMIT_SHA"),
+    }
+}
+
 #[tauri::command]
 fn get_app_settings(
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
@@ -1394,7 +1408,8 @@ pub fn run() {
             delete_model,
             list_lab_sessions,
             get_model_tally,
-            get_top_mistranscribed
+            get_top_mistranscribed,
+            get_app_version
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
