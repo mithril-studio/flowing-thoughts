@@ -1,10 +1,18 @@
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use reqwest::multipart::{Form, Part};
 use reqwest::StatusCode;
 
 use crate::storage::Provider;
+
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .expect("Failed to build shared HTTP client for transcription")
+});
 
 #[derive(serde::Deserialize)]
 struct TranscriptionResponse {
@@ -58,9 +66,6 @@ pub async fn transcribe_audio(
     api_key_override: Option<&str>,
     language_mode: Option<&str>,
 ) -> Result<String, String> {
-    // Small delay keeps state transitions readable while the request starts.
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
     let env_var = env_var_for(provider);
     let api_key = if let Some(value) = api_key_override {
         value.to_string()
@@ -79,10 +84,7 @@ pub async fn transcribe_audio(
         return Err("Captured audio file is empty".to_string());
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let client = &*HTTP_CLIENT;
 
     let mut last_error = String::from("Unknown transcription error");
     for attempt in 1..=2 {

@@ -4,6 +4,7 @@ use crate::storage::Provider;
 use crate::transcribe;
 use std::path::PathBuf;
 use std::time::Instant;
+use tokio::task::JoinHandle;
 
 pub const MODEL_GROQ_API: &str = "groq-api";
 pub const MODEL_OPENAI_API: &str = "openai-api";
@@ -12,6 +13,14 @@ fn api_label(provider: Provider) -> &'static str {
     match provider {
         Provider::Groq => MODEL_GROQ_API,
         Provider::Openai => MODEL_OPENAI_API,
+    }
+}
+
+fn local_label(id: ModelId) -> &'static str {
+    match id {
+        ModelId::TinyEn => "whisper-tiny-en",
+        ModelId::BaseEn => "whisper-base-en",
+        ModelId::DistilSmallEn => "distil-small-en",
     }
 }
 
@@ -41,16 +50,43 @@ fn success(model: &str, text: String, latency_ms: u64) -> LabResult {
     }
 }
 
-pub async fn run_parallel(
+/// Handles to the non-primary transcription tasks. Callers await `join_all`
+/// on a detached task so the primary can be injected immediately while the
+/// rest of the fan-out finishes in the background for data collection.
+pub struct PendingResults {
+    handles: Vec<(&'static str, JoinHandle<LabResult>)>,
+}
+
+impl PendingResults {
+    pub async fn join_all(self) -> Vec<LabResult> {
+        let mut out = Vec::with_capacity(self.handles.len());
+        for (label, handle) in self.handles {
+            let result = match handle.await {
+                Ok(r) => r,
+                Err(e) => failure(label, 0, format!("Task panicked: {e}")),
+            };
+            out.push(result);
+        }
+        out
+    }
+}
+
+/// Spawns all four transcription tasks (API + 3 local models), awaits only
+/// the primary, and returns it alongside handles to the remaining three.
+/// The caller injects on the primary and detaches a task to await the rest
+/// for DB persistence.
+pub async fn run_with_primary_first(
     session_id: u64,
     wav_path: PathBuf,
     duration_ms: u64,
     api_provider: Provider,
     api_key: Option<String>,
     language_mode: String,
-) -> Vec<LabResult> {
+    primary_label: String,
+) -> (LabResult, PendingResults) {
     let api_label_str = api_label(api_provider);
-    let api_task = {
+
+    let api_handle: JoinHandle<LabResult> = {
         let wav_path = wav_path.clone();
         let language_mode = language_mode.clone();
         tokio::spawn(async move {
@@ -79,42 +115,45 @@ pub async fn run_parallel(
         })
     };
 
-    let local_tasks: Vec<_> = ModelId::all()
+    let local_handles: Vec<(&'static str, JoinHandle<LabResult>)> = ModelId::all()
         .into_iter()
         .map(|id| {
             let wav_path = wav_path.clone();
-            let label = match id {
-                ModelId::TinyEn => "whisper-tiny-en",
-                ModelId::BaseEn => "whisper-base-en",
-                ModelId::DistilSmallEn => "distil-small-en",
-            };
-            tokio::spawn(async move {
+            let label = local_label(id);
+            let handle = tokio::spawn(async move {
                 match local_transcribe::transcribe_local(id, &wav_path).await {
                     Ok((text, latency_ms)) => success(label, text, latency_ms),
                     Err(e) => failure(label, 0, e),
                 }
-            })
+            });
+            (label, handle)
         })
         .collect();
 
-    let api_out = match api_task.await {
-        Ok(result) => result,
-        Err(e) => failure(api_label_str, 0, format!("API task panicked: {e}")),
+    let mut all: Vec<(&'static str, JoinHandle<LabResult>)> =
+        Vec::with_capacity(1 + local_handles.len());
+    all.push((api_label_str, api_handle));
+    all.extend(local_handles);
+
+    let primary_idx = all.iter().position(|(label, _)| *label == primary_label);
+    let (primary_result, rest) = match primary_idx {
+        Some(idx) => {
+            let (label, handle) = all.swap_remove(idx);
+            let result = match handle.await {
+                Ok(r) => r,
+                Err(e) => failure(label, 0, format!("Primary task panicked: {e}")),
+            };
+            (result, all)
+        }
+        None => (
+            failure(
+                &primary_label,
+                0,
+                format!("Unknown primary model label: {primary_label}"),
+            ),
+            all,
+        ),
     };
 
-    let mut results = vec![api_out];
-    for (idx, handle) in local_tasks.into_iter().enumerate() {
-        let label = match idx {
-            0 => "whisper-tiny-en",
-            1 => "whisper-base-en",
-            2 => "distil-small-en",
-            _ => "unknown",
-        };
-        let out = match handle.await {
-            Ok(result) => result,
-            Err(e) => failure(label, 0, format!("Local task panicked: {e}")),
-        };
-        results.push(out);
-    }
-    results
+    (primary_result, PendingResults { handles: rest })
 }
