@@ -24,6 +24,16 @@ export default function Home({ shortcutLabel }: HomeProps) {
   const [amplitude, setAmplitude] = useState(0);
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+
+  const handleCopy = (id: number, text: string) => {
+    void invoke("copy_to_clipboard", { text }).then(() => {
+      setCopiedId(id);
+      setTimeout(() => {
+        setCopiedId((current) => (current === id ? null : current));
+      }, 1500);
+    });
+  };
 
   useEffect(() => {
     invoke<PersistedStateView>("get_persisted_state")
@@ -161,25 +171,30 @@ export default function Home({ shortcutLabel }: HomeProps) {
               </h3>
               <div className="space-y-2">
                 {entries.map((entry) => (
-                  <button
+                  <div
                     key={entry.id}
-                    onClick={() => {
-                      void invoke("copy_to_clipboard", { text: entry.text });
-                    }}
-                    className="w-full text-left p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
+                    className="w-full p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
                   >
-                    <p className="text-sm text-neutral-200 leading-relaxed">
+                    <p className="text-sm text-neutral-200 leading-relaxed select-text cursor-text">
                       {entry.text}
                     </p>
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-xs text-neutral-600">
                         {formatTime(entry.timestamp)}
                       </span>
-                      <span className="text-xs text-neutral-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                        Click to copy
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(entry.id, entry.text)}
+                        className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                          copiedId === entry.id
+                            ? "bg-emerald-900/40 text-emerald-300"
+                            : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 opacity-0 group-hover:opacity-100"
+                        }`}
+                      >
+                        {copiedId === entry.id ? "Copied" : "Copy"}
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
