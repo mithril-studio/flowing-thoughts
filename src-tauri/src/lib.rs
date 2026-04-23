@@ -504,6 +504,26 @@ fn start_window_drag(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to start window drag: {e}"))
 }
 
+#[tauri::command]
+fn minimize_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+    window
+        .minimize()
+        .map_err(|e| format!("Failed to minimize window: {e}"))
+}
+
+#[tauri::command]
+fn hide_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+    window
+        .hide()
+        .map_err(|e| format!("Failed to hide window: {e}"))
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct AccessibilityHelpInfo {
     executable_path: String,
@@ -1391,6 +1411,8 @@ pub fn run() {
             run_injection_test,
             open_logs_folder,
             start_window_drag,
+            minimize_window,
+            hide_window,
             get_accessibility_help_info,
             reveal_current_executable,
             open_input_monitoring_settings,

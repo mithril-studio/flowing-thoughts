@@ -27,12 +27,14 @@ export default function Home({ shortcutLabel }: HomeProps) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
   const handleCopy = (id: number, text: string) => {
-    void invoke("copy_to_clipboard", { text }).then(() => {
-      setCopiedId(id);
-      setTimeout(() => {
-        setCopiedId((current) => (current === id ? null : current));
-      }, 1500);
-    });
+    void invoke("copy_to_clipboard", { text })
+      .then(() => {
+        setCopiedId(id);
+        setTimeout(() => {
+          setCopiedId((current) => (current === id ? null : current));
+        }, 1500);
+      })
+      .catch((e) => setLastError(String(e)));
   };
 
   useEffect(() => {
@@ -188,7 +190,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                         className={`text-xs px-2 py-0.5 rounded transition-colors ${
                           copiedId === entry.id
                             ? "bg-emerald-900/40 text-emerald-300"
-                            : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 opacity-0 group-hover:opacity-100"
+                            : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
                         }`}
                       >
                         {copiedId === entry.id ? "Copied" : "Copy"}

@@ -9,7 +9,6 @@ import Lab from "./pages/Lab";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultAppSettings, type AppSettings } from "./types/settings";
 
 interface PersistedStateView {
@@ -74,11 +73,11 @@ function App() {
   };
 
   const handleMinimize = () => {
-    void getCurrentWindow().minimize();
+    void invoke("minimize_window").catch((e) => console.error("minimize failed", e));
   };
 
   const handleHide = () => {
-    void getCurrentWindow().hide();
+    void invoke("hide_window").catch((e) => console.error("hide failed", e));
   };
 
   const dragStrip = (
