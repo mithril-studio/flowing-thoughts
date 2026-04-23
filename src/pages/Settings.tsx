@@ -671,17 +671,6 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
         <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Language</h3>
         <Choice
-          label="System"
-          selected={local.language.mode === "system"}
-          onClick={() =>
-            update({
-              ...local,
-              language: { ...local.language, mode: "system" },
-            })
-          }
-          disabled={busy}
-        />
-        <Choice
           label="English"
           selected={local.language.mode === "en"}
           onClick={() =>
@@ -692,6 +681,34 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           }
           disabled={busy}
         />
+        <Choice
+          label="Dutch"
+          selected={local.language.mode === "nl"}
+          onClick={() =>
+            update({
+              ...local,
+              language: { ...local.language, mode: "nl" },
+            })
+          }
+          disabled={busy}
+        />
+        <Choice
+          label="Auto-detect"
+          selected={local.language.mode === "system"}
+          onClick={() =>
+            update({
+              ...local,
+              language: { ...local.language, mode: "system" },
+            })
+          }
+          disabled={busy}
+        />
+        {local.transcription.provider === "local" &&
+          local.language.mode !== "en" && (
+            <p className="text-xs text-amber-300">
+              Local models are English-only. Dutch requires Groq or OpenAI.
+            </p>
+          )}
       </section>
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">
