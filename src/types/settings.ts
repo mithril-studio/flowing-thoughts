@@ -13,7 +13,7 @@ export interface AppSettings {
     noise_suppression_enabled: boolean;
   };
   language: {
-    mode: "system" | "en" | string;
+    mode: "system" | "en" | "nl" | string;
   };
   sound: {
     feedback_sounds_enabled: boolean;
@@ -48,7 +48,7 @@ export const defaultAppSettings: AppSettings = {
     noise_suppression_enabled: false,
   },
   language: {
-    mode: "system",
+    mode: "en",
   },
   sound: {
     feedback_sounds_enabled: false,

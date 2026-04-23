@@ -54,6 +54,7 @@ fn should_retry_status(status: StatusCode) -> bool {
 fn normalize_language_mode(mode: &str) -> Option<&'static str> {
     match mode.trim().to_ascii_lowercase().as_str() {
         "en" | "english" => Some("en"),
+        "nl" | "dutch" | "nederlands" => Some("nl"),
         _ => None,
     }
 }
@@ -175,7 +176,12 @@ mod tests {
     fn language_mode_normalization() {
         assert_eq!(normalize_language_mode("en"), Some("en"));
         assert_eq!(normalize_language_mode("english"), Some("en"));
+        assert_eq!(normalize_language_mode("EN"), Some("en"));
+        assert_eq!(normalize_language_mode("nl"), Some("nl"));
+        assert_eq!(normalize_language_mode("dutch"), Some("nl"));
+        assert_eq!(normalize_language_mode("Nederlands"), Some("nl"));
         assert_eq!(normalize_language_mode("system"), None);
         assert_eq!(normalize_language_mode(""), None);
+        assert_eq!(normalize_language_mode("fr"), None);
     }
 }
