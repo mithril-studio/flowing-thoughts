@@ -296,7 +296,8 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.shortcuts.preset != "cmd_shift_space" && settings.shortcuts.preset != "fn" {
         settings.shortcuts.preset = "fn".to_string();
     }
-    if settings.language.mode != "system" && settings.language.mode != "en" {
+    let valid_language_modes = ["system", "en", "nl"];
+    if !valid_language_modes.contains(&settings.language.mode.as_str()) {
         settings.language.mode = "system".to_string();
     }
     if settings.microphone.input_device.trim().is_empty() {
