@@ -83,12 +83,14 @@ pub async fn run_with_primary_first(
     api_key: Option<String>,
     language_mode: String,
     primary_label: String,
+    prompt: Option<String>,
 ) -> (LabResult, PendingResults) {
     let api_label_str = api_label(api_provider);
 
     let api_handle: JoinHandle<LabResult> = {
         let wav_path = wav_path.clone();
         let language_mode = language_mode.clone();
+        let prompt = prompt.clone();
         tokio::spawn(async move {
             let started = Instant::now();
             if api_key.is_none() {
@@ -105,6 +107,7 @@ pub async fn run_with_primary_first(
                 api_provider,
                 api_key.as_deref(),
                 Some(&language_mode),
+                prompt.as_deref(),
             )
             .await;
             let latency = started.elapsed().as_millis() as u64;

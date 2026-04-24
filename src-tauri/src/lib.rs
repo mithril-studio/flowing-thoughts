@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 const HOLD_TO_START_MS: u64 = 500;
 
 mod audio;
+#[cfg(target_os = "macos")]
+mod ax_snapshot;
+mod corrections;
 mod db;
 mod hotkey;
 mod lab;
@@ -31,6 +34,22 @@ enum SessionState {
     Transcribing { session_id: u64 },
     Injecting { session_id: u64 },
 }
+
+/// Text we just injected into the focused app, held briefly so we can diff
+/// against the current focused-field contents when the user starts their next
+/// dictation. Ignored after `PENDING_CAPTURE_TTL`.
+#[derive(Debug, Clone)]
+struct PendingCapture {
+    session_id: u64,
+    dictation_id: String,
+    model: String,
+    injected_text: String,
+    captured_at: Instant,
+}
+
+const PENDING_CAPTURE_TTL: Duration = Duration::from_secs(60);
+const CORRECTION_PROMPT_CHAR_CAP: usize = 800;
+const CORRECTION_PROMPT_LIMIT: i64 = 40;
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct RecordingState {
@@ -60,6 +79,77 @@ struct PipelineErrorEvent {
     session_id: u64,
     stage: &'static str,
     message: String,
+}
+
+/// If a text injection is still pending from a previous dictation, inspect
+/// the focused text field and learn any single-word correction the user made.
+/// Runs at the start of each recording session — fire-and-forget, silent on
+/// failure (non-AX apps, permission missing, multi-word edits).
+fn maybe_learn_from_pending_capture(
+    pending: &Arc<Mutex<Option<PendingCapture>>>,
+    db: &Arc<Mutex<rusqlite::Connection>>,
+    persisted: &Arc<Mutex<storage::PersistedState>>,
+) {
+    let capture = match pending.lock() {
+        Ok(mut guard) => {
+            let taken = guard.take();
+            match taken {
+                Some(c) if c.captured_at.elapsed() <= PENDING_CAPTURE_TTL => c,
+                _ => return,
+            }
+        }
+        Err(_) => return,
+    };
+
+    let auto_learn = persisted
+        .lock()
+        .ok()
+        .map(|s| s.settings.extras.auto_learn_corrections)
+        .unwrap_or(true);
+    if !auto_learn {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    let focused = ax_snapshot::read_focused_text_value();
+    #[cfg(not(target_os = "macos"))]
+    let focused: Option<String> = None;
+
+    let Some(focused_text) = focused else {
+        return;
+    };
+
+    let injected_trimmed = capture.injected_text.trim();
+    let focused_trimmed = focused_text.trim();
+    if injected_trimmed == focused_trimmed {
+        return;
+    }
+    // extract_single_word_correction itself rejects wildly-different texts
+    // (different word count), so hand it the raw focused content.
+    let Some((wrong, right)) =
+        corrections::extract_single_word_correction(injected_trimmed, focused_trimmed)
+    else {
+        return;
+    };
+
+    let Ok(conn) = db.lock() else { return };
+    let correction = db::Correction {
+        id: uuid::Uuid::new_v4().to_string(),
+        dictation_id: capture.dictation_id.clone(),
+        model: capture.model.clone(),
+        wrong_text: wrong,
+        intended_text: right,
+        context_snippet: Some(injected_trimmed.chars().take(200).collect()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = db::insert_correction(&conn, &correction);
+    let _ = storage::append_log(
+        "INFO",
+        &format!(
+            "Learned correction from session {}: '{}' -> '{}'",
+            capture.session_id, correction.wrong_text, correction.intended_text
+        ),
+    );
 }
 
 fn apply_smart_formatting(text: &str) -> String {
@@ -715,6 +805,98 @@ fn get_top_mistranscribed(
 }
 
 #[tauri::command]
+fn list_corrections(
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<db::Correction>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::list_corrections(&conn)
+}
+
+#[tauri::command]
+fn delete_correction(
+    id: String,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::delete_correction(&conn, &id)
+}
+
+#[tauri::command]
+fn update_history_text(
+    session_id: u64,
+    new_text: String,
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    {
+        let conn = db_conn
+            .inner()
+            .lock()
+            .map_err(|_| "DB lock poisoned".to_string())?;
+        db::update_history_text(&conn, session_id, &new_text)?;
+    }
+    if let Ok(mut state) = persisted.inner().lock() {
+        for entry in state.history.iter_mut() {
+            if entry.session_id == session_id {
+                entry.text = new_text.clone();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Save a correction derived from an in-app edit (Home page). Runs the same
+/// single-word filter as the auto-learn path so users can't accidentally
+/// store a whole-phrase rewrite as a "correction" that would misfire on
+/// future transcriptions.
+#[tauri::command]
+fn save_correction_from_edit(
+    session_id: u64,
+    dictation_id: Option<String>,
+    model: Option<String>,
+    original: String,
+    edited: String,
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Option<db::Correction>, String> {
+    let auto_learn = persisted
+        .inner()
+        .lock()
+        .ok()
+        .map(|s| s.settings.extras.auto_learn_corrections)
+        .unwrap_or(true);
+    if !auto_learn {
+        return Ok(None);
+    }
+    let Some((wrong, right)) =
+        corrections::extract_single_word_correction(&original, &edited)
+    else {
+        return Ok(None);
+    };
+    let correction = db::Correction {
+        id: uuid::Uuid::new_v4().to_string(),
+        dictation_id: dictation_id.unwrap_or_else(|| format!("history-session-{session_id}")),
+        model: model.unwrap_or_else(|| "user-edit".to_string()),
+        wrong_text: wrong,
+        intended_text: right,
+        context_snippet: Some(original.chars().take(200).collect()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    db::insert_correction(&conn, &correction)?;
+    Ok(Some(correction))
+}
+
+#[tauri::command]
 fn open_input_monitoring_settings() -> Result<(), String> {
     let targets = [
         "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
@@ -746,6 +928,7 @@ fn open_input_monitoring_settings() -> Result<(), String> {
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
     let next_session_id = Arc::new(Mutex::new(1_u64));
+    let pending_capture: Arc<Mutex<Option<PendingCapture>>> = Arc::new(Mutex::new(None));
     let db_conn = Arc::new(Mutex::new(
         db::open().expect("Failed to initialize SQLite database"),
     ));
@@ -776,6 +959,7 @@ pub fn run() {
         .manage(persisted.clone())
         .manage(hotkey_mode.clone())
         .manage(db_conn.clone())
+        .manage(pending_capture.clone())
         .setup(move |app| {
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -887,6 +1071,7 @@ pub fn run() {
             let shared_session_state = session_state.clone();
             let shared_next_session_id = next_session_id.clone();
             let shared_persisted = persisted.clone();
+            let shared_pending_capture = pending_capture.clone();
 
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
@@ -936,6 +1121,16 @@ pub fn run() {
 
                     match event {
                         hotkey::HotkeyEvent::RecordStart => {
+                            // Learn from any edits the user made to the text we
+                                // injected on the last session. Runs before we acquire
+                            // the session lock so failures (AX denied, non-AX app)
+                            // never delay recording.
+                            maybe_learn_from_pending_capture(
+                                &shared_pending_capture,
+                                &shared_db_conn,
+                                &shared_persisted,
+                            );
+
                             let mut session_state_guard = shared_session_state.lock().unwrap();
                             if !matches!(*session_state_guard, SessionState::Idle) {
                                 continue;
@@ -1130,6 +1325,7 @@ pub fn run() {
                             let session_state_for_task = shared_session_state.clone();
                             let persisted_for_task = shared_persisted.clone();
                             let db_conn_for_task = shared_db_conn.clone();
+                            let pending_capture_for_task = shared_pending_capture.clone();
                             let wav_path_for_task = capture.wav_path.clone();
 
                             tauri::async_runtime::spawn(async move {
@@ -1198,6 +1394,31 @@ pub fn run() {
                                     }
                                 };
 
+                                // Build a Whisper `prompt` from the intended terms the
+                                // user has taught us, so the decoder biases toward
+                                // them on ambiguous audio.
+                                let correction_prompt: Option<String> = db_conn_for_task
+                                    .lock()
+                                    .ok()
+                                    .and_then(|conn| {
+                                        db::top_mistranscribed_words(
+                                            &conn,
+                                            None,
+                                            CORRECTION_PROMPT_LIMIT,
+                                        )
+                                        .ok()
+                                    })
+                                    .and_then(|rows| {
+                                        let terms: Vec<String> = rows
+                                            .into_iter()
+                                            .map(|r| r.intended_text)
+                                            .collect();
+                                        corrections::build_prompt_from_corrections(
+                                            &terms,
+                                            CORRECTION_PROMPT_CHAR_CAP,
+                                        )
+                                    });
+
                                 let (primary, pending) = lab::run_with_primary_first(
                                     session_id,
                                     wav_path_for_task.clone(),
@@ -1206,6 +1427,7 @@ pub fn run() {
                                     runtime_api_key.clone(),
                                     language_mode.clone(),
                                     primary_label.clone(),
+                                    correction_prompt.clone(),
                                 )
                                 .await;
 
@@ -1262,10 +1484,24 @@ pub fn run() {
 
                                 if primary.text.is_some() {
                                     let raw = primary.text.clone().unwrap();
+                                    // Apply learned corrections before smart formatting so
+                                    // capitalisation rules run on the final word shape.
+                                    let correction_pairs: Vec<(String, String)> =
+                                        db_conn_for_task
+                                            .lock()
+                                            .ok()
+                                            .and_then(|conn| {
+                                                db::list_correction_pairs(&conn).ok()
+                                            })
+                                            .unwrap_or_default();
+                                    let replaced = corrections::apply_replacements(
+                                        &raw,
+                                        &correction_pairs,
+                                    );
                                     let text = if smart_formatting {
-                                        apply_smart_formatting(&raw)
+                                        apply_smart_formatting(&replaced)
                                     } else {
-                                        raw
+                                        replaced
                                     };
                                     {
                                         let mut session_state_guard =
@@ -1278,6 +1514,17 @@ pub fn run() {
                                         SessionPhaseEvent { phase: "injecting" },
                                     );
                                     let inject_result = text_inject::inject_text(&text);
+                                    if inject_result.is_ok() {
+                                        if let Ok(mut guard) = pending_capture_for_task.lock() {
+                                            *guard = Some(PendingCapture {
+                                                session_id,
+                                                dictation_id: dictation_id.clone(),
+                                                model: primary.model.clone(),
+                                                injected_text: text.clone(),
+                                                captured_at: Instant::now(),
+                                            });
+                                        }
+                                    }
                                     let _ = storage::append_log(
                                         "INFO",
                                         &format!(
@@ -1431,6 +1678,10 @@ pub fn run() {
             list_lab_sessions,
             get_model_tally,
             get_top_mistranscribed,
+            list_corrections,
+            delete_correction,
+            update_history_text,
+            save_correction_from_edit,
             get_app_version
         ])
         .run(tauri::generate_context!())

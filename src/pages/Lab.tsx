@@ -47,6 +47,16 @@ interface LabSessionSummary {
   choice: LabChoice | null;
 }
 
+interface CorrectionRow {
+  id: string;
+  dictation_id: string;
+  model: string;
+  wrong_text: string;
+  intended_text: string;
+  context_snippet: string | null;
+  created_at: string;
+}
+
 const MODEL_LABELS: Record<string, string> = {
   "groq-api": "Groq API",
   "openai-api": "OpenAI API",
@@ -77,23 +87,35 @@ export default function Lab() {
   const [tally, setTally] = useState<ModelTally[]>([]);
   const [topWords, setTopWords] = useState<MistranscribedWord[]>([]);
   const [recent, setRecent] = useState<LabSessionSummary[]>([]);
+  const [corrections, setCorrections] = useState<CorrectionRow[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const refreshAnalysis = useCallback(async () => {
     try {
-      const [t, w, r] = await Promise.all([
+      const [t, w, r, c] = await Promise.all([
         invoke<ModelTally[]>("get_model_tally"),
         invoke<MistranscribedWord[]>("get_top_mistranscribed", { limit: 10 }),
         invoke<LabSessionSummary[]>("list_lab_sessions", { limit: 20 }),
+        invoke<CorrectionRow[]>("list_corrections"),
       ]);
       setTally(t);
       setTopWords(w);
       setRecent(r);
+      setCorrections(c);
       setErrorMsg(null);
     } catch (e) {
       setErrorMsg(String(e));
     }
   }, []);
+
+  const deleteCorrection = async (id: string) => {
+    try {
+      await invoke("delete_correction", { id });
+      setCorrections((prev) => prev.filter((c) => c.id !== id));
+    } catch (e) {
+      setErrorMsg(String(e));
+    }
+  };
 
   useEffect(() => {
     void refreshAnalysis();
@@ -174,6 +196,40 @@ export default function Lab() {
           </ul>
         </section>
       )}
+
+      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">
+        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Learned corrections</h3>
+        {corrections.length === 0 ? (
+          <p className="text-xs text-neutral-500">
+            Nothing learned yet. Edit a dictation in the target app or on the Home page to teach FlowingThoughts how you spell a word.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {corrections.map((c) => (
+              <li
+                key={c.id}
+                className="flex items-center justify-between gap-2 text-xs border-t border-neutral-800/60 pt-1"
+              >
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <span className="font-mono text-emerald-300 truncate">
+                    {c.wrong_text} → {c.intended_text}
+                  </span>
+                  <span className="text-[10px] text-neutral-600">
+                    {modelLabel(c.model)} · {new Date(c.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void deleteCorrection(c.id)}
+                  className="text-[11px] px-2 py-0.5 rounded text-neutral-500 hover:text-red-300 hover:bg-red-950/40 shrink-0"
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">
         <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Recent dictations</h3>

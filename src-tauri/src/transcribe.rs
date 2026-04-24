@@ -66,6 +66,7 @@ pub async fn transcribe_audio(
     provider: Provider,
     api_key_override: Option<&str>,
     language_mode: Option<&str>,
+    prompt: Option<&str>,
 ) -> Result<String, String> {
     let env_var = env_var_for(provider);
     let api_key = if let Some(value) = api_key_override {
@@ -98,6 +99,9 @@ pub async fn transcribe_audio(
             .part("file", part);
         if let Some(mode) = language_mode.and_then(normalize_language_mode) {
             form = form.text("language", mode.to_string());
+        }
+        if let Some(p) = prompt.filter(|s| !s.trim().is_empty()) {
+            form = form.text("prompt", p.to_string());
         }
 
         let response = client

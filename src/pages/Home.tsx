@@ -25,6 +25,9 @@ export default function Home({ shortcutLabel }: HomeProps) {
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<string>("");
+  const [editSaving, setEditSaving] = useState(false);
 
   const handleCopy = (id: number, text: string) => {
     void invoke("copy_to_clipboard", { text })
@@ -35,6 +38,47 @@ export default function Home({ shortcutLabel }: HomeProps) {
         }, 1500);
       })
       .catch((e) => setLastError(String(e)));
+  };
+
+  const beginEdit = (entry: TranscriptionEntry) => {
+    setEditingId(entry.id);
+    setEditDraft(entry.text);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDraft("");
+  };
+
+  const saveEdit = async (entry: TranscriptionEntry) => {
+    const original = entry.text;
+    const edited = editDraft;
+    if (edited === original) {
+      cancelEdit();
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await invoke("update_history_text", {
+        sessionId: entry.id,
+        newText: edited,
+      });
+      setTranscriptions((prev) =>
+        prev.map((t) => (t.id === entry.id ? { ...t, text: edited } : t))
+      );
+      await invoke("save_correction_from_edit", {
+        sessionId: entry.id,
+        dictationId: null,
+        model: null,
+        original,
+        edited,
+      });
+      cancelEdit();
+    } catch (e) {
+      setLastError(String(e));
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -172,32 +216,80 @@ export default function Home({ shortcutLabel }: HomeProps) {
                 {date}
               </h3>
               <div className="space-y-2">
-                {entries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="w-full p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
-                  >
-                    <p className="text-sm text-neutral-200 leading-relaxed select-text cursor-text">
-                      {entry.text}
-                    </p>
-                    <div className="flex justify-between items-center mt-2">
-                      <span className="text-xs text-neutral-600">
-                        {formatTime(entry.timestamp)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(entry.id, entry.text)}
-                        className={`text-xs px-2 py-0.5 rounded transition-colors ${
-                          copiedId === entry.id
-                            ? "bg-emerald-900/40 text-emerald-300"
-                            : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
-                        }`}
-                      >
-                        {copiedId === entry.id ? "Copied" : "Copy"}
-                      </button>
+                {entries.map((entry) => {
+                  const isEditing = editingId === entry.id;
+                  return (
+                    <div
+                      key={entry.id}
+                      className="w-full p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
+                    >
+                      {isEditing ? (
+                        <textarea
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={Math.min(
+                            8,
+                            Math.max(2, editDraft.split("\n").length)
+                          )}
+                          disabled={editSaving}
+                          className="w-full text-sm text-neutral-100 bg-neutral-950 border border-neutral-700 rounded p-2 outline-none focus:border-neutral-500 resize-y"
+                        />
+                      ) : (
+                        <p className="text-sm text-neutral-200 leading-relaxed select-text cursor-text">
+                          {entry.text}
+                        </p>
+                      )}
+                      <div className="flex justify-between items-center mt-2">
+                        <span className="text-xs text-neutral-600">
+                          {formatTime(entry.timestamp)}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          {isEditing ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={cancelEdit}
+                                disabled={editSaving}
+                                className="text-xs px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void saveEdit(entry)}
+                                disabled={editSaving}
+                                className="text-xs px-2 py-0.5 rounded bg-emerald-800/60 text-emerald-200 hover:bg-emerald-700/60 disabled:opacity-50"
+                              >
+                                {editSaving ? "Saving…" : "Save"}
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => beginEdit(entry)}
+                                className="text-xs px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopy(entry.id, entry.text)}
+                                className={`text-xs px-2 py-0.5 rounded transition-colors ${
+                                  copiedId === entry.id
+                                    ? "bg-emerald-900/40 text-emerald-300"
+                                    : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
+                                }`}
+                              >
+                                {copiedId === entry.id ? "Copied" : "Copy"}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))
