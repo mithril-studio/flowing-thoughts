@@ -121,11 +121,8 @@ fn maybe_learn_from_pending_capture(
 
     let injected_trimmed = capture.injected_text.trim();
     let focused_trimmed = focused_text.trim();
-    if injected_trimmed == focused_trimmed {
-        return;
-    }
-    // extract_single_word_correction itself rejects wildly-different texts
-    // (different word count), so hand it the raw focused content.
+    // extract_single_word_correction rejects identical texts (zero differences)
+    // and wildly-different ones (word-count mismatch), so hand it the raw input.
     let Some((wrong, right)) =
         corrections::extract_single_word_correction(injected_trimmed, focused_trimmed)
     else {

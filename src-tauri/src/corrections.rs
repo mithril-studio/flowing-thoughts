@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Attempts to extract a single-word correction from (original, modified).
 ///
@@ -47,10 +47,7 @@ pub fn apply_replacements(text: &str, pairs: &[(String, String)]) -> String {
     }
 
     let mut out = String::with_capacity(text.len());
-    for (idx, word) in split_preserving_whitespace(text).into_iter().enumerate() {
-        if idx > 0 {
-            // Separator characters are preserved inside split_preserving_whitespace.
-        }
+    for word in split_preserving_whitespace(text) {
         let replacement = pairs
             .iter()
             .find(|(wrong, _)| wrong.eq_ignore_ascii_case(word.trim_matches(is_boundary_punct)));
@@ -74,11 +71,11 @@ pub fn build_prompt_from_corrections(intended_terms: &[String], max_chars: usize
     if intended_terms.is_empty() {
         return None;
     }
-    let mut seen: HashMap<&str, ()> = HashMap::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     let mut buffer = String::new();
     for term in intended_terms {
         let trimmed = term.trim();
-        if trimmed.is_empty() || seen.contains_key(trimmed) {
+        if trimmed.is_empty() || seen.contains(trimmed) {
             continue;
         }
         let addition_len = trimmed.len() + if buffer.is_empty() { 0 } else { 2 };
@@ -89,7 +86,7 @@ pub fn build_prompt_from_corrections(intended_terms: &[String], max_chars: usize
             buffer.push_str(", ");
         }
         buffer.push_str(trimmed);
-        seen.insert(trimmed, ());
+        seen.insert(trimmed);
     }
     if buffer.is_empty() {
         None
@@ -223,13 +220,13 @@ mod tests {
 
     #[test]
     fn apply_replacement_is_case_insensitive_match_but_preserves_case_on_leading_upper() {
-        let pairs = vec![("joost".to_string(), "joost".to_string())];
         // Wrong has different case in text; match should still fire, and the
         // original's leading-upper should carry through.
-        let got = apply_replacements("Hello Jooost and joost", &[("Jooost".to_string(), "Joost".to_string())]);
+        let got = apply_replacements(
+            "Hello Jooost and joost",
+            &[("Jooost".to_string(), "Joost".to_string())],
+        );
         assert_eq!(got, "Hello Joost and joost");
-        // Unused var suppression.
-        drop(pairs);
     }
 
     #[test]
