@@ -421,6 +421,79 @@ pub fn get_choice(conn: &Connection, dictation_id: &str) -> Result<Option<LabCho
     .map_err(|e| format!("Failed to read choice: {e}"))
 }
 
+pub fn list_corrections(conn: &Connection) -> Result<Vec<Correction>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, dictation_id, model, wrong_text, intended_text, context_snippet, created_at
+             FROM corrections
+             ORDER BY created_at DESC",
+        )
+        .map_err(|e| format!("Failed to prepare list_corrections: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Correction {
+                id: row.get(0)?,
+                dictation_id: row.get(1)?,
+                model: row.get(2)?,
+                wrong_text: row.get(3)?,
+                intended_text: row.get(4)?,
+                context_snippet: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query corrections: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Failed to read correction row: {e}"))?);
+    }
+    Ok(out)
+}
+
+pub fn delete_correction(conn: &Connection, id: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM corrections WHERE id = ?1", params![id])
+        .map_err(|e| format!("Failed to delete correction: {e}"))?;
+    Ok(())
+}
+
+/// Update the stored text for the history row tied to `session_id`. Used when
+/// the user edits a dictation via the Home-page inline editor so the new text
+/// persists across app restarts.
+pub fn update_history_text(
+    conn: &Connection,
+    session_id: u64,
+    new_text: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE history SET text = ?1 WHERE session_id = ?2",
+        params![new_text, session_id as i64],
+    )
+    .map_err(|e| format!("Failed to update history text: {e}"))?;
+    Ok(())
+}
+
+/// Return `(wrong, intended)` pairs for every correction in the table — used
+/// to run post-transcription replacements on fresh text. Unlike
+/// `top_mistranscribed_words`, this doesn't aggregate/dedupe by model.
+pub fn list_correction_pairs(conn: &Connection) -> Result<Vec<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT wrong_text, intended_text FROM corrections
+             GROUP BY wrong_text, intended_text
+             ORDER BY MAX(created_at) DESC",
+        )
+        .map_err(|e| format!("Failed to prepare list_correction_pairs: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("Failed to query correction pairs: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Failed to read correction pair: {e}"))?);
+    }
+    Ok(out)
+}
+
 pub fn insert_correction(conn: &Connection, correction: &Correction) -> Result<(), String> {
     conn.execute(
         "INSERT INTO corrections (id, dictation_id, model, wrong_text, intended_text, context_snippet, created_at)

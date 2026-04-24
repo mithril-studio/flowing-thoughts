@@ -730,6 +730,22 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           }
           disabled={busy}
         />
+        <div className="space-y-1">
+          <Toggle
+            label="Learn from my edits"
+            checked={local.extras.auto_learn_corrections}
+            onChange={(checked) =>
+              update({
+                ...local,
+                extras: { ...local.extras, auto_learn_corrections: checked },
+              })
+            }
+            disabled={busy}
+          />
+          <p className="text-xs text-neutral-500 pl-1">
+            When you fix a dictation in the target app or on the Home page, FlowingThoughts remembers the correction and applies it next time.
+          </p>
+        </div>
         <Toggle
           label="Dangerously skip permissions"
           checked={local.extras.dangerously_skip_permissions}

@@ -95,6 +95,12 @@ pub struct ExtrasSettings {
     pub auto_add_to_dictionary: bool,
     pub smart_formatting: bool,
     pub dangerously_skip_permissions: bool,
+    #[serde(default = "default_true")]
+    pub auto_learn_corrections: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -117,6 +123,7 @@ impl Default for ExtrasSettings {
             auto_add_to_dictionary: false,
             smart_formatting: false,
             dangerously_skip_permissions: false,
+            auto_learn_corrections: true,
         }
     }
 }

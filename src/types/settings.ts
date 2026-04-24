@@ -22,6 +22,7 @@ export interface AppSettings {
     auto_add_to_dictionary: boolean;
     smart_formatting: boolean;
     dangerously_skip_permissions: boolean;
+    auto_learn_corrections: boolean;
   };
   transcription: {
     provider: "api" | "local";
@@ -57,6 +58,7 @@ export const defaultAppSettings: AppSettings = {
     auto_add_to_dictionary: false,
     smart_formatting: false,
     dangerously_skip_permissions: false,
+    auto_learn_corrections: true,
   },
   transcription: {
     provider: "api",
