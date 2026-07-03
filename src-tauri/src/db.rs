@@ -384,25 +384,6 @@ pub fn list_transcriptions_for(
     Ok(out)
 }
 
-pub fn upsert_choice(conn: &Connection, choice: &LabChoice) -> Result<(), String> {
-    conn.execute(
-        "INSERT INTO choices (dictation_id, chosen_model, ground_truth, chosen_at)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(dictation_id) DO UPDATE SET
-           chosen_model = excluded.chosen_model,
-           ground_truth = excluded.ground_truth,
-           chosen_at = excluded.chosen_at",
-        params![
-            choice.dictation_id,
-            choice.chosen_model,
-            choice.ground_truth,
-            choice.chosen_at,
-        ],
-    )
-    .map_err(|e| format!("Failed to upsert choice: {e}"))?;
-    Ok(())
-}
-
 pub fn get_choice(conn: &Connection, dictation_id: &str) -> Result<Option<LabChoice>, String> {
     conn.query_row(
         "SELECT dictation_id, chosen_model, ground_truth, chosen_at
@@ -542,45 +523,6 @@ pub fn list_recent_dictations(
     let mut out = Vec::new();
     for row in rows {
         out.push(row.map_err(|e| format!("Failed to read dictation row: {e}"))?);
-    }
-    Ok(out)
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ModelTally {
-    pub model: String,
-    pub wins: i64,
-    pub appearances: i64,
-    pub avg_latency_ms: Option<f64>,
-}
-
-pub fn model_tally(conn: &Connection) -> Result<Vec<ModelTally>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT
-               t.model,
-               SUM(CASE WHEN c.chosen_model = t.model THEN 1 ELSE 0 END) AS wins,
-               COUNT(*) AS appearances,
-               AVG(t.latency_ms) AS avg_latency
-             FROM transcriptions t
-             LEFT JOIN choices c ON c.dictation_id = t.dictation_id
-             GROUP BY t.model
-             ORDER BY wins DESC, appearances DESC",
-        )
-        .map_err(|e| format!("Failed to prepare model_tally: {e}"))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(ModelTally {
-                model: row.get(0)?,
-                wins: row.get(1)?,
-                appearances: row.get(2)?,
-                avg_latency_ms: row.get(3)?,
-            })
-        })
-        .map_err(|e| format!("Failed to query model_tally: {e}"))?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(|e| format!("Failed to read model_tally row: {e}"))?);
     }
     Ok(out)
 }

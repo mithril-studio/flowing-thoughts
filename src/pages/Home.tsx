@@ -198,10 +198,10 @@ export default function Home({ shortcutLabel }: HomeProps) {
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {Object.keys(grouped).length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-neutral-500">
+          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <p className="text-sm">No transcriptions yet</p>
             <p className="text-xs mt-1">
-              Hold <kbd className="px-1 py-0.5 bg-neutral-800 rounded">{shortcutLabel}</kbd> and speak
+              Hold <kbd className="px-1 py-0.5 bg-zinc-800 rounded">{shortcutLabel}</kbd> and speak
             </p>
             {(phase === "transcribing" || phase === "injecting") && (
               <p className="text-xs mt-1 text-amber-400">
@@ -212,7 +212,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
         ) : (
           Object.entries(grouped).map(([date, entries]) => (
             <div key={date} className="mb-4">
-              <h3 className="text-xs text-neutral-500 font-medium mb-2 sticky top-0 bg-neutral-950 py-1">
+              <h3 className="text-xs text-zinc-500 font-medium mb-2 sticky top-0 bg-zinc-950 py-1">
                 {date}
               </h3>
               <div className="space-y-2">
@@ -221,7 +221,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                   return (
                     <div
                       key={entry.id}
-                      className="w-full p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
+                      className="w-full p-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors group"
                     >
                       {isEditing ? (
                         <textarea
@@ -232,15 +232,15 @@ export default function Home({ shortcutLabel }: HomeProps) {
                             Math.max(2, editDraft.split("\n").length)
                           )}
                           disabled={editSaving}
-                          className="w-full text-sm text-neutral-100 bg-neutral-950 border border-neutral-700 rounded p-2 outline-none focus:border-neutral-500 resize-y"
+                          className="w-full text-sm text-zinc-100 bg-zinc-950 border border-zinc-700 rounded p-2 outline-none focus:border-zinc-500 resize-y"
                         />
                       ) : (
-                        <p className="text-sm text-neutral-200 leading-relaxed select-text cursor-text">
+                        <p className="text-sm text-zinc-200 leading-relaxed select-text cursor-text">
                           {entry.text}
                         </p>
                       )}
                       <div className="flex justify-between items-center mt-2">
-                        <span className="text-xs text-neutral-600">
+                        <span className="text-xs text-zinc-600">
                           {formatTime(entry.timestamp)}
                         </span>
                         <div className="flex items-center gap-1">
@@ -250,7 +250,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                                 type="button"
                                 onClick={cancelEdit}
                                 disabled={editSaving}
-                                className="text-xs px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+                                className="text-xs px-2 py-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
                               >
                                 Cancel
                               </button>
@@ -268,7 +268,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                               <button
                                 type="button"
                                 onClick={() => beginEdit(entry)}
-                                className="text-xs px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
+                                className="text-xs px-2 py-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
                               >
                                 Edit
                               </button>
@@ -278,7 +278,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                                 className={`text-xs px-2 py-0.5 rounded transition-colors ${
                                   copiedId === entry.id
                                     ? "bg-emerald-900/40 text-emerald-300"
-                                    : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
+                                    : "text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
                                 }`}
                               >
                                 {copiedId === entry.id ? "Copied" : "Copy"}

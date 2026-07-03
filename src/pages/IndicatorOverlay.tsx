@@ -1,25 +1,14 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import Waveform, { type WavePhase } from "../components/Waveform";
 
-type SessionPhase = "idle" | "recording" | "transcribing" | "injecting" | "error";
-
-function colorFor(phase: SessionPhase): string {
-  switch (phase) {
-    case "recording":
-      return "#ef4444"; // red-500
-    case "transcribing":
-      return "#fbbf24"; // amber-400
-    case "injecting":
-      return "#34d399"; // emerald-400
-    case "error":
-      return "#b91c1c"; // red-700
-    default:
-      return "#a3a3a3"; // neutral-400 — idle
-  }
-}
-
+/**
+ * The small always-on-top pill that floats on screen. Draggable anywhere;
+ * shows a live waveform while you speak, a sweep while transcribing.
+ */
 export default function IndicatorOverlay() {
-  const [phase, setPhase] = useState<SessionPhase>("idle");
+  const [phase, setPhase] = useState<WavePhase>("idle");
+  const [amplitude, setAmplitude] = useState(0);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -29,23 +18,35 @@ export default function IndicatorOverlay() {
   }, []);
 
   useEffect(() => {
-    const unlistenPhase = listen<{ phase: SessionPhase }>(
+    const unlistenPhase = listen<{ phase: WavePhase }>(
       "session-phase",
-      (event) => setPhase(event.payload.phase),
+      (event) => {
+        setPhase(event.payload.phase);
+        if (event.payload.phase !== "recording") setAmplitude(0);
+      },
+    );
+    const unlistenAmplitude = listen<{ amplitude: number }>(
+      "recording-amplitude",
+      (event) => setAmplitude(event.payload.amplitude ?? 0),
     );
     const unlistenComplete = listen("transcription-complete", () =>
       setPhase("idle"),
     );
-    const unlistenError = listen("pipeline-error", () => setPhase("error"));
+    const unlistenError = listen("pipeline-error", () => {
+      setPhase("error");
+      // Flash the error state briefly, then settle back to idle.
+      setTimeout(() => setPhase("idle"), 1600);
+    });
 
     return () => {
       unlistenPhase.then((fn) => fn());
+      unlistenAmplitude.then((fn) => fn());
       unlistenComplete.then((fn) => fn());
       unlistenError.then((fn) => fn());
     };
   }, []);
 
-  const color = colorFor(phase);
+  const active = phase !== "idle";
 
   return (
     <div
@@ -53,28 +54,32 @@ export default function IndicatorOverlay() {
       style={{
         width: "100vw",
         height: "100vh",
-        background: "transparent",
-        borderRadius: 9999,
+        boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         cursor: "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        border: "1px solid rgba(255,255,255,0.22)",
-        boxSizing: "border-box",
+        background: active ? "rgba(10,10,12,0.92)" : "rgba(10,10,12,0.72)",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: 9999,
+        boxShadow: "0 4px 24px rgba(0,0,0,0.35)",
+        transition: "background 200ms ease-out",
+        overflow: "hidden",
       }}
     >
-      <div
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: "9999px",
-          background: color,
-          transition: "background-color 200ms ease-out",
-          pointerEvents: "none",
-        }}
-      />
+      <div style={{ pointerEvents: "none", width: "70%", height: "58%" }}>
+        <Waveform
+          phase={phase}
+          amplitude={amplitude}
+          bars={11}
+          className="w-full h-full"
+          barClassName={
+            phase === "error" ? "w-[3px] bg-red-400" : "w-[3px] bg-white"
+          }
+        />
+      </div>
     </div>
   );
 }

@@ -1,5 +1,7 @@
+import Waveform, { type WavePhase } from "./Waveform";
+
 interface RecordingIndicatorProps {
-  mode: "idle" | "recording" | "transcribing" | "injecting" | "error";
+  mode: WavePhase;
   idleLabel: string;
   amplitude?: number;
 }
@@ -20,65 +22,32 @@ export default function RecordingIndicator({
             ? "Pipeline error"
             : idleLabel;
 
-  const baseColor =
-    mode === "recording"
-      ? "bg-red-500"
-      : mode === "transcribing"
-        ? "bg-amber-400"
-        : mode === "injecting"
-          ? "bg-emerald-400"
-          : mode === "error"
-            ? "bg-red-700"
-            : "bg-neutral-700";
-
-  const scale =
-    mode === "recording"
-      ? 1 + Math.min(0.9, Math.max(0, amplitude) * 3)
-      : mode === "idle"
-        ? 1
-        : 1.15;
-
-  const glowOpacity =
-    mode === "recording"
-      ? Math.min(1, 0.35 + amplitude * 2)
-      : mode === "idle"
-        ? 0
-        : 0.5;
-
   return (
     <div className="flex flex-col items-center gap-3 select-none">
-      <div className="relative w-24 h-24 flex items-center justify-center">
-        {/* Outer glow ring — grows with amplitude while recording */}
-        <div
-          className={`absolute inset-0 rounded-full ${baseColor} blur-xl transition-all duration-100`}
-          style={{
-            transform: `scale(${scale * 0.95})`,
-            opacity: glowOpacity,
-          }}
-        />
-        {/* Pulsing ring while recording */}
-        {mode === "recording" && (
-          <div
-            className={`absolute inset-2 rounded-full border ${
-              baseColor.replace("bg-", "border-")
-            } opacity-50 animate-ping`}
-          />
-        )}
-        {/* Core circle */}
-        <div
-          className={`relative rounded-full ${baseColor} transition-transform duration-75`}
-          style={{
-            width: "48px",
-            height: "48px",
-            transform: `scale(${scale})`,
-            boxShadow:
-              mode === "recording"
-                ? `0 0 ${16 + amplitude * 40}px rgba(239,68,68,${0.4 + amplitude})`
-                : undefined,
-          }}
+      <div
+        className={`flex h-14 w-44 items-center justify-center rounded-full border shadow-lg transition-colors duration-200 ${
+          mode === "error"
+            ? "border-red-500/30 bg-red-950/60"
+            : mode === "idle"
+              ? "border-zinc-800 bg-zinc-900/80"
+              : "border-zinc-700 bg-zinc-900"
+        }`}
+      >
+        <Waveform
+          phase={mode}
+          amplitude={amplitude}
+          bars={13}
+          className="h-7 w-28"
+          barClassName={
+            mode === "error"
+              ? "w-[3px] bg-red-400"
+              : mode === "idle"
+                ? "w-[3px] bg-zinc-500"
+                : "w-[3px] bg-white"
+          }
         />
       </div>
-      <span className="text-xs text-neutral-400 tracking-wide">{label}</span>
+      <span className="text-xs text-zinc-400 tracking-wide">{label}</span>
     </div>
   );
 }

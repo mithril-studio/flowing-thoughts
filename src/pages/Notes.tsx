@@ -95,10 +95,10 @@ export default function Notes() {
   if (activeNote || activeId) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-neutral-800">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
           <button
             onClick={handleBack}
-            className="text-xs text-neutral-400 hover:text-white transition-colors"
+            className="text-xs text-zinc-400 hover:text-white transition-colors"
           >
             &larr; Back
           </button>
@@ -110,14 +110,14 @@ export default function Notes() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onBlur={saveNote}
-            className="text-lg font-medium bg-transparent text-white placeholder-neutral-600 focus:outline-none"
+            className="text-lg font-medium bg-transparent text-white placeholder-zinc-600 focus:outline-none"
           />
           <textarea
             placeholder="Start writing..."
             value={body}
             onChange={(e) => setBody(e.target.value)}
             onBlur={saveNote}
-            className="flex-1 text-sm bg-transparent text-neutral-300 placeholder-neutral-600 focus:outline-none resize-none leading-relaxed"
+            className="flex-1 text-sm bg-transparent text-zinc-300 placeholder-zinc-600 focus:outline-none resize-none leading-relaxed"
           />
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function Notes() {
         <h2 className="text-sm font-medium text-white">Notes</h2>
         <button
           onClick={handleNew}
-          className="text-xs px-3 py-1.5 rounded-md bg-white text-black font-medium hover:bg-neutral-200 transition-colors"
+          className="text-xs px-3 py-1.5 rounded-md bg-white text-black font-medium hover:bg-zinc-200 transition-colors"
         >
           + New
         </button>
@@ -139,7 +139,7 @@ export default function Notes() {
 
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {notes.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-neutral-500">
+          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <p className="text-sm">No notes yet</p>
             <p className="text-xs mt-1">Tap + New to create one</p>
           </div>
@@ -148,19 +148,19 @@ export default function Notes() {
             {notes.map((note) => (
               <div
                 key={note.id}
-                className="flex items-center justify-between p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group cursor-pointer"
+                className="flex items-center justify-between p-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors group cursor-pointer"
                 onClick={() => handleSelect(note)}
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-white truncate">
                     {note.title || "Untitled"}
                   </p>
-                  <p className="text-xs text-neutral-500 mt-0.5 truncate">
+                  <p className="text-xs text-zinc-500 mt-0.5 truncate">
                     {note.body || "Empty note"}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 ml-2">
-                  <span className="text-xs text-neutral-600">
+                  <span className="text-xs text-zinc-600">
                     {formatDate(note.updatedAt)}
                   </span>
                   <button
@@ -168,7 +168,7 @@ export default function Notes() {
                       e.stopPropagation();
                       handleDelete(note.id);
                     }}
-                    className="text-xs px-2 py-1 rounded bg-neutral-800 text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="text-xs px-2 py-1 rounded bg-zinc-800 text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
                   >
                     Del
                   </button>

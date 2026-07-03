@@ -107,12 +107,14 @@ fn default_true() -> bool {
 #[serde(default)]
 pub struct TranscriptionSettings {
     pub provider: String,
+    pub local_model: String,
 }
 
 impl Default for TranscriptionSettings {
     fn default() -> Self {
         Self {
-            provider: "api".to_string(),
+            provider: "local".to_string(),
+            local_model: "whisper-small-q5".to_string(),
         }
     }
 }

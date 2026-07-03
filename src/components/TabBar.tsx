@@ -1,37 +1,29 @@
-type Tab = "home" | "snippets" | "notes" | "lab" | "settings";
+type Tab = "home" | "snippets" | "notes" | "corrections" | "settings";
 
 interface TabBarProps {
   active: Tab;
   onTabChange: (tab: Tab) => void;
-  showLab?: boolean;
 }
 
-const BASE_TABS: { id: Tab; label: string }[] = [
+const TABS: { id: Tab; label: string }[] = [
   { id: "home", label: "Home" },
-  { id: "snippets", label: "Snippets" },
   { id: "notes", label: "Notes" },
+  { id: "snippets", label: "Snippets" },
+  { id: "corrections", label: "Words" },
   { id: "settings", label: "Settings" },
 ];
 
-const LAB_TAB: { id: Tab; label: string } = {
-  id: "lab",
-  label: "Lab",
-};
-
-export default function TabBar({ active, onTabChange, showLab }: TabBarProps) {
-  const tabs = showLab
-    ? [...BASE_TABS.slice(0, 3), LAB_TAB, BASE_TABS[3]]
-    : BASE_TABS;
+export default function TabBar({ active, onTabChange }: TabBarProps) {
   return (
-    <nav className="flex border-t border-neutral-800 bg-neutral-950">
-      {tabs.map((tab) => (
+    <nav className="mx-3 mb-3 flex gap-1 rounded-xl border border-zinc-800 bg-zinc-900/70 p-1">
+      {TABS.map((tab) => (
         <button
           key={tab.id}
           onClick={() => onTabChange(tab.id)}
-          className={`flex-1 flex items-center justify-center py-3 text-[13px] transition-colors ${
+          className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${
             active === tab.id
-              ? "text-white"
-              : "text-neutral-500 hover:text-neutral-300"
+              ? "bg-zinc-100 text-zinc-900 shadow-sm"
+              : "text-zinc-400 hover:text-zinc-100"
           }`}
         >
           {tab.label}

@@ -5,7 +5,7 @@ import UpdateBanner from "./components/UpdateBanner";
 import Home from "./pages/Home";
 import Snippets from "./pages/Snippets";
 import Notes from "./pages/Notes";
-import Lab from "./pages/Lab";
+import Corrections from "./pages/Corrections";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
@@ -42,19 +42,11 @@ function App() {
       });
   }, []);
 
-  const isLabMode = appSettings.transcription.provider === "local";
-
-  useEffect(() => {
-    if (!isLabMode && activeTab === "lab") {
-      setActiveTab("home");
-    }
-  }, [isLabMode, activeTab]);
-
   const pages: Record<Tab, React.ReactNode> = {
     home: <Home shortcutLabel={shortcutLabel} />,
     snippets: <Snippets />,
     notes: <Notes />,
-    lab: <Lab />,
+    corrections: <Corrections />,
     settings: (
       <Settings
         settings={appSettings}
@@ -80,82 +72,82 @@ function App() {
     void invoke("hide_window").catch((e) => console.error("hide failed", e));
   };
 
-  const dragStrip = (
+  const titleBar = (
     <div
       data-tauri-drag-region
       onMouseDown={() => {
         void startDrag();
       }}
-      className={`h-8 shrink-0 border-b border-neutral-900 flex items-center px-3 text-[11px] tracking-wide uppercase ${
-        appSettings.general.window_movable
-          ? "bg-neutral-900/90 text-neutral-500 cursor-move select-none"
-          : "bg-neutral-950 text-neutral-700 cursor-default"
+      className={`flex h-10 shrink-0 items-center gap-2 px-3 select-none ${
+        appSettings.general.window_movable ? "cursor-move" : "cursor-default"
       }`}
-      title={appSettings.general.window_movable ? "Drag to move window" : "Window movement locked"}
+      title={appSettings.general.window_movable ? "Drag to move window" : undefined}
     >
-      <span>{appSettings.general.window_movable ? "Drag Here" : "Window Locked"}</span>
       <div
         data-tauri-drag-region="false"
-        className="ml-auto flex gap-1"
+        className="flex items-center gap-2"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <button
           type="button"
-          aria-label="Minimize"
-          title="Minimize"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleMinimize();
-          }}
-          className="w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:bg-neutral-800 hover:text-white cursor-default"
+          aria-label="Hide window"
+          title="Hide (reopen from menu bar)"
+          onClick={handleHide}
+          className="group flex h-3 w-3 items-center justify-center rounded-full bg-red-500/90 hover:bg-red-400"
         >
-          <span className="text-sm leading-none">−</span>
+          <span className="hidden text-[8px] leading-none text-red-950 group-hover:block">
+            ×
+          </span>
         </button>
         <button
           type="button"
-          aria-label="Hide window"
-          title="Hide (reopen from tray)"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleHide();
-          }}
-          className="w-5 h-5 rounded flex items-center justify-center text-neutral-400 hover:bg-red-600 hover:text-white cursor-default"
+          aria-label="Minimize"
+          title="Minimize"
+          onClick={handleMinimize}
+          className="group flex h-3 w-3 items-center justify-center rounded-full bg-yellow-500/90 hover:bg-yellow-400"
         >
-          <span className="text-sm leading-none">×</span>
+          <span className="hidden text-[8px] leading-none text-yellow-950 group-hover:block">
+            −
+          </span>
         </button>
+      </div>
+      <span className="pointer-events-none ml-1 text-xs font-medium tracking-wide text-zinc-500">
+        FlowingThoughts
+      </span>
+    </div>
+  );
+
+  const shell = (content: React.ReactNode) => (
+    <div className="h-screen bg-transparent p-1.5">
+      <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
+        {titleBar}
+        <UpdateBanner />
+        {content}
       </div>
     </div>
   );
 
   if (isLoading) {
-    return (
-      <div className="flex flex-col h-screen bg-neutral-950 text-neutral-400">
-        {dragStrip}
-        <UpdateBanner />
-        <div className="flex-1 flex items-center justify-center text-sm">Loading...</div>
-      </div>
+    return shell(
+      <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+        Loading...
+      </div>,
     );
   }
 
   if (!isOnboardingComplete) {
-    return (
-      <div className="flex flex-col h-screen bg-neutral-950 text-white">
-        {dragStrip}
-        <UpdateBanner />
-        <div className="flex-1">
-          <Onboarding onComplete={() => setIsOnboardingComplete(true)} />
-        </div>
-      </div>
+    return shell(
+      <div className="flex-1 overflow-y-auto">
+        <Onboarding onComplete={() => setIsOnboardingComplete(true)} />
+      </div>,
     );
   }
 
-  return (
-    <div className="flex flex-col h-screen bg-neutral-950 text-white">
-      {dragStrip}
-      <UpdateBanner />
+  return shell(
+    <>
       <div className="flex-1 overflow-hidden">{pages[activeTab]}</div>
-      <TabBar active={activeTab} onTabChange={setActiveTab} showLab={isLabMode} />
-    </div>
+      <TabBar active={activeTab} onTabChange={setActiveTab} />
+    </>,
   );
 }
 

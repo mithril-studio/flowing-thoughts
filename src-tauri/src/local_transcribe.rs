@@ -11,11 +11,7 @@ static CONTEXT_CACHE: LazyLock<Mutex<HashMap<&'static str, Arc<WhisperContext>>>
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
 fn get_or_load_context(model_id: ModelId) -> Result<Arc<WhisperContext>, String> {
-    let key = match model_id {
-        ModelId::TinyEn => "whisper-tiny-en",
-        ModelId::BaseEn => "whisper-base-en",
-        ModelId::DistilSmallEn => "distil-small-en",
-    };
+    let key = model_id.as_str();
     {
         let guard = CONTEXT_CACHE
             .lock()
@@ -93,7 +89,12 @@ fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     Ok(out)
 }
 
-fn run_inference(ctx: &WhisperContext, audio: &[f32]) -> Result<String, String> {
+fn run_inference(
+    ctx: &WhisperContext,
+    audio: &[f32],
+    language: &str,
+    prompt: Option<&str>,
+) -> Result<String, String> {
     let mut state = ctx
         .create_state()
         .map_err(|e| format!("Failed to create whisper state: {e}"))?;
@@ -101,12 +102,15 @@ fn run_inference(ctx: &WhisperContext, audio: &[f32]) -> Result<String, String> 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(num_cpus_threads());
     params.set_translate(false);
-    params.set_language(Some("en"));
+    params.set_language(Some(language));
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_suppress_blank(true);
+    if let Some(p) = prompt.filter(|s| !s.trim().is_empty()) {
+        params.set_initial_prompt(p);
+    }
 
     state
         .full(params, audio)
@@ -133,19 +137,56 @@ fn num_cpus_threads() -> i32 {
         .min(8)
 }
 
+/// Map the app-level language mode ("en" | "nl" | "system") to the whisper
+/// language code for a given model. English-only models always decode as
+/// English; multilingual models honour the hint or auto-detect.
+fn whisper_language(model_id: ModelId, language_mode: &str) -> &'static str {
+    if !model_id.is_multilingual() {
+        return "en";
+    }
+    match language_mode.trim().to_ascii_lowercase().as_str() {
+        "en" | "english" => "en",
+        "nl" | "dutch" | "nederlands" => "nl",
+        _ => "auto",
+    }
+}
+
 pub async fn transcribe_local(
     model_id: ModelId,
     wav_path: &Path,
+    language_mode: &str,
+    prompt: Option<String>,
 ) -> Result<(String, u64), String> {
     let wav_path = wav_path.to_path_buf();
+    let language = whisper_language(model_id, language_mode);
     let started = Instant::now();
     let result = tokio::task::spawn_blocking(move || {
         let ctx = get_or_load_context(model_id)?;
         let audio = load_wav_as_mono_16k(&wav_path)?;
-        run_inference(&ctx, &audio)
+        run_inference(&ctx, &audio, language, prompt.as_deref())
     })
     .await
     .map_err(|e| format!("Local transcription task panicked: {e}"))?;
     let text = result?;
     Ok((text, started.elapsed().as_millis() as u64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::whisper_language;
+    use crate::model_manager::ModelId;
+
+    #[test]
+    fn multilingual_models_honour_language_mode() {
+        assert_eq!(whisper_language(ModelId::SmallQ5, "nl"), "nl");
+        assert_eq!(whisper_language(ModelId::SmallQ5, "en"), "en");
+        assert_eq!(whisper_language(ModelId::SmallQ5, "system"), "auto");
+        assert_eq!(whisper_language(ModelId::BaseQ5, "nl"), "nl");
+    }
+
+    #[test]
+    fn english_only_models_always_decode_english() {
+        assert_eq!(whisper_language(ModelId::TinyEn, "nl"), "en");
+        assert_eq!(whisper_language(ModelId::DistilSmallEn, "system"), "en");
+    }
 }

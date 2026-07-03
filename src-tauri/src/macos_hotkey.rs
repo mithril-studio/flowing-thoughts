@@ -12,6 +12,7 @@
 #![cfg(target_os = "macos")]
 
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -125,6 +126,11 @@ struct TapContext {
     mode_state: Arc<Mutex<HotkeyMode>>,
     tx: mpsc::Sender<HotkeyEvent>,
     state: Mutex<HotkeyFsm>,
+    /// The CFMachPortRef of our event tap, stored as usize once created.
+    /// Needed so the callback can re-enable the tap after macOS disables it
+    /// (kCGEventTapDisabledByTimeout) — without this the hotkey silently
+    /// stops working until the app is restarted.
+    tap_port: AtomicUsize,
 }
 
 #[derive(Default)]
@@ -157,16 +163,21 @@ extern "C" fn tap_callback(
     event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef {
-    // If macOS disabled our tap (timeout or user interrupt), the runloop
-    // keeps delivering events to us — re-enable and pass through.
-    if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
-        || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
-    {
-        // We don't have the port here; the runloop driver will reinstall.
+    if user_info.is_null() {
         return event;
     }
 
-    if user_info.is_null() {
+    // If macOS disabled our tap (timeout or user interrupt), re-enable it
+    // immediately — otherwise the hotkey stops working until app restart.
+    if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+    {
+        let ctx: &TapContext = unsafe { &*(user_info as *const TapContext) };
+        let port = ctx.tap_port.load(Ordering::Acquire);
+        if port != 0 {
+            unsafe { CGEventTapEnable(port as CFMachPortRef, true) };
+            eprintln!("Hotkey event tap was disabled by macOS — re-enabled.");
+        }
         return event;
     }
     // SAFETY: we allocated this Box and leaked it; pointer is valid.
@@ -238,6 +249,7 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
         mode_state,
         tx,
         state: Mutex::new(HotkeyFsm::default()),
+        tap_port: AtomicUsize::new(0),
     });
     // Pass the context pointer through the thread boundary as `usize`.
     // The raw `*mut c_void` isn't `Send`, and wrapping it in a newtype
@@ -264,6 +276,12 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
                 "CGEventTapCreate returned null — grant FlowingThoughts Accessibility permission."
             );
             return;
+        }
+        // SAFETY: ctx was leaked via Box::into_raw and lives for the process.
+        unsafe {
+            (*(ctx_ptr as *const TapContext))
+                .tap_port
+                .store(tap as usize, Ordering::Release);
         }
 
         let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0) };

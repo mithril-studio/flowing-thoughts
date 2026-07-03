@@ -42,17 +42,14 @@ describe("Settings", () => {
     render(<Settings settings={defaultAppSettings} onSettingsChange={onSettingsChange} />);
 
     expect(screen.getByText("General")).toBeInTheDocument();
-    expect(screen.getByText("Setup Steps")).toBeInTheDocument();
-    expect(screen.getByText("Accessibility")).toBeInTheDocument();
-    expect(screen.getByText("Shortcut Step")).toBeInTheDocument();
-    expect(screen.getByText("Window position")).toBeInTheDocument();
-    expect(screen.getByText("Shortcuts")).toBeInTheDocument();
-    expect(screen.getByText("Microphone")).toBeInTheDocument();
-    expect(screen.getByText("Language")).toBeInTheDocument();
-    expect(screen.getByText("Sound Settings")).toBeInTheDocument();
-    expect(screen.getByText("Extras")).toBeInTheDocument();
-    expect(screen.getAllByText("API").length).toBeGreaterThan(0);
     expect(screen.getByText("Transcription")).toBeInTheDocument();
+    expect(screen.getByText("On-device")).toBeInTheDocument();
+    expect(screen.getByText("Language")).toBeInTheDocument();
+    expect(screen.getByText("Shortcut")).toBeInTheDocument();
+    expect(screen.getByText("Extras")).toBeInTheDocument();
+    expect(screen.getByText("Permissions")).toBeInTheDocument();
+    expect(screen.getByText("Cloud API (optional)")).toBeInTheDocument();
+    expect(screen.getByText("Window position")).toBeInTheDocument();
     expect(screen.getByText("Save Groq API Key")).toBeInTheDocument();
     expect(screen.getByText("Active provider")).toBeInTheDocument();
     expect(screen.getByText("Dangerously skip permissions")).toBeInTheDocument();
@@ -103,6 +100,56 @@ describe("Settings", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("set_active_provider", { provider: "openai" });
+    });
+  });
+
+  it("selects an installed local model as active", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          groq_api_key_configured: false,
+          openai_api_key_configured: false,
+          active_provider: "groq",
+        });
+      }
+      if (command === "list_installed_models") {
+        return Promise.resolve([
+          {
+            id: "whisper-base-q5",
+            display_name: "Whisper Base (English + Dutch)",
+            description: "Fast and tiny.",
+            filename: "ggml-base-q5_1.bin",
+            installed: true,
+            expected_size_bytes: 59_707_625,
+            local_path: "/tmp/ggml-base-q5_1.bin",
+            multilingual: true,
+          },
+        ]);
+      }
+      if (command === "get_accessibility_help_info") {
+        return Promise.resolve({ executable_path: "", is_dev_build: true, note: "" });
+      }
+      return Promise.resolve({ settings: defaultAppSettings, warnings: [] });
+    });
+
+    render(<Settings settings={defaultAppSettings} onSettingsChange={vi.fn()} />);
+
+    const useButton = await screen.findByRole("button", { name: "Use" });
+    fireEvent.click(useButton);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "update_app_settings",
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            transcription: expect.objectContaining({
+              provider: "local",
+              local_model: "whisper-base-q5",
+            }),
+          }),
+        })
+      );
     });
   });
 });

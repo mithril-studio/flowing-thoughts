@@ -4,12 +4,13 @@ use tauri::{
     ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 use std::process::Command;
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const HOLD_TO_START_MS: u64 = 500;
+/// Recordings shorter than this are treated as accidental hotkey taps and
+/// discarded silently — no error toast, no pipeline run.
+const MIN_DICTATION_MS: u64 = 300;
 
 mod audio;
 #[cfg(target_os = "macos")]
@@ -17,7 +18,6 @@ mod ax_snapshot;
 mod corrections;
 mod db;
 mod hotkey;
-mod lab;
 mod local_transcribe;
 #[cfg(target_os = "macos")]
 mod macos_ax;
@@ -299,6 +299,12 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     let valid_language_modes = ["system", "en", "nl"];
     if !valid_language_modes.contains(&settings.language.mode.as_str()) {
         settings.language.mode = "system".to_string();
+    }
+    if settings.transcription.provider != "local" && settings.transcription.provider != "api" {
+        settings.transcription.provider = "local".to_string();
+    }
+    if model_manager::ModelId::from_str(&settings.transcription.local_model).is_none() {
+        settings.transcription.local_model = "whisper-small-q5".to_string();
     }
     if settings.microphone.input_device.trim().is_empty() {
         settings.microphone.input_device = "system_default".to_string();
@@ -782,17 +788,6 @@ fn list_lab_sessions(
 }
 
 #[tauri::command]
-fn get_model_tally(
-    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
-) -> Result<Vec<db::ModelTally>, String> {
-    let conn = db_conn
-        .inner()
-        .lock()
-        .map_err(|_| "DB lock poisoned".to_string())?;
-    db::model_tally(&conn)
-}
-
-#[tauri::command]
 fn get_top_mistranscribed(
     model: Option<String>,
     limit: Option<i64>,
@@ -1077,47 +1072,15 @@ pub fn run() {
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
                 let mut active_amplitude_stop: Option<Arc<std::sync::atomic::AtomicBool>> = None;
-                let mut pending_start_deadline: Option<Instant> = None;
 
                 loop {
-                    let recv_result = match pending_start_deadline {
-                        Some(deadline) => {
-                            let wait = deadline.saturating_duration_since(Instant::now());
-                            hotkey_rx.recv_timeout(wait)
-                        }
-                        None => hotkey_rx
-                            .recv()
-                            .map_err(|_| RecvTimeoutError::Disconnected),
-                    };
-
-                    let event = match recv_result {
-                        Err(RecvTimeoutError::Disconnected) => break,
-                        Err(RecvTimeoutError::Timeout) => {
-                            // Hold threshold elapsed without a cancel — commit the start.
-                            pending_start_deadline = None;
-                            hotkey::HotkeyEvent::RecordStart
-                        }
-                        Ok(hotkey::HotkeyEvent::RecordStart) => {
-                            // Debounce: arm a deadline instead of starting immediately.
-                            if pending_start_deadline.is_none()
-                                && matches!(
-                                    *shared_session_state.lock().unwrap(),
-                                    SessionState::Idle
-                                )
-                            {
-                                pending_start_deadline = Some(
-                                    Instant::now() + Duration::from_millis(HOLD_TO_START_MS),
-                                );
-                            }
-                            continue;
-                        }
-                        Ok(hotkey::HotkeyEvent::RecordStop) => {
-                            if pending_start_deadline.take().is_some() {
-                                // Released before threshold → never entered recording.
-                                continue;
-                            }
-                            hotkey::HotkeyEvent::RecordStop
-                        }
+                    // Start capturing the moment the hotkey goes down — no
+                    // arming delay, so the first words are never cut off.
+                    // Accidental taps are filtered after release by the
+                    // MIN_DICTATION_MS duration guard instead.
+                    let event = match hotkey_rx.recv() {
+                        Ok(event) => event,
+                        Err(_) => break,
                     };
 
                     match event {
@@ -1271,28 +1234,22 @@ pub fn run() {
                                     continue;
                                 }
                             };
-                            if capture.duration_ms < 180 {
+                            if capture.duration_ms < MIN_DICTATION_MS {
+                                // Accidental tap — discard silently, no error UI.
                                 let _ = app_handle.emit(
-                                    "pipeline-error",
-                                    PipelineErrorEvent {
-                                        session_id,
-                                        stage: "audio-finalize",
-                                        message: "Recording too short. Hold the hotkey longer and try again."
-                                            .to_string(),
+                                    "recording-state",
+                                    RecordingState {
+                                        is_recording: false,
                                     },
-                                );
-                                let _ = app_handle.emit(
-                                    "session-phase",
-                                    SessionPhaseEvent { phase: "error" },
                                 );
                                 let _ = app_handle.emit(
                                     "session-phase",
                                     SessionPhaseEvent { phase: "idle" },
                                 );
                                 let _ = storage::append_log(
-                                    "WARN",
+                                    "INFO",
                                     &format!(
-                                        "Session {session_id} dropped due to short duration ({}ms)",
+                                        "Session {session_id} dropped as accidental tap ({}ms)",
                                         capture.duration_ms
                                     ),
                                 );
@@ -1336,6 +1293,7 @@ pub fn run() {
                                     language_mode,
                                     smart_formatting,
                                     transcription_mode,
+                                    local_model,
                                 ) = persisted_for_task
                                     .lock()
                                     .ok()
@@ -1355,6 +1313,7 @@ pub fn run() {
                                             state.settings.language.mode.clone(),
                                             state.settings.extras.smart_formatting,
                                             state.settings.transcription.provider.clone(),
+                                            state.settings.transcription.local_model.clone(),
                                         )
                                     })
                                     .unwrap_or((
@@ -1362,10 +1321,10 @@ pub fn run() {
                                         None,
                                         "system".to_string(),
                                         true,
-                                        "api".to_string(),
+                                        "local".to_string(),
+                                        "whisper-small-q5".to_string(),
                                     ));
 
-                                // Always fan out to all 4 models for data collection.
                                 let dictation_id = uuid::Uuid::new_v4().to_string();
                                 let started_at = chrono::Utc::now().to_rfc3339();
                                 if let Ok(conn) = db_conn_for_task.lock() {
@@ -1385,15 +1344,6 @@ pub fn run() {
                                         },
                                     );
                                 }
-
-                                let primary_label: String = if transcription_mode == "local" {
-                                    "distil-small-en".to_string()
-                                } else {
-                                    match provider {
-                                        storage::Provider::Groq => "groq-api".to_string(),
-                                        storage::Provider::Openai => "openai-api".to_string(),
-                                    }
-                                };
 
                                 // Build a Whisper `prompt` from the intended terms the
                                 // user has taught us, so the decoder biases toward
@@ -1420,54 +1370,77 @@ pub fn run() {
                                         )
                                     });
 
-                                let (primary, pending) = lab::run_with_primary_first(
-                                    session_id,
-                                    wav_path_for_task.clone(),
-                                    capture.duration_ms,
-                                    provider,
-                                    runtime_api_key.clone(),
-                                    language_mode.clone(),
-                                    primary_label.clone(),
-                                    correction_prompt.clone(),
-                                )
-                                .await;
+                                // Run exactly one transcription — the model the user
+                                // picked. (Earlier builds fanned out to 4 models per
+                                // dictation, which saturated CPU/RAM and froze the UI.)
+                                let local_model_id = model_manager::ModelId::from_str(&local_model);
+                                let installed = local_model_id
+                                    .and_then(|id| model_manager::model_path(id).ok())
+                                    .map(|p| p.exists())
+                                    .unwrap_or(false);
+                                let use_local = transcription_mode == "local" && installed;
 
-                                // Detach the loser tasks: await them in the background,
-                                // persist all 4 results to the DB, then clean up the WAV.
-                                {
-                                    let primary_for_detach = primary.clone();
-                                    let db_conn_for_detach = db_conn_for_task.clone();
-                                    let dictation_id_for_detach = dictation_id.clone();
-                                    let wav_path_for_detach = wav_path_for_task.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let losers = pending.join_all().await;
-                                        if let Ok(conn) = db_conn_for_detach.lock() {
-                                            let all_results = std::iter::once(&primary_for_detach)
-                                                .chain(losers.iter());
-                                            for r in all_results {
-                                                let _ = db::insert_transcription(
-                                                    &conn,
-                                                    &db::TranscriptionRow {
-                                                        id: uuid::Uuid::new_v4().to_string(),
-                                                        dictation_id: dictation_id_for_detach
-                                                            .clone(),
-                                                        model: r.model.clone(),
-                                                        text: r.text.clone(),
-                                                        latency_ms: Some(r.latency_ms),
-                                                        error: r.error.clone(),
-                                                        created_at: chrono::Utc::now()
-                                                            .to_rfc3339(),
-                                                    },
-                                                );
-                                            }
-                                            let _ = db::clear_wav_path(
-                                                &conn,
-                                                &dictation_id_for_detach,
-                                            );
-                                        }
-                                        let _ = std::fs::remove_file(&wav_path_for_detach);
-                                    });
+                                let started = Instant::now();
+                                let (primary_label, transcript_result): (String, Result<String, String>) =
+                                    if use_local {
+                                        let id = local_model_id.unwrap();
+                                        let result = local_transcribe::transcribe_local(
+                                            id,
+                                            &wav_path_for_task,
+                                            &language_mode,
+                                            correction_prompt.clone(),
+                                        )
+                                        .await
+                                        .map(|(text, _latency)| text);
+                                        (local_model.clone(), result)
+                                    } else if transcription_mode == "local"
+                                        && runtime_api_key.is_none()
+                                    {
+                                        (
+                                            local_model.clone(),
+                                            Err(format!(
+                                                "Local model '{local_model}' is not downloaded yet. Open Settings → Transcription to download it."
+                                            )),
+                                        )
+                                    } else {
+                                        // Cloud path: chosen explicitly, or fallback
+                                        // because the local model isn't installed but
+                                        // an API key is configured.
+                                        let label = match provider {
+                                            storage::Provider::Groq => "groq-api".to_string(),
+                                            storage::Provider::Openai => "openai-api".to_string(),
+                                        };
+                                        let result = transcribe::transcribe_audio(
+                                            session_id,
+                                            &wav_path_for_task,
+                                            capture.duration_ms,
+                                            provider,
+                                            runtime_api_key.as_deref(),
+                                            Some(&language_mode),
+                                            correction_prompt.as_deref(),
+                                        )
+                                        .await;
+                                        (label, result)
+                                    };
+                                let latency_ms = started.elapsed().as_millis() as u64;
+
+                                // Persist the result row, then clean up the WAV.
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    let _ = db::insert_transcription(
+                                        &conn,
+                                        &db::TranscriptionRow {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            dictation_id: dictation_id.clone(),
+                                            model: primary_label.clone(),
+                                            text: transcript_result.as_ref().ok().cloned(),
+                                            latency_ms: Some(latency_ms),
+                                            error: transcript_result.as_ref().err().cloned(),
+                                            created_at: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                    let _ = db::clear_wav_path(&conn, &dictation_id);
                                 }
+                                let _ = std::fs::remove_file(&wav_path_for_task);
 
                                 // Stale session — skip injection; detached task still persists + cleans up.
                                 {
@@ -1483,8 +1456,8 @@ pub fn run() {
                                     }
                                 }
 
-                                if primary.text.is_some() {
-                                    let raw = primary.text.clone().unwrap();
+                                if let Ok(raw) = &transcript_result {
+                                    let raw = raw.clone();
                                     // Apply learned corrections before smart formatting so
                                     // capitalisation rules run on the final word shape.
                                     let correction_pairs: Vec<(String, String)> =
@@ -1520,7 +1493,7 @@ pub fn run() {
                                             *guard = Some(PendingCapture {
                                                 session_id,
                                                 dictation_id: dictation_id.clone(),
-                                                model: primary.model.clone(),
+                                                model: primary_label.clone(),
                                                 injected_text: text.clone(),
                                                 captured_at: Instant::now(),
                                             });
@@ -1580,11 +1553,7 @@ pub fn run() {
                                         SessionPhaseEvent { phase: "idle" },
                                     );
                                 } else {
-                                    let message = primary.error.clone().unwrap_or_else(|| {
-                                        format!(
-                                            "Primary model {primary_label} produced no output"
-                                        )
-                                    });
+                                    let message = transcript_result.unwrap_err();
                                     let _ = app_handle_for_task.emit(
                                         "pipeline-error",
                                         PipelineErrorEvent {
@@ -1677,7 +1646,6 @@ pub fn run() {
             download_model,
             delete_model,
             list_lab_sessions,
-            get_model_tally,
             get_top_mistranscribed,
             list_corrections,
             delete_correction,

@@ -26,6 +26,7 @@ export interface AppSettings {
   };
   transcription: {
     provider: "api" | "local";
+    local_model: string;
   };
 }
 
@@ -49,7 +50,7 @@ export const defaultAppSettings: AppSettings = {
     noise_suppression_enabled: false,
   },
   language: {
-    mode: "en",
+    mode: "system",
   },
   sound: {
     feedback_sounds_enabled: false,
@@ -61,6 +62,7 @@ export const defaultAppSettings: AppSettings = {
     auto_learn_corrections: true,
   },
   transcription: {
-    provider: "api",
+    provider: "local",
+    local_model: "whisper-small-q5",
   },
 };
