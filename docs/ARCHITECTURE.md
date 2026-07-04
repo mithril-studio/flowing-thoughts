@@ -69,12 +69,12 @@ Hotkey (CGEventTap, global)
 - Every in-flight task is scoped to `session_id`; late results for old
   sessions are ignored
 - Exactly one transcription runs per dictation (a 4-model fan-out used to
-  saturate CPU/RAM and freeze the indicator)
+  saturate CPU/RAM and freeze the UI)
 - Backend owns truth of state; frontend only renders events
 - Errors never leave the app in a non-idle terminal state
 
-## Windows
+## UI Surfaces
 
-- `main` — the settings/history window (transparent, rounded shell)
-- `indicator` — tiny always-on-top draggable pill with a live waveform;
-  position is persisted and restored clamped to the current monitor
+- `main` window — the settings/history window (transparent, rounded shell)
+- Menu bar (tray) icon — its presence means the hotkey is armed; the title
+  mirrors the session phase (● recording, … transcribing/typing)

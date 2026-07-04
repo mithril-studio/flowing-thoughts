@@ -5,13 +5,16 @@
 - **Local-first** — speech recognition runs entirely on your Mac (Whisper via whisper.cpp). No account, no subscription, no audio leaves your machine.
 - **Bilingual** — English and Dutch out of the box, with auto-detection. The recommended model is 190 MB and runs in under 0.5 GB RAM.
 - **Learns from you** — fix a word once and FlowingThoughts applies that correction to every future dictation.
-- **Works everywhere** — hold `Fn` (or `⌘⇧Space`) in any app: Slack, Mail, your editor, a browser.
+- **Works everywhere** — hold `Fn` (or `⌘⇧Space`) in any app: Slack, Mail, your editor, a browser. The menu bar icon shows ● while recording and … while transcribing.
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/mithril-studio/flowing-thoughts-releases/releases/latest), drag it into Applications, and follow the 3-step setup (download the model, grant Accessibility permission, run the test).
+1. Download the latest `.dmg` from [Releases](https://github.com/mithril-studio/flowing-thoughts-releases/releases/latest) and drag FlowingThoughts into Applications.
+2. First launch: the app is not notarized yet, so right-click the app → **Open** → **Open** to get past Gatekeeper.
+3. Follow the 3-step setup: download the speech model (190 MB, one-time), grant **Accessibility** and **Input Monitoring** in System Settings → Privacy & Security (the app shows live green badges when they're set), and run the injection test.
+4. Hold `Fn`, speak, release — your words are typed into whatever app you're in.
 
-Optional: bring your own Groq or OpenAI API key for cloud transcription instead of the local model.
+Optional: bring your own Groq or OpenAI API key (Settings → Transcription → Cloud API) for cloud transcription instead of the local model.
 
 ## How it works
 

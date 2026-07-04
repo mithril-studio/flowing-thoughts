@@ -1005,8 +1005,9 @@ pub fn run() {
                 MenuItem::with_id(app, "show", "Show Settings", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
-            // Create tray icon
-            TrayIconBuilder::new()
+            // Create the menu bar (tray) icon. Its presence means dictation
+            // is armed; its title gives live feedback while dictating.
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .icon_as_template(true)
                 .menu(&menu)
@@ -1025,102 +1026,26 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let shared_db_conn = db_conn.clone();
-
-            // Dock the floating indicator to the top-left of the primary
-            // monitor on launch — under the macOS menu bar. If the user
-            // previously dragged it elsewhere, restore that position (clamped
-            // to the current monitor so a stored position from a now-missing
-            // display can't strand the window off-screen).
-            if let Some(indicator) = app.get_webview_window("indicator") {
-                let _ = indicator.set_always_on_top(true);
-                let _ = indicator.set_visible_on_all_workspaces(true);
-                // Keep the pill visible over fullscreen apps too (Wispr-style):
-                // canJoinAllSpaces (1<<0) | fullScreenAuxiliary (1<<8), raised
-                // to status-window level.
-                #[cfg(target_os = "macos")]
-                if let Ok(ns_window) = indicator.ns_window() {
-                    unsafe {
-                        use objc2::msg_send;
-                        use objc2::runtime::AnyObject;
-                        let win = &*(ns_window as *const AnyObject);
-                        let behavior: u64 = (1 << 0) | (1 << 8);
-                        let level: isize = 25; // NSStatusWindowLevel
-                        let _: () = msg_send![win, setCollectionBehavior: behavior];
-                        let _: () = msg_send![win, setLevel: level];
-                    }
-                }
-                if let Some(monitor) = indicator.current_monitor().ok().flatten() {
-                    let size = indicator.outer_size().unwrap_or_default();
-                    let mpos = monitor.position();
-                    let msize = monitor.size();
-
-                    let saved = {
-                        let conn = shared_db_conn.lock().unwrap();
-                        storage::load_indicator_position(&conn)
+            // Mirror the session phase in the menu bar: ● while recording,
+            // … while transcribing/typing, nothing when idle.
+            {
+                use tauri::Listener;
+                let tray_handle = tray.clone();
+                app.listen("session-phase", move |event| {
+                    let payload = event.payload();
+                    let title = if payload.contains("recording") {
+                        Some("●")
+                    } else if payload.contains("transcribing") || payload.contains("injecting")
+                    {
+                        Some("…")
+                    } else {
+                        None
                     };
-
-                    let (x, y) = match saved {
-                        Some((sx, sy)) => {
-                            let min_x = mpos.x;
-                            let max_x = mpos.x + (msize.width as i32 - size.width as i32).max(0);
-                            let min_y = mpos.y;
-                            let max_y = mpos.y + (msize.height as i32 - size.height as i32).max(0);
-                            (sx.clamp(min_x, max_x), sy.clamp(min_y, max_y))
-                        }
-                        // Default: bottom-center, floating just above the Dock
-                        // (Wispr-style) so the emblem is always in view.
-                        None => {
-                            let dock_clearance = (msize.height as f64 * 0.06) as i32;
-                            (
-                                mpos.x + (msize.width as i32 - size.width as i32).max(0) / 2,
-                                mpos.y
-                                    + (msize.height as i32
-                                        - size.height as i32
-                                        - dock_clearance)
-                                        .max(0),
-                            )
-                        }
-                    };
-                    let _ = indicator.set_position(Position::Physical(
-                        PhysicalPosition { x, y },
-                    ));
-                }
-                let _ = indicator.show();
-
-                // Persist the indicator position on drag. `Moved` fires many
-                // times during a drag; throttle to the last write plus a small
-                // delta so we don't hammer SQLite.
-                let persist_conn = shared_db_conn.clone();
-                let last_saved: Arc<Mutex<Option<(i32, i32, Instant)>>> =
-                    Arc::new(Mutex::new(None));
-                indicator.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Moved(pos) = event {
-                        let now = Instant::now();
-                        let mut guard = last_saved.lock().unwrap();
-                        let should_write = match *guard {
-                            Some((lx, ly, last)) => {
-                                let moved_enough =
-                                    (pos.x - lx).abs() >= 2 || (pos.y - ly).abs() >= 2;
-                                let elapsed_enough =
-                                    now.duration_since(last) >= Duration::from_millis(300);
-                                moved_enough && elapsed_enough
-                            }
-                            None => true,
-                        };
-                        if should_write {
-                            *guard = Some((pos.x, pos.y, now));
-                            drop(guard);
-                            if let Ok(conn) = persist_conn.lock() {
-                                let _ = storage::save_indicator_position(
-                                    &conn,
-                                    (pos.x, pos.y),
-                                );
-                            }
-                        }
-                    }
+                    let _ = tray_handle.set_title(title);
                 });
             }
+
+            let shared_db_conn = db_conn.clone();
 
             // Register this process with the macOS Accessibility permission
             // database so it shows up in System Settings > Privacy & Security

@@ -24,21 +24,6 @@
         "visible": true,
         "decorations": false,
         "transparent": true
-      },
-      {
-        "label": "indicator",
-        "url": "index.html#indicator",
-        "title": "FlowingThoughts Indicator",
-        "width": 60,
-        "height": 20,
-        "resizable": false,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": true,
-        "focus": false,
-        "transparent": true,
-        "visibleOnAllWorkspaces": true
       }
     ],
     "security": {
