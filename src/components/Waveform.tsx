@@ -14,6 +14,7 @@ interface WaveformProps {
   bars?: number;
   className?: string;
   barClassName?: string;
+  gapClassName?: string;
 }
 
 /**
@@ -28,6 +29,7 @@ export default function Waveform({
   bars = 11,
   className = "",
   barClassName = "w-[3px] bg-white",
+  gapClassName = "gap-[3px]",
 }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef<number[]>([]);
@@ -79,7 +81,7 @@ export default function Waveform({
   return (
     <div
       ref={containerRef}
-      className={`flex items-center justify-center gap-[3px] ${className}`}
+      className={`flex items-center justify-center ${gapClassName} ${className}`}
       aria-hidden="true"
     >
       {Array.from({ length: bars }).map((_, i) => (

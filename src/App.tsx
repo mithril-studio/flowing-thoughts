@@ -42,6 +42,19 @@ function App() {
       });
   }, []);
 
+  // Toggle the `.dark` class from the theme setting; "system" follows macOS.
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const theme = appSettings.general.theme;
+      const dark = theme === "dark" || (theme === "system" && media.matches);
+      document.documentElement.classList.toggle("dark", dark);
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [appSettings.general.theme]);
+
   const pages: Record<Tab, React.ReactNode> = {
     home: <Home shortcutLabel={shortcutLabel} />,
     snippets: <Snippets />,
@@ -119,7 +132,7 @@ function App() {
 
   const shell = (content: React.ReactNode) => (
     <div className="h-screen bg-transparent p-1.5">
-      <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
+      <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 shadow-2xl">
         {titleBar}
         <UpdateBanner />
         {content}

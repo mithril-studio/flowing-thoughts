@@ -4,6 +4,7 @@ export interface AppSettings {
     launch_at_login: boolean;
     show_in_dock: boolean;
     window_position: "center" | "top_left" | "top_right" | "bottom_left" | "bottom_right" | string;
+    theme: "light" | "dark" | "system" | string;
   };
   shortcuts: {
     preset: "cmd_shift_space" | "fn" | string;
@@ -41,6 +42,7 @@ export const defaultAppSettings: AppSettings = {
     launch_at_login: false,
     show_in_dock: true,
     window_position: "center",
+    theme: "light",
   },
   shortcuts: {
     preset: "fn",

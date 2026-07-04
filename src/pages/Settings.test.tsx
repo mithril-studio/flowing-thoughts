@@ -48,11 +48,13 @@ describe("Settings", () => {
     expect(screen.getByText("Shortcut")).toBeInTheDocument();
     expect(screen.getByText("Extras")).toBeInTheDocument();
     expect(screen.getByText("Permissions")).toBeInTheDocument();
-    expect(screen.getByText("Cloud API (optional)")).toBeInTheDocument();
     expect(screen.getByText("Window position")).toBeInTheDocument();
-    expect(screen.getByText("Save Groq API Key")).toBeInTheDocument();
-    expect(screen.getByText("Active provider")).toBeInTheDocument();
+    expect(screen.getByText("Theme")).toBeInTheDocument();
     expect(screen.getByText("Dangerously skip permissions")).toBeInTheDocument();
+    // Local provider is the default, so local models are visible and the
+    // cloud key form is hidden.
+    expect(screen.getByText("Local models")).toBeInTheDocument();
+    expect(screen.queryByText("Save Groq API Key")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Window movable" }));
 
@@ -93,7 +95,15 @@ describe("Settings", () => {
       return Promise.resolve({ settings: defaultAppSettings, warnings: [] });
     });
 
-    render(<Settings settings={defaultAppSettings} onSettingsChange={vi.fn()} />);
+    render(
+      <Settings
+        settings={{
+          ...defaultAppSettings,
+          transcription: { ...defaultAppSettings.transcription, provider: "api" },
+        }}
+        onSettingsChange={vi.fn()}
+      />
+    );
 
     const openaiRadio = await screen.findByRole("radio", { name: /OpenAI/i });
     fireEvent.click(openaiRadio);

@@ -313,6 +313,10 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if !valid_positions.contains(&settings.general.window_position.as_str()) {
         settings.general.window_position = "center".to_string();
     }
+    let valid_themes = ["light", "dark", "system"];
+    if !valid_themes.contains(&settings.general.theme.as_str()) {
+        settings.general.theme = "light".to_string();
+    }
 }
 
 fn apply_window_movable(window: &WebviewWindow, movable: bool) {

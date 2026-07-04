@@ -210,15 +210,15 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       : 0;
 
   return (
-    <div className="flex h-full items-center justify-center px-6 py-8 text-zinc-100">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+    <div className="flex h-full items-center justify-center px-6 py-8 text-zinc-900 dark:text-zinc-100">
+      <div className="w-full max-w-md rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/70 p-5">
         <h1 className="text-lg font-semibold">Welcome to FlowingThoughts</h1>
-        <p className="mt-1 text-xs text-zinc-400">Step {step} of 3</p>
+        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">Step {step} of 3</p>
 
         {step === 1 && (
           <div className="mt-5 space-y-4">
             <div>
-              <p className="mb-2 text-sm text-zinc-200">Which language do you speak?</p>
+              <p className="mb-2 text-sm text-zinc-800 dark:text-zinc-200">Which language do you speak?</p>
               <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Language">
                 {(
                   [
@@ -235,8 +235,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                     onClick={() => setLanguage(option.id)}
                     className={`rounded-xl border px-3 py-2 text-sm transition-colors ${
                       language === option.id
-                        ? "border-emerald-500 bg-emerald-950/30 text-emerald-300"
-                        : "border-zinc-700 bg-zinc-950 text-zinc-300 hover:border-zinc-600"
+                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300"
+                        : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-700 dark:text-zinc-300 hover:border-zinc-400 dark:hover:border-zinc-600"
                     }`}
                   >
                     {option.label}
@@ -246,16 +246,16 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             </div>
 
             <div>
-              <p className="mb-1 text-sm text-zinc-200">Download the speech model</p>
+              <p className="mb-1 text-sm text-zinc-800 dark:text-zinc-200">Download the speech model</p>
               <p className="mb-3 text-xs text-zinc-500">
                 Everything runs on your Mac — private, free, works offline. One-time
                 download of 190 MB.
               </p>
               {modelInstalled ? (
-                <p className="text-xs text-emerald-400">Model installed and ready.</p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400">Model installed and ready.</p>
               ) : downloading ? (
                 <div className="space-y-1">
-                  <div className="h-1.5 w-full rounded-full bg-zinc-800">
+                  <div className="h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-800">
                     <div
                       className="h-full rounded-full bg-emerald-500 transition-all"
                       style={{ width: `${percent}%` }}
@@ -267,7 +267,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                 <button
                   type="button"
                   onClick={() => void startDownload()}
-                  className="w-full rounded-xl bg-zinc-100 py-2 text-sm font-medium text-zinc-900 hover:bg-white"
+                  className="w-full rounded-xl bg-zinc-900 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                 >
                   Download model (190 MB)
                 </button>
@@ -285,7 +285,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             <button
               type="button"
               onClick={() => void continueToPermissions(false)}
-              className="w-full text-xs text-zinc-500 underline hover:text-zinc-300"
+              className="w-full text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
             >
               Skip for now — I'll use a cloud API key instead
             </button>
@@ -294,7 +294,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
         {step === 2 && (
           <div className="mt-5">
-            <p className="mb-2 text-sm text-zinc-200">
+            <p className="mb-2 text-sm text-zinc-800 dark:text-zinc-200">
               Grant Accessibility permission so FlowingThoughts can paste into apps
             </p>
             <div className="flex gap-2">
@@ -302,21 +302,21 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                 onClick={() =>
                   invoke("open_accessibility_settings").catch((e) => setError(String(e)))
                 }
-                className="flex-1 rounded-xl bg-zinc-800 py-2 text-sm text-zinc-200 hover:bg-zinc-700"
+                className="flex-1 rounded-xl bg-zinc-200 dark:bg-zinc-800 py-2 text-sm text-zinc-800 dark:text-zinc-200 hover:bg-zinc-300 dark:hover:bg-zinc-700"
               >
                 Open Settings
               </button>
               <button
                 onClick={checkAccessibility}
                 disabled={busy}
-                className="flex-1 rounded-xl bg-zinc-100 py-2 text-sm font-medium text-zinc-900 hover:bg-white disabled:opacity-60"
+                className="flex-1 rounded-xl bg-zinc-900 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white disabled:opacity-60"
               >
                 {busy ? "Checking..." : "Check Access"}
               </button>
             </div>
             <button
               onClick={() => setStep(3)}
-              className="mt-2 w-full rounded-xl border border-zinc-700 bg-zinc-900 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+              className="mt-2 w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-2 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               Continue Anyway
             </button>
@@ -324,25 +324,25 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
               onClick={() =>
                 invoke("reveal_current_executable").catch((e) => setError(String(e)))
               }
-              className="mt-2 w-full rounded-xl border border-zinc-700 bg-zinc-900 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+              className="mt-2 w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-2 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               Reveal Running App in Finder
             </button>
             {accessibilityHelp && (
-              <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-950 p-2">
-                <p className="text-[11px] text-zinc-400">{accessibilityHelp.note}</p>
+              <div className="mt-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-2">
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-400">{accessibilityHelp.note}</p>
                 <p className="mt-1 break-all text-[11px] text-zinc-500">
                   {accessibilityHelp.executable_path}
                 </p>
               </div>
             )}
             {dangerouslySkipPermissions && (
-              <p className="mt-2 text-xs text-amber-300">
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
                 Permission checks are skipped by settings.
               </p>
             )}
             {accessibilityGranted && (
-              <p className="mt-2 text-xs text-emerald-400">
+              <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
                 Accessibility permission detected.
               </p>
             )}
@@ -351,28 +351,28 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
         {step === 3 && (
           <div className="mt-5">
-            <p className="mb-2 text-sm text-zinc-200">
+            <p className="mb-2 text-sm text-zinc-800 dark:text-zinc-200">
               Click a text field in any app, then press the button — FlowingThoughts
               will paste a test sentence there to confirm everything works.
             </p>
             <button
               onClick={() => finish(true)}
               disabled={busy}
-              className="w-full rounded-xl bg-zinc-100 py-2 text-sm font-medium text-zinc-900 hover:bg-white disabled:opacity-60"
+              className="w-full rounded-xl bg-zinc-900 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white disabled:opacity-60"
             >
               {busy ? "Running..." : "Run End-to-End Test"}
             </button>
             <button
               onClick={() => finish(false)}
               disabled={busy}
-              className="mt-2 w-full rounded-xl border border-zinc-700 bg-zinc-900 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-60"
+              className="mt-2 w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-2 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
             >
               Skip Test and Finish
             </button>
           </div>
         )}
 
-        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+        {error && <p className="mt-3 text-xs text-red-600 dark:text-red-400">{error}</p>}
       </div>
     </div>
   );

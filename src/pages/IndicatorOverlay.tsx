@@ -69,14 +69,15 @@ export default function IndicatorOverlay() {
         overflow: "hidden",
       }}
     >
-      <div style={{ pointerEvents: "none", width: "70%", height: "58%" }}>
+      <div style={{ pointerEvents: "none", width: "72%", height: "60%" }}>
         <Waveform
           phase={phase}
           amplitude={amplitude}
-          bars={11}
+          bars={7}
+          gapClassName="gap-[2px]"
           className="w-full h-full"
           barClassName={
-            phase === "error" ? "w-[3px] bg-red-400" : "w-[3px] bg-white"
+            phase === "error" ? "w-[2px] bg-red-400" : "w-[2px] bg-white"
           }
         />
       </div>

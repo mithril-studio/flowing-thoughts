@@ -44,9 +44,45 @@ pub fn write_clipboard(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Ask the system (via AppleScript / System Events) to perform Cmd+V in the
-/// currently focused app. This sets modifier flags atomically, so it is much
-/// more reliable than simulating raw key events.
+/// Post a synthetic Cmd+V through CoreGraphics. Unlike the AppleScript route
+/// this only needs the Accessibility permission we already hold for the
+/// hotkey tap — no separate Automation ("control System Events") grant, which
+/// is what silently broke injection in bundled builds. Setting the flags on
+/// the synthetic events also overrides whatever keys (Fn, Shift) the user is
+/// still physically holding from the recording hotkey.
+#[cfg(target_os = "macos")]
+fn cgevent_paste() -> Result<(), String> {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    const KC_V: u16 = 9; // kVK_ANSI_V
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "Failed to create CGEventSource".to_string())?;
+
+    let key_down = CGEvent::new_keyboard_event(source.clone(), KC_V, true)
+        .map_err(|_| "Failed to create paste key-down event".to_string())?;
+    key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    key_down.post(CGEventTapLocation::HID);
+
+    thread::sleep(Duration::from_millis(15));
+
+    let key_up = CGEvent::new_keyboard_event(source, KC_V, false)
+        .map_err(|_| "Failed to create paste key-up event".to_string())?;
+    key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+    key_up.post(CGEventTapLocation::HID);
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cgevent_paste() -> Result<(), String> {
+    Err("Synthetic paste is only supported on macOS".to_string())
+}
+
+/// AppleScript fallback. Requires both Accessibility and the Automation
+/// permission for System Events, so it is only used when the CGEvent path
+/// fails.
 fn applescript_paste() -> Result<(), String> {
     let script = r#"tell application "System Events" to keystroke "v" using command down"#;
     let output = Command::new("osascript")
@@ -66,16 +102,28 @@ fn applescript_paste() -> Result<(), String> {
 /// Inject `text` into the currently focused app.
 ///
 /// Flow:
-/// 1. Remember the existing clipboard so we can restore it afterwards.
-/// 2. Place `text` on the clipboard.
-/// 3. Wait briefly so any modifier keys the user was still holding
-///    (e.g. Fn / Shift / Cmd from the recording hotkey) have time to clear.
-/// 4. Fire Cmd+V via AppleScript — this sets modifier flags atomically,
-///    so it ignores whatever keys are physically held.
-/// 5. Restore the original clipboard.
+/// 1. Fail fast with an actionable message if Accessibility is missing —
+///    the text is left on the clipboard so the user can paste manually.
+/// 2. Remember the existing clipboard so we can restore it afterwards.
+/// 3. Place `text` on the clipboard, give the paste target a beat.
+/// 4. Fire Cmd+V via CGEvent (AppleScript as fallback).
+/// 5. Restore the original clipboard after the target has read it — but only
+///    when the paste succeeded, so a failed injection leaves the dictation
+///    on the clipboard instead of throwing it away.
 pub fn inject_text(text: &str) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("Skipping empty text injection".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    if !crate::macos_ax::is_process_trusted(false) {
+        let _ = write_clipboard(text);
+        return Err(
+            "FlowingThoughts can't type into other apps without Accessibility permission. \
+             Your dictation is on the clipboard — press ⌘V to paste it. \
+             Enable FlowingThoughts in System Settings → Privacy & Security → Accessibility."
+                .to_string(),
+        );
     }
 
     let original_clipboard = save_clipboard();
@@ -89,15 +137,23 @@ pub fn inject_text(text: &str) -> Result<(), String> {
 
     // Give the OS a beat to register that the hotkey has been released
     // and let the clipboard settle before the paste fires.
-    thread::sleep(Duration::from_millis(80));
+    thread::sleep(Duration::from_millis(120));
 
-    let paste_result = applescript_paste();
+    let paste_result = cgevent_paste().or_else(|_| applescript_paste());
 
-    // Always try to restore the clipboard, even on failure.
-    thread::sleep(Duration::from_millis(150));
-    if let Some(ref original) = original_clipboard {
-        restore_clipboard(original);
+    match paste_result {
+        Ok(()) => {
+            // Let the target app read the clipboard before restoring it —
+            // restoring too early makes the paste land the *old* clipboard.
+            thread::sleep(Duration::from_millis(350));
+            if let Some(ref original) = original_clipboard {
+                restore_clipboard(original);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Keep the dictation on the clipboard as a manual fallback.
+            Err(format!("{e} Your dictation is on the clipboard — press ⌘V to paste it."))
+        }
     }
-
-    paste_result
 }

@@ -91,7 +91,7 @@ export default function Corrections() {
     <div className="h-full overflow-y-auto px-4 py-4 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100">Learned words</h2>
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Learned words</h2>
           <p className="text-xs text-zinc-500 mt-0.5">
             Fix a dictation once — in the target app or on Home — and it's
             applied to every future dictation.
@@ -100,20 +100,20 @@ export default function Corrections() {
         <button
           type="button"
           onClick={() => void refresh()}
-          className="rounded-lg border border-zinc-800 px-2.5 py-1 text-[11px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+          className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-2.5 py-1 text-[11px] text-zinc-600 dark:text-zinc-400 hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-200"
         >
           Refresh
         </button>
       </div>
 
       {errorMsg && (
-        <div className="rounded-xl border border-red-900/60 bg-red-950/40 p-3 text-xs text-red-300">
+        <div className="rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 p-3 text-xs text-red-700 dark:text-red-300">
           {errorMsg}
         </div>
       )}
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2">
-        <h3 className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">
+      <section className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 p-3 space-y-2">
+        <h3 className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
           Corrections
         </h3>
         {corrections.length === 0 ? (
@@ -126,10 +126,10 @@ export default function Corrections() {
             {corrections.map((c) => (
               <li
                 key={c.id}
-                className="flex items-center justify-between gap-2 border-t border-zinc-800/60 pt-1.5 text-xs"
+                className="flex items-center justify-between gap-2 border-t border-zinc-200/70 dark:border-zinc-800/60 pt-1.5 text-xs"
               >
                 <div className="flex min-w-0 flex-col gap-0.5">
-                  <span className="truncate font-mono text-emerald-300">
+                  <span className="truncate font-mono text-emerald-700 dark:text-emerald-300">
                     {c.wrong_text} → {c.intended_text}
                   </span>
                   <span className="text-[10px] text-zinc-600">
@@ -139,7 +139,7 @@ export default function Corrections() {
                 <button
                   type="button"
                   onClick={() => void deleteCorrection(c.id)}
-                  className="shrink-0 rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-red-950/40 hover:text-red-300"
+                  className="shrink-0 rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-300"
                 >
                   Delete
                 </button>
@@ -150,17 +150,17 @@ export default function Corrections() {
       </section>
 
       {topWords.length > 0 && (
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2">
-          <h3 className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">
+        <section className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 p-3 space-y-2">
+          <h3 className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
             Most corrected
           </h3>
           <ul className="space-y-1">
             {topWords.map((w, i) => (
               <li
                 key={`${w.model}-${w.wrong_text}-${i}`}
-                className="flex items-center justify-between gap-2 border-t border-zinc-800/60 pt-1.5 text-xs"
+                className="flex items-center justify-between gap-2 border-t border-zinc-200/70 dark:border-zinc-800/60 pt-1.5 text-xs"
               >
-                <span className="truncate font-mono text-amber-300">
+                <span className="truncate font-mono text-amber-700 dark:text-amber-300">
                   {w.wrong_text} → {w.intended_text}
                 </span>
                 <span className="shrink-0 text-zinc-500">×{w.occurrences}</span>
@@ -170,8 +170,8 @@ export default function Corrections() {
         </section>
       )}
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2">
-        <h3 className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">
+      <section className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 p-3 space-y-2">
+        <h3 className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">
           Recent dictations
         </h3>
         {recent.length === 0 ? (
@@ -184,7 +184,7 @@ export default function Corrections() {
               return (
                 <li
                   key={s.dictation.id}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950/80 p-2.5 space-y-1"
+                  className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/80 p-2.5 space-y-1"
                 >
                   <div className="flex items-center justify-between text-[11px] text-zinc-500">
                     <span>
@@ -201,7 +201,7 @@ export default function Corrections() {
                   {row && (
                     <p
                       className={`text-xs leading-snug ${
-                        row.error ? "italic text-red-400" : "text-zinc-200"
+                        row.error ? "italic text-red-600 dark:text-red-400" : "text-zinc-800 dark:text-zinc-200"
                       }`}
                     >
                       {row.error ?? row.text ?? "(empty)"}

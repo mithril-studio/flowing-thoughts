@@ -18,6 +18,7 @@ pub struct GeneralSettings {
     pub launch_at_login: bool,
     pub show_in_dock: bool,
     pub window_position: String,
+    pub theme: String,
 }
 
 impl Default for GeneralSettings {
@@ -27,6 +28,7 @@ impl Default for GeneralSettings {
             launch_at_login: false,
             show_in_dock: true,
             window_position: "center".to_string(),
+            theme: "light".to_string(),
         }
     }
 }
