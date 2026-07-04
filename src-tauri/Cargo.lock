@@ -1198,7 +1198,7 @@ dependencies = [
 
 [[package]]
 name = "flowing-thoughts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "core-foundation 0.9.4",
@@ -1208,6 +1208,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hound",
+ "libc",
  "rdev",
  "reqwest 0.12.28",
  "rusqlite",

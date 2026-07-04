@@ -4,6 +4,7 @@ export interface AppSettings {
     launch_at_login: boolean;
     show_in_dock: boolean;
     window_position: "center" | "top_left" | "top_right" | "bottom_left" | "bottom_right" | string;
+    theme: "light" | "dark" | "system" | string;
   };
   shortcuts: {
     preset: "cmd_shift_space" | "fn" | string;
@@ -26,6 +27,7 @@ export interface AppSettings {
   };
   transcription: {
     provider: "api" | "local";
+    local_model: string;
   };
 }
 
@@ -40,6 +42,7 @@ export const defaultAppSettings: AppSettings = {
     launch_at_login: false,
     show_in_dock: true,
     window_position: "center",
+    theme: "light",
   },
   shortcuts: {
     preset: "fn",
@@ -49,7 +52,7 @@ export const defaultAppSettings: AppSettings = {
     noise_suppression_enabled: false,
   },
   language: {
-    mode: "en",
+    mode: "system",
   },
   sound: {
     feedback_sounds_enabled: false,
@@ -61,6 +64,7 @@ export const defaultAppSettings: AppSettings = {
     auto_learn_corrections: true,
   },
   transcription: {
-    provider: "api",
+    provider: "local",
+    local_model: "whisper-small-q5",
   },
 };

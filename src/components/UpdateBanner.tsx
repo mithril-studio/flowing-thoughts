@@ -22,10 +22,11 @@ export default function UpdateBanner() {
           setStatus("idle");
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (cancelled) return;
-        setErrorMessage(String(err));
-        setStatus("error");
+        // Silent on startup check failures (offline, no release published
+        // yet) — errors only surface for a user-initiated install.
+        setStatus("idle");
       });
     return () => {
       cancelled = true;
@@ -51,7 +52,7 @@ export default function UpdateBanner() {
   if (status === "error") {
     return (
       <div className="shrink-0 bg-red-900/60 text-red-100 text-xs px-3 py-2 flex items-center justify-between">
-        <span>Update check failed: {errorMessage}</span>
+        <span>Update failed: {errorMessage}</span>
         <button
           type="button"
           onClick={() => setStatus("idle")}

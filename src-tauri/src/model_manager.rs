@@ -8,6 +8,8 @@ use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelId {
+    SmallQ5,
+    BaseQ5,
     TinyEn,
     BaseEn,
     DistilSmallEn,
@@ -15,15 +17,13 @@ pub enum ModelId {
 
 impl ModelId {
     pub fn as_str(self) -> &'static str {
-        match self {
-            ModelId::TinyEn => "whisper-tiny-en",
-            ModelId::BaseEn => "whisper-base-en",
-            ModelId::DistilSmallEn => "distil-small-en",
-        }
+        self.spec().id
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
+            "whisper-small-q5" => Some(ModelId::SmallQ5),
+            "whisper-base-q5" => Some(ModelId::BaseQ5),
             "whisper-tiny-en" => Some(ModelId::TinyEn),
             "whisper-base-en" => Some(ModelId::BaseEn),
             "distil-small-en" => Some(ModelId::DistilSmallEn),
@@ -31,35 +31,73 @@ impl ModelId {
         }
     }
 
-    pub fn all() -> [ModelId; 3] {
-        [ModelId::TinyEn, ModelId::BaseEn, ModelId::DistilSmallEn]
+    pub fn all() -> [ModelId; 5] {
+        [
+            ModelId::SmallQ5,
+            ModelId::BaseQ5,
+            ModelId::TinyEn,
+            ModelId::BaseEn,
+            ModelId::DistilSmallEn,
+        ]
+    }
+
+    /// Multilingual models accept a language hint (or auto-detect); the
+    /// `.en` variants only transcribe English.
+    pub fn is_multilingual(self) -> bool {
+        matches!(self, ModelId::SmallQ5 | ModelId::BaseQ5)
     }
 
     fn spec(self) -> ModelSpec {
         match self {
+            ModelId::SmallQ5 => ModelSpec {
+                id: "whisper-small-q5",
+                display_name: "Whisper Small (English + Dutch)",
+                description: "Best quality under 0.5 GB RAM. Recommended.",
+                filename: "ggml-small-q5_1.bin",
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+                sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+                size_bytes: 190_085_487,
+                multilingual: true,
+            },
+            ModelId::BaseQ5 => ModelSpec {
+                id: "whisper-base-q5",
+                display_name: "Whisper Base (English + Dutch)",
+                description: "Fast and tiny. Lower accuracy than Small.",
+                filename: "ggml-base-q5_1.bin",
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+                sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+                size_bytes: 59_707_625,
+                multilingual: true,
+            },
             ModelId::TinyEn => ModelSpec {
                 id: "whisper-tiny-en",
-                display_name: "Whisper tiny.en",
+                display_name: "Whisper Tiny (English only)",
+                description: "Fastest, English only.",
                 filename: "ggml-tiny.en.bin",
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
                 sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
                 size_bytes: 77_704_715,
+                multilingual: false,
             },
             ModelId::BaseEn => ModelSpec {
                 id: "whisper-base-en",
-                display_name: "Whisper base.en",
+                display_name: "Whisper Base (English only)",
+                description: "Balanced, English only.",
                 filename: "ggml-base.en.bin",
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
                 sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
                 size_bytes: 147_964_211,
+                multilingual: false,
             },
             ModelId::DistilSmallEn => ModelSpec {
                 id: "distil-small-en",
-                display_name: "Distil-Whisper small.en",
+                display_name: "Distil-Whisper Small (English only)",
+                description: "High English accuracy, no Dutch.",
                 filename: "ggml-distil-small.en.bin",
                 url: "https://huggingface.co/distil-whisper/distil-small.en/resolve/main/ggml-distil-small.en.bin",
                 sha256: "7691eb11167ab7aaf6b3e05d8266f2fd9ad89c550e433f86ac266ebdee6c970a",
                 size_bytes: 336_191_657,
+                multilingual: false,
             },
         }
     }
@@ -68,20 +106,24 @@ impl ModelId {
 struct ModelSpec {
     id: &'static str,
     display_name: &'static str,
+    description: &'static str,
     filename: &'static str,
     url: &'static str,
     sha256: &'static str,
     size_bytes: u64,
+    multilingual: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InstalledModel {
     pub id: String,
     pub display_name: String,
+    pub description: String,
     pub filename: String,
     pub installed: bool,
     pub expected_size_bytes: u64,
     pub local_path: Option<String>,
+    pub multilingual: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -126,6 +168,7 @@ pub fn list_installed() -> Result<Vec<InstalledModel>, String> {
         out.push(InstalledModel {
             id: spec.id.to_string(),
             display_name: spec.display_name.to_string(),
+            description: spec.description.to_string(),
             filename: spec.filename.to_string(),
             installed,
             expected_size_bytes: spec.size_bytes,
@@ -134,6 +177,7 @@ pub fn list_installed() -> Result<Vec<InstalledModel>, String> {
             } else {
                 None
             },
+            multilingual: spec.multilingual,
         });
     }
     Ok(out)

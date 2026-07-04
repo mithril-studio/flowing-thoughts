@@ -1,1 +1,51 @@
 @import "tailwindcss";
+
+/* Class-based dark mode: `dark:` utilities activate under a `.dark` ancestor
+   (toggled from the theme setting) instead of the OS media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+html,
+body,
+#root {
+  background: transparent;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(212 212 216 / 0.9);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(161 161 170 / 0.9);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgb(63 63 70 / 0.6);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgb(82 82 91 / 0.8);
+}

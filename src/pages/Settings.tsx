@@ -36,10 +36,12 @@ interface AccessibilityHelpInfo {
 interface InstalledModel {
   id: string;
   display_name: string;
+  description: string;
   filename: string;
   installed: boolean;
   expected_size_bytes: number;
   local_path: string | null;
+  multilingual: boolean;
 }
 
 interface DownloadProgress {
@@ -96,6 +98,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [openaiConfigured, setOpenaiConfigured] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState<boolean | null>(null);
+  const [inputMonitoringGranted, setInputMonitoringGranted] = useState<boolean | null>(null);
   const [helpInfo, setHelpInfo] = useState<AccessibilityHelpInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -159,7 +162,12 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
         setUpdateStatus("latest");
       }
     } catch (e) {
-      setUpdateMessage(String(e));
+      const message = String(e);
+      setUpdateMessage(
+        message.includes("Could not fetch a valid release JSON")
+          ? "No published release found yet — you're on the latest build."
+          : message,
+      );
       setUpdateStatus("error");
     }
   };
@@ -209,15 +217,18 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       });
       void fetchModels();
     });
-    const errorUnlisten = listen<{ id: string; error: string }>("model-download-error", (event) => {
-      setDownloadingModel((current) => (current === event.payload.id ? null : current));
-      setModelError(`${event.payload.id}: ${event.payload.error}`);
-      setModelProgress((prev) => {
-        const next = { ...prev };
-        delete next[event.payload.id];
-        return next;
-      });
-    });
+    const errorUnlisten = listen<{ id: string; message: string }>(
+      "model-download-error",
+      (event) => {
+        setDownloadingModel((current) => (current === event.payload.id ? null : current));
+        setModelError(`${event.payload.id}: ${event.payload.message}`);
+        setModelProgress((prev) => {
+          const next = { ...prev };
+          delete next[event.payload.id];
+          return next;
+        });
+      },
+    );
     return () => {
       void progressUnlisten.then((fn) => fn());
       void completeUnlisten.then((fn) => fn());
@@ -245,8 +256,6 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       setModelError(String(e));
     }
   };
-
-  const anyModelInstalled = models.some((m) => m.installed);
 
   const persist = async (next: AppSettings) => {
     setBusy(true);
@@ -310,87 +319,371 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     }
   };
 
-  const checkAccessibility = async () => {
+  // Silent status polling — no system prompts. Statuses flip to green by
+  // themselves once the user flips the toggles in System Settings.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      invoke<boolean>("check_accessibility_permission", { prompt: false })
+        .then((granted) => {
+          if (!cancelled) setAccessibilityGranted(granted);
+        })
+        .catch(() => {});
+      invoke<boolean>("check_input_monitoring_permission", { prompt: false })
+        .then((granted) => {
+          if (!cancelled) setInputMonitoringGranted(granted);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Explicit request — shows the macOS permission dialogs when not granted.
+  const requestPermissions = async () => {
     setSetupBusy(true);
     setError(null);
     try {
-      const granted = await invoke<boolean>("check_accessibility_permission");
-      setAccessibilityGranted(granted);
+      const accessibility = await invoke<boolean>("check_accessibility_permission", {
+        prompt: true,
+      });
+      setAccessibilityGranted(accessibility);
+      const inputMonitoring = await invoke<boolean>(
+        "check_input_monitoring_permission",
+        { prompt: true },
+      );
+      setInputMonitoringGranted(inputMonitoring);
     } catch (e) {
       setError(String(e));
-      setAccessibilityGranted(false);
     } finally {
       setSetupBusy(false);
     }
   };
 
-  return (
-    <div className="h-full overflow-y-auto px-4 py-4 space-y-4">
-      <h2 className="text-sm font-medium text-white">Settings</h2>
+  const selectedLocalModel = local.transcription.local_model;
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Setup Steps</h3>
-        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2">
-          <p className="text-sm text-neutral-200">Accessibility</p>
-          <p className="text-xs text-neutral-400">
-            Status:{" "}
-            {accessibilityGranted === null
-              ? "Not checked"
-              : accessibilityGranted
-                ? "Granted"
-                : "Not granted"}
-          </p>
-          <div className="grid grid-cols-1 gap-2">
-            <button
-              type="button"
-              onClick={checkAccessibility}
-              disabled={setupBusy}
-              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800 disabled:opacity-60"
-            >
-              {setupBusy ? "Checking..." : "Check Accessibility"}
-            </button>
-            <button
-              type="button"
-              onClick={() => invoke("open_accessibility_settings").catch((e) => setError(String(e)))}
-              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
-            >
-              Open Accessibility Settings
-            </button>
-            <button
-              type="button"
-              onClick={() => invoke("reveal_current_executable").catch((e) => setError(String(e)))}
-              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
-            >
-              Reveal Running App in Finder
-            </button>
-          </div>
-          {helpInfo && (
-            <p className="text-[11px] text-neutral-500 break-all">
-              {helpInfo.note} {helpInfo.executable_path}
-            </p>
-          )}
+  return (
+    <div className="h-full space-y-4 overflow-y-auto px-4 py-4">
+      <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Settings</h2>
+
+      <Section title="Transcription">
+        <div className="grid grid-cols-2 gap-2">
+          <ProviderTile
+            title="On-device"
+            subtitle="Private, free, works offline"
+            selected={local.transcription.provider === "local"}
+            disabled={busy}
+            onClick={() =>
+              update({
+                ...local,
+                transcription: { ...local.transcription, provider: "local" },
+              })
+            }
+          />
+          <ProviderTile
+            title="Cloud API"
+            subtitle="Groq / OpenAI, needs a key"
+            selected={local.transcription.provider === "api"}
+            disabled={busy}
+            onClick={() =>
+              update({
+                ...local,
+                transcription: { ...local.transcription, provider: "api" },
+              })
+            }
+          />
         </div>
 
-        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2">
-          <p className="text-sm text-neutral-200">Shortcut Step</p>
-          <p className="text-xs text-neutral-400">
-            Active shortcut: {local.shortcuts.preset === "fn" ? "Fn (hold)" : "Cmd+Shift+Space (hold)"}
-          </p>
+        {local.transcription.provider === "local" && (
+        <div className="space-y-2 pt-1">
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">Local models</p>
+          {models.length === 0 && <p className="text-xs text-zinc-500">Loading…</p>}
+          {models.map((model) => {
+            const progress = modelProgress[model.id];
+            const isDownloading = downloadingModel === model.id;
+            const isSelected = selectedLocalModel === model.id;
+            const percent =
+              progress && progress.total_bytes > 0
+                ? Math.min(
+                    100,
+                    Math.floor((progress.bytes_downloaded / progress.total_bytes) * 100),
+                  )
+                : 0;
+            return (
+              <div
+                key={model.id}
+                className={`space-y-2 rounded-xl border p-3 transition-colors ${
+                  isSelected && model.installed
+                    ? "border-emerald-600/60 bg-emerald-50 dark:bg-emerald-950/20"
+                    : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/80"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className="truncate text-sm text-zinc-800 dark:text-zinc-200">{model.display_name}</p>
+                      {model.multilingual && (
+                        <span className="shrink-0 rounded-full border border-sky-200 dark:border-sky-800 bg-sky-100 dark:bg-sky-950/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-sky-700 dark:text-sky-300">
+                          EN + NL
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      {model.description} · {formatBytes(model.expected_size_bytes)}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {model.installed ? (
+                      <>
+                        {isSelected ? (
+                          <span className="rounded-lg bg-emerald-100 dark:bg-emerald-900/60 px-2.5 py-1.5 text-xs text-emerald-700 dark:text-emerald-300">
+                            Active
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              update({
+                                ...local,
+                                transcription: {
+                                  provider: "local",
+                                  local_model: model.id,
+                                },
+                              })
+                            }
+                            className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                          >
+                            Use
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeModel(model.id)}
+                          className="rounded-lg px-2 py-1.5 text-xs text-zinc-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-300"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startDownload(model.id)}
+                        disabled={isDownloading}
+                        className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
+                      >
+                        {isDownloading ? "Downloading…" : "Download"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {isDownloading && progress && (
+                  <div className="space-y-1">
+                    <div className="h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-800">
+                      <div
+                        className="h-full rounded-full bg-emerald-500 transition-all"
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      {formatBytes(progress.bytes_downloaded)} /{" "}
+                      {formatBytes(progress.total_bytes)} ({percent}%)
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {modelError && <p className="text-xs text-red-700 dark:text-red-300">{modelError}</p>}
+        </div>
+        )}
+
+        {local.transcription.provider === "api" && (
+        <div className="space-y-3 pt-1">
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">Active provider</p>
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Active provider">
+              {(Object.keys(PROVIDER_META) as Provider[]).map((key) => {
+                const selected = activeProvider === key;
+                const configured = key === "groq" ? groqConfigured : openaiConfigured;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={apiBusy}
+                    onClick={() => switchActiveProvider(key)}
+                    className={`rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
+                      selected
+                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300"
+                        : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-700 dark:text-zinc-300 hover:border-zinc-400 dark:hover:border-zinc-600"
+                    } ${apiBusy ? "cursor-not-allowed opacity-60" : ""}`}
+                  >
+                    <div className="font-medium">{PROVIDER_META[key].label}</div>
+                    <div className="text-[11px] text-zinc-500">
+                      {configured ? "configured" : "not configured"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">Edit key for</p>
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(PROVIDER_META) as Provider[]).map((key) => {
+                const selected = editingProvider === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setEditingProvider(key);
+                      setApiKey("");
+                      setApiMessage(null);
+                    }}
+                    className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                      selected
+                        ? "border-zinc-500 bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-600 dark:text-zinc-400 hover:border-zinc-400 dark:hover:border-zinc-600"
+                    }`}
+                  >
+                    {PROVIDER_META[key].label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={editingMeta.placeholder}
+            className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500"
+          />
           <button
             type="button"
-            onClick={() => invoke("open_input_monitoring_settings").catch((e) => setError(String(e)))}
-            className="w-full rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
+            onClick={saveApiKey}
+            disabled={apiBusy}
+            className="w-full rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white disabled:opacity-60"
           >
-            Open Input Monitoring Settings
+            {apiBusy ? "Saving..." : `Save ${editingMeta.label} API Key`}
           </button>
-          <p className="text-[11px] text-neutral-500">
-            Ensure your terminal or app is allowed in both Accessibility and Input Monitoring.
-          </p>
+          <a
+            href={editingMeta.docsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block text-[11px] text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
+          >
+            How to get a {editingMeta.label} API key →
+          </a>
+          {apiMessage && <p className="text-xs text-zinc-700 dark:text-zinc-300">{apiMessage}</p>}
         </div>
-      </section>
+        )}
+      </Section>
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">General</h3>
+      <Section title="Language">
+        <div className="grid grid-cols-3 gap-2">
+          <Choice
+            label="Auto"
+            selected={local.language.mode === "system"}
+            onClick={() =>
+              update({ ...local, language: { ...local.language, mode: "system" } })
+            }
+            disabled={busy}
+          />
+          <Choice
+            label="English"
+            selected={local.language.mode === "en"}
+            onClick={() =>
+              update({ ...local, language: { ...local.language, mode: "en" } })
+            }
+            disabled={busy}
+          />
+          <Choice
+            label="Nederlands"
+            selected={local.language.mode === "nl"}
+            onClick={() =>
+              update({ ...local, language: { ...local.language, mode: "nl" } })
+            }
+            disabled={busy}
+          />
+        </div>
+        {local.transcription.provider === "local" &&
+          local.language.mode !== "en" &&
+          models.some((m) => m.id === selectedLocalModel && !m.multilingual) && (
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              The active local model is English-only. Pick a model marked EN + NL for
+              Dutch.
+            </p>
+          )}
+      </Section>
+
+      <Section title="Shortcut">
+        <div className="grid grid-cols-2 gap-2">
+          <Choice
+            label="Fn (hold)"
+            selected={local.shortcuts.preset === "fn"}
+            onClick={() =>
+              update({ ...local, shortcuts: { ...local.shortcuts, preset: "fn" } })
+            }
+            disabled={busy}
+          />
+          <Choice
+            label="⌘⇧Space (hold)"
+            selected={local.shortcuts.preset === "cmd_shift_space"}
+            onClick={() =>
+              update({
+                ...local,
+                shortcuts: { ...local.shortcuts, preset: "cmd_shift_space" },
+              })
+            }
+            disabled={busy}
+          />
+        </div>
+        <p className="text-[11px] text-zinc-500">
+          Hold the shortcut anywhere, speak, release — the text is typed into the
+          focused app.
+        </p>
+      </Section>
+
+      <Section title="General">
+        <div className="space-y-1">
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">Theme</p>
+          <div className="grid grid-cols-3 gap-2">
+            <Choice
+              label="Light"
+              selected={local.general.theme === "light"}
+              onClick={() =>
+                update({ ...local, general: { ...local.general, theme: "light" } })
+              }
+              disabled={busy}
+            />
+            <Choice
+              label="Dark"
+              selected={local.general.theme === "dark"}
+              onClick={() =>
+                update({ ...local, general: { ...local.general, theme: "dark" } })
+              }
+              disabled={busy}
+            />
+            <Choice
+              label="System"
+              selected={local.general.theme === "system"}
+              onClick={() =>
+                update({ ...local, general: { ...local.general, theme: "system" } })
+              }
+              disabled={busy}
+            />
+          </div>
+        </div>
         <Toggle
           label="Window movable"
           checked={local.general.window_movable}
@@ -425,7 +718,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           disabled={busy}
         />
         <div className="space-y-1">
-          <p className="text-xs text-neutral-400">Window position</p>
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">Window position</p>
           <select
             value={local.general.window_position}
             disabled={busy}
@@ -435,7 +728,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
                 general: { ...local.general, window_position: e.target.value },
               })
             }
-            className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-200"
+            className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200"
           >
             <option value="center">Center</option>
             <option value="top_left">Top left</option>
@@ -444,281 +737,9 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
             <option value="bottom_right">Bottom right</option>
           </select>
         </div>
-      </section>
+      </Section>
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Shortcuts</h3>
-        <Choice
-          label="Cmd+Shift+Space (hold)"
-          selected={local.shortcuts.preset === "cmd_shift_space"}
-          onClick={() =>
-            update({
-              ...local,
-              shortcuts: { ...local.shortcuts, preset: "cmd_shift_space" },
-            })
-          }
-          disabled={busy}
-        />
-        <Choice
-          label="Fn (hold)"
-          selected={local.shortcuts.preset === "fn"}
-          onClick={() =>
-            update({
-              ...local,
-              shortcuts: { ...local.shortcuts, preset: "fn" },
-            })
-          }
-          disabled={busy}
-        />
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Transcription</h3>
-        <div className="grid grid-cols-2 gap-2">
-          <ProviderTile
-            title="API"
-            subtitle="OpenAI Whisper"
-            selected={local.transcription.provider === "api"}
-            disabled={busy}
-            onClick={() =>
-              update({
-                ...local,
-                transcription: { ...local.transcription, provider: "api" },
-              })
-            }
-          />
-          <ProviderTile
-            title="Local"
-            subtitle={anyModelInstalled ? "On-device" : "Install a model first"}
-            selected={local.transcription.provider === "local"}
-            disabled={busy || !anyModelInstalled}
-            onClick={() =>
-              update({
-                ...local,
-                transcription: { ...local.transcription, provider: "local" },
-              })
-            }
-          />
-        </div>
-        {local.transcription.provider === "local" && (
-          <p className="text-[11px] text-neutral-500">
-            Lab mode active: every dictation runs on API + 3 local models. Pick the best result.
-          </p>
-        )}
-        <div className="space-y-2 pt-1">
-          <p className="text-xs text-neutral-400">Local models</p>
-          {models.length === 0 && (
-            <p className="text-xs text-neutral-500">Loading…</p>
-          )}
-          {models.map((model) => {
-            const progress = modelProgress[model.id];
-            const isDownloading = downloadingModel === model.id;
-            const percent =
-              progress && progress.total_bytes > 0
-                ? Math.min(100, Math.floor((progress.bytes_downloaded / progress.total_bytes) * 100))
-                : 0;
-            return (
-              <div
-                key={model.id}
-                className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm text-neutral-200">{model.display_name}</p>
-                    <p className="text-[11px] text-neutral-500">
-                      {formatBytes(model.expected_size_bytes)}{" "}
-                      {model.installed ? (
-                        <span className="text-emerald-400">• installed</span>
-                      ) : (
-                        <span className="text-neutral-500">• not installed</span>
-                      )}
-                    </p>
-                  </div>
-                  {model.installed ? (
-                    <button
-                      type="button"
-                      onClick={() => removeModel(model.id)}
-                      className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-800"
-                    >
-                      Delete
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => startDownload(model.id)}
-                      disabled={isDownloading}
-                      className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-60"
-                    >
-                      {isDownloading ? "Downloading…" : "Download"}
-                    </button>
-                  )}
-                </div>
-                {isDownloading && progress && (
-                  <div className="space-y-1">
-                    <div className="h-1.5 w-full rounded-full bg-neutral-800">
-                      <div
-                        className="h-full rounded-full bg-emerald-500 transition-all"
-                        style={{ width: `${percent}%` }}
-                      />
-                    </div>
-                    <p className="text-[11px] text-neutral-500">
-                      {formatBytes(progress.bytes_downloaded)} / {formatBytes(progress.total_bytes)} ({percent}%)
-                    </p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {modelError && (
-            <p className="text-xs text-red-300">{modelError}</p>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">API</h3>
-
-        <div className="space-y-2">
-          <p className="text-xs text-neutral-400">Active provider</p>
-          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Active provider">
-            {(Object.keys(PROVIDER_META) as Provider[]).map((key) => {
-              const selected = activeProvider === key;
-              const configured =
-                key === "groq" ? groqConfigured : openaiConfigured;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  disabled={apiBusy}
-                  onClick={() => switchActiveProvider(key)}
-                  className={`rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                    selected
-                      ? "border-emerald-500 bg-emerald-950/30 text-emerald-300"
-                      : "border-neutral-700 bg-neutral-950 text-neutral-300 hover:border-neutral-600"
-                  } ${apiBusy ? "opacity-60 cursor-not-allowed" : ""}`}
-                >
-                  <div className="font-medium">{PROVIDER_META[key].label}</div>
-                  <div className="text-[11px] text-neutral-500">
-                    {configured ? "configured" : "not configured"}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <p className="text-xs text-neutral-400">Edit key for</p>
-          <div className="grid grid-cols-2 gap-2">
-            {(Object.keys(PROVIDER_META) as Provider[]).map((key) => {
-              const selected = editingProvider === key;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => {
-                    setEditingProvider(key);
-                    setApiKey("");
-                    setApiMessage(null);
-                  }}
-                  className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
-                    selected
-                      ? "border-neutral-500 bg-neutral-800 text-neutral-100"
-                      : "border-neutral-700 bg-neutral-950 text-neutral-400 hover:border-neutral-600"
-                  }`}
-                >
-                  {PROVIDER_META[key].label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={editingMeta.placeholder}
-          className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500"
-        />
-        <button
-          type="button"
-          onClick={saveApiKey}
-          disabled={apiBusy}
-          className="w-full rounded-md bg-white px-3 py-2 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-60"
-        >
-          {apiBusy ? "Saving..." : `Save ${editingMeta.label} API Key`}
-        </button>
-        <a
-          href={editingMeta.docsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block text-[11px] text-neutral-500 hover:text-neutral-300 underline"
-        >
-          How to get a {editingMeta.label} API key →
-        </a>
-        {apiMessage && <p className="text-xs text-neutral-300">{apiMessage}</p>}
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Microphone</h3>
-        <p className="text-xs text-neutral-300">Input device: System default</p>
-        <DisabledToggle label="Noise suppression" />
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Language</h3>
-        <Choice
-          label="English"
-          selected={local.language.mode === "en"}
-          onClick={() =>
-            update({
-              ...local,
-              language: { ...local.language, mode: "en" },
-            })
-          }
-          disabled={busy}
-        />
-        <Choice
-          label="Dutch"
-          selected={local.language.mode === "nl"}
-          onClick={() =>
-            update({
-              ...local,
-              language: { ...local.language, mode: "nl" },
-            })
-          }
-          disabled={busy}
-        />
-        <Choice
-          label="Auto-detect"
-          selected={local.language.mode === "system"}
-          onClick={() =>
-            update({
-              ...local,
-              language: { ...local.language, mode: "system" },
-            })
-          }
-          disabled={busy}
-        />
-        {local.transcription.provider === "local" &&
-          local.language.mode !== "en" && (
-            <p className="text-xs text-amber-300">
-              Local models are English-only. Dutch requires Groq or OpenAI.
-            </p>
-          )}
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-2">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Sound Settings</h3>
-        <DisabledToggle label="Feedback sounds" />
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">Extras</h3>
-        <DisabledToggle label="Auto-add to dictionary" />
+      <Section title="Extras">
         <Toggle
           label="Smart formatting"
           checked={local.extras.smart_formatting}
@@ -742,8 +763,9 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
             }
             disabled={busy}
           />
-          <p className="text-xs text-neutral-500 pl-1">
-            When you fix a dictation in the target app or on the Home page, FlowingThoughts remembers the correction and applies it next time.
+          <p className="pl-1 text-xs text-zinc-500">
+            When you fix a dictation in the target app or on the Home page,
+            FlowingThoughts remembers the correction and applies it next time.
           </p>
         </div>
         <Toggle
@@ -758,39 +780,79 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
           disabled={busy}
         />
         {local.extras.dangerously_skip_permissions && (
-          <p className="text-xs text-amber-300">
-            Warning: This bypasses permission checks in onboarding and may cause injection failures.
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            Warning: This bypasses permission checks in onboarding and may cause
+            injection failures.
           </p>
         )}
-      </section>
+      </Section>
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-3">
-        <h3 className="text-xs text-neutral-400 uppercase tracking-wide">About</h3>
-        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-3 space-y-2">
+      <Section title="Permissions">
+        <PermissionRow
+          title="Accessibility"
+          description="Lets FlowingThoughts type dictations into other apps."
+          granted={accessibilityGranted}
+          onOpenSettings={() =>
+            invoke("open_accessibility_settings").catch((e) => setError(String(e)))
+          }
+        />
+        <PermissionRow
+          title="Input Monitoring"
+          description="Lets the hotkey work while you're in other apps."
+          granted={inputMonitoringGranted}
+          onOpenSettings={() =>
+            invoke("open_input_monitoring_settings").catch((e) => setError(String(e)))
+          }
+        />
+        <p className="text-[11px] text-zinc-500">
+          Statuses refresh automatically. Toggle on but still "Not granted"?
+          Remove FlowingThoughts from the list with the − button, add it again,
+          and restart the app — after an app update macOS can treat it as a new
+          app.
+        </p>
+        <div className="grid grid-cols-1 gap-2">
+          <SecondaryButton onClick={requestPermissions} disabled={setupBusy}>
+            {setupBusy ? "Requesting…" : "Request Permission Prompts"}
+          </SecondaryButton>
+          <SecondaryButton
+            onClick={() =>
+              invoke("reveal_current_executable").catch((e) => setError(String(e)))
+            }
+          >
+            Reveal Running App in Finder
+          </SecondaryButton>
+        </div>
+        {helpInfo && (
+          <p className="break-all text-[11px] text-zinc-500">
+            {helpInfo.note} {helpInfo.executable_path}
+          </p>
+        )}
+      </Section>
+
+      <Section title="About">
+        <div className="space-y-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/80 p-3">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm text-neutral-200">FlowingThoughts</p>
-              <p className="text-[11px] text-neutral-500 font-mono">
-                {appVersion
-                  ? `v${appVersion.version} (${appVersion.commit})`
-                  : "Loading…"}
+              <p className="text-sm text-zinc-800 dark:text-zinc-200">FlowingThoughts</p>
+              <p className="font-mono text-[11px] text-zinc-500">
+                {appVersion ? `v${appVersion.version} (${appVersion.commit})` : "Loading…"}
               </p>
             </div>
             <button
               type="button"
               onClick={copyVersion}
               disabled={!appVersion}
-              className={`text-xs px-2 py-1 rounded border transition-colors ${
+              className={`rounded-lg border px-2 py-1 text-xs transition-colors ${
                 versionCopied
-                  ? "border-emerald-600 bg-emerald-900/40 text-emerald-300"
-                  : "border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
+                  ? "border-emerald-300 dark:border-emerald-600 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300"
+                  : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
               } disabled:opacity-50`}
             >
               {versionCopied ? "Copied" : "Copy"}
             </button>
           </div>
           <div className="flex items-center justify-between gap-2 pt-1">
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
               {updateStatus === "idle" && "Check for a newer release."}
               {updateStatus === "checking" && "Checking for updates…"}
               {updateStatus === "latest" && "You're on the latest version."}
@@ -804,7 +866,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
               <button
                 type="button"
                 onClick={installPendingUpdate}
-                className="text-xs px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
+                className="rounded-lg bg-emerald-700 px-3 py-1 text-xs text-white hover:bg-emerald-600"
               >
                 Install & restart
               </button>
@@ -813,17 +875,24 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
                 type="button"
                 onClick={checkForUpdates}
                 disabled={updateStatus === "checking" || updateStatus === "installing"}
-                className="text-xs px-3 py-1 rounded border border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+                className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
               >
                 {updateStatus === "checking" ? "Checking…" : "Check for updates"}
               </button>
             )}
           </div>
+          <button
+            type="button"
+            onClick={() => invoke("open_logs_folder").catch((e) => setError(String(e)))}
+            className="text-[11px] text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
+          >
+            Open logs folder
+          </button>
         </div>
-      </section>
+      </Section>
 
       {warnings.length > 0 && (
-        <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-3 text-xs text-amber-300">
+        <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 p-3 text-xs text-amber-700 dark:text-amber-300">
           {warnings.map((warning, index) => (
             <p key={index}>{warning}</p>
           ))}
@@ -831,11 +900,92 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       )}
 
       {error && (
-        <div className="rounded-lg border border-red-900 bg-red-950/40 p-3 text-xs text-red-300">
+        <div className="rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 p-3 text-xs text-red-700 dark:text-red-300">
           {error}
         </div>
       )}
     </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 p-3">
+      <h3 className="text-[11px] font-medium uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function PermissionRow({
+  title,
+  description,
+  granted,
+  onOpenSettings,
+}: {
+  title: string;
+  description: string;
+  granted: boolean | null;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between gap-3 rounded-xl border p-3 transition-colors ${
+        granted
+          ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
+          : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/80"
+      }`}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-zinc-800 dark:text-zinc-200">{title}</p>
+          <span
+            className={`shrink-0 rounded-full px-2 py-px text-[10px] font-medium ${
+              granted === null
+                ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                : granted
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300"
+                  : "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300"
+            }`}
+          >
+            {granted === null ? "Checking…" : granted ? "✓ Granted" : "Not granted"}
+          </span>
+        </div>
+        <p className="text-[11px] text-zinc-500">{description}</p>
+      </div>
+      {!granted && (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="shrink-0 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-800 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
+          Open Settings
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SecondaryButton({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -851,20 +1001,21 @@ function Toggle({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 text-sm text-neutral-200">
+    <label className="flex items-center justify-between gap-3 text-sm text-zinc-800 dark:text-zinc-200">
       <span className="min-w-0 flex-1">{label}</span>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-label={label}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={`h-6 w-11 shrink-0 rounded-full px-0.5 flex items-center transition-colors ${
-          checked ? "bg-emerald-500" : "bg-neutral-700"
-        } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
+        className={`flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors ${
+          checked ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700"
+        } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
       >
         <span
-          className={`h-5 w-5 rounded-full bg-white transition-all ${
+          className={`h-5 w-5 rounded-full bg-white shadow transition-all ${
             checked ? "ml-auto" : ""
           }`}
         />
@@ -889,23 +1040,14 @@ function Choice({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`w-full rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+      className={`w-full rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
         selected
-          ? "border-emerald-500 bg-emerald-950/30 text-emerald-300"
-          : "border-neutral-700 bg-neutral-950 text-neutral-300 hover:border-neutral-600"
-      } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
+          ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300"
+          : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-700 dark:text-zinc-300 hover:border-zinc-400 dark:hover:border-zinc-600"
+      } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
     >
       {label}
     </button>
-  );
-}
-
-function DisabledToggle({ label }: { label: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm text-neutral-500">
-      <span>{label}</span>
-      <span className="text-[10px] uppercase tracking-wide text-neutral-600">Coming soon</span>
-    </div>
   );
 }
 
@@ -927,16 +1069,16 @@ function ProviderTile({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-md border px-3 py-3 text-left transition-colors ${
+      className={`rounded-xl border px-3 py-3 text-left transition-colors ${
         selected
-          ? "border-emerald-500 bg-emerald-950/30"
-          : "border-neutral-700 bg-neutral-950 hover:border-neutral-600"
-      } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
+          ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30"
+          : "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 hover:border-zinc-400 dark:hover:border-zinc-600"
+      } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
     >
-      <p className={`text-sm font-medium ${selected ? "text-emerald-300" : "text-neutral-200"}`}>
+      <p className={`text-sm font-medium ${selected ? "text-emerald-700 dark:text-emerald-300" : "text-zinc-800 dark:text-zinc-200"}`}>
         {title}
       </p>
-      <p className="text-[11px] text-neutral-500">{subtitle}</p>
+      <p className="text-[11px] text-zinc-500">{subtitle}</p>
     </button>
   );
 }

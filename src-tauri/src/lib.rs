@@ -4,12 +4,13 @@ use tauri::{
     ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 use std::process::Command;
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const HOLD_TO_START_MS: u64 = 500;
+/// Recordings shorter than this are treated as accidental hotkey taps and
+/// discarded silently — no error toast, no pipeline run.
+const MIN_DICTATION_MS: u64 = 300;
 
 mod audio;
 #[cfg(target_os = "macos")]
@@ -17,7 +18,6 @@ mod ax_snapshot;
 mod corrections;
 mod db;
 mod hotkey;
-mod lab;
 mod local_transcribe;
 #[cfg(target_os = "macos")]
 mod macos_ax;
@@ -300,12 +300,22 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if !valid_language_modes.contains(&settings.language.mode.as_str()) {
         settings.language.mode = "system".to_string();
     }
+    if settings.transcription.provider != "local" && settings.transcription.provider != "api" {
+        settings.transcription.provider = "local".to_string();
+    }
+    if model_manager::ModelId::from_str(&settings.transcription.local_model).is_none() {
+        settings.transcription.local_model = "whisper-small-q5".to_string();
+    }
     if settings.microphone.input_device.trim().is_empty() {
         settings.microphone.input_device = "system_default".to_string();
     }
     let valid_positions = ["center", "top_left", "top_right", "bottom_left", "bottom_right"];
     if !valid_positions.contains(&settings.general.window_position.as_str()) {
         settings.general.window_position = "center".to_string();
+    }
+    let valid_themes = ["light", "dark", "system"];
+    if !valid_themes.contains(&settings.general.theme.as_str()) {
+        settings.general.theme = "light".to_string();
     }
 }
 
@@ -449,18 +459,20 @@ fn update_app_settings(
     let mut next_settings = settings;
     sanitize_settings(&mut next_settings);
 
-    {
+    let previous_settings = {
         let mut state = persisted
             .inner()
             .lock()
             .map_err(|_| "Persisted state lock poisoned".to_string())?;
+        let previous = state.settings.clone();
         state.settings = next_settings.clone();
         let conn = db_conn
             .inner()
             .lock()
             .map_err(|_| "DB lock poisoned".to_string())?;
         storage::save(&conn, &state)?;
-    }
+        previous
+    };
 
     if hotkey::mode_from_env().is_none() {
         if let Ok(mut mode) = hotkey_mode.inner().lock() {
@@ -468,18 +480,31 @@ fn update_app_settings(
         }
     }
 
+    // Only apply (and only warn about) side effects for settings the user
+    // actually changed — re-applying everything on every toggle produced
+    // spurious "settings not correct" warnings and re-centred the window.
     let mut warnings = Vec::new();
     if let Some(window) = app.get_webview_window("main") {
-        apply_window_movable(&window, next_settings.general.window_movable);
-        if let Err(e) = apply_window_position(&window, &next_settings.general.window_position) {
+        if next_settings.general.window_movable != previous_settings.general.window_movable {
+            apply_window_movable(&window, next_settings.general.window_movable);
+        }
+        if next_settings.general.window_position != previous_settings.general.window_position {
+            if let Err(e) =
+                apply_window_position(&window, &next_settings.general.window_position)
+            {
+                warnings.push(e);
+            }
+        }
+    }
+    if next_settings.general.show_in_dock != previous_settings.general.show_in_dock {
+        if let Err(e) = apply_show_in_dock(&app, next_settings.general.show_in_dock) {
             warnings.push(e);
         }
     }
-    if let Err(e) = apply_show_in_dock(&app, next_settings.general.show_in_dock) {
-        warnings.push(e);
-    }
-    if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
-        warnings.push(e);
+    if next_settings.general.launch_at_login != previous_settings.general.launch_at_login {
+        if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
+            warnings.push(e);
+        }
     }
 
     for message in &warnings {
@@ -519,17 +544,37 @@ fn save_onboarding_state(
 }
 
 #[tauri::command]
-fn check_accessibility_permission() -> Result<bool, String> {
+fn check_accessibility_permission(prompt: Option<bool>) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        // `prompt: true` registers FlowingThoughts in
-        // System Settings > Privacy & Security > Accessibility the first time
-        // it's called, and surfaces a system dialog if the user hasn't toggled
-        // us on yet. Calling it repeatedly is safe.
-        Ok(macos_ax::is_process_trusted(true))
+        // With `prompt: true` this registers FlowingThoughts in
+        // System Settings > Privacy & Security > Accessibility and surfaces a
+        // system dialog if not yet granted. `prompt: false` is a silent status
+        // read, safe for UI polling.
+        Ok(macos_ax::is_process_trusted(prompt.unwrap_or(true)))
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = prompt;
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn check_input_monitoring_permission(prompt: bool) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if macos_hotkey::input_monitoring_granted() {
+            return Ok(true);
+        }
+        if prompt {
+            return Ok(macos_hotkey::request_input_monitoring());
+        }
+        Ok(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = prompt;
         Ok(true)
     }
 }
@@ -782,17 +827,6 @@ fn list_lab_sessions(
 }
 
 #[tauri::command]
-fn get_model_tally(
-    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
-) -> Result<Vec<db::ModelTally>, String> {
-    let conn = db_conn
-        .inner()
-        .lock()
-        .map_err(|_| "DB lock poisoned".to_string())?;
-    db::model_tally(&conn)
-}
-
-#[tauri::command]
 fn get_top_mistranscribed(
     model: Option<String>,
     limit: Option<i64>,
@@ -928,17 +962,20 @@ fn open_input_monitoring_settings() -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
-    let next_session_id = Arc::new(Mutex::new(1_u64));
     let pending_capture: Arc<Mutex<Option<PendingCapture>>> = Arc::new(Mutex::new(None));
     let db_conn = Arc::new(Mutex::new(
         db::open().expect("Failed to initialize SQLite database"),
     ));
-    let persisted_state = {
+    let (persisted_state, first_session_id) = {
         let conn = db_conn.lock().expect("DB lock poisoned during startup");
         let mut loaded = storage::load(&conn).unwrap_or_default();
         sanitize_settings(&mut loaded.settings);
-        loaded
+        // Session ids must stay unique across restarts — they key the
+        // history UI and edits.
+        let next_id = db::max_history_session_id(&conn).unwrap_or(0) + 1;
+        (loaded, next_id)
     };
+    let next_session_id = Arc::new(Mutex::new(first_session_id));
     let configured_hotkey_mode =
         hotkey::HotkeyMode::from_preset(&persisted_state.settings.shortcuts.preset);
     let runtime_hotkey_mode = hotkey::mode_from_env().unwrap_or(configured_hotkey_mode);
@@ -968,8 +1005,9 @@ pub fn run() {
                 MenuItem::with_id(app, "show", "Show Settings", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
-            // Create tray icon
-            TrayIconBuilder::new()
+            // Create the menu bar (tray) icon. Its presence means dictation
+            // is armed; its title gives live feedback while dictating.
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .icon_as_template(true)
                 .menu(&menu)
@@ -988,74 +1026,26 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let shared_db_conn = db_conn.clone();
-
-            // Dock the floating indicator to the top-left of the primary
-            // monitor on launch — under the macOS menu bar. If the user
-            // previously dragged it elsewhere, restore that position (clamped
-            // to the current monitor so a stored position from a now-missing
-            // display can't strand the window off-screen).
-            if let Some(indicator) = app.get_webview_window("indicator") {
-                let _ = indicator.set_always_on_top(true);
-                if let Some(monitor) = indicator.current_monitor().ok().flatten() {
-                    let size = indicator.outer_size().unwrap_or_default();
-                    let mpos = monitor.position();
-                    let msize = monitor.size();
-
-                    let saved = {
-                        let conn = shared_db_conn.lock().unwrap();
-                        storage::load_indicator_position(&conn)
+            // Mirror the session phase in the menu bar: ● while recording,
+            // … while transcribing/typing, nothing when idle.
+            {
+                use tauri::Listener;
+                let tray_handle = tray.clone();
+                app.listen("session-phase", move |event| {
+                    let payload = event.payload();
+                    let title = if payload.contains("recording") {
+                        Some("●")
+                    } else if payload.contains("transcribing") || payload.contains("injecting")
+                    {
+                        Some("…")
+                    } else {
+                        None
                     };
-
-                    let (x, y) = match saved {
-                        Some((sx, sy)) => {
-                            let min_x = mpos.x;
-                            let max_x = mpos.x + (msize.width as i32 - size.width as i32).max(0);
-                            let min_y = mpos.y;
-                            let max_y = mpos.y + (msize.height as i32 - size.height as i32).max(0);
-                            (sx.clamp(min_x, max_x), sy.clamp(min_y, max_y))
-                        }
-                        None => (mpos.x + 24, mpos.y + 48),
-                    };
-                    let _ = indicator.set_position(Position::Physical(
-                        PhysicalPosition { x, y },
-                    ));
-                }
-                let _ = indicator.show();
-
-                // Persist the indicator position on drag. `Moved` fires many
-                // times during a drag; throttle to the last write plus a small
-                // delta so we don't hammer SQLite.
-                let persist_conn = shared_db_conn.clone();
-                let last_saved: Arc<Mutex<Option<(i32, i32, Instant)>>> =
-                    Arc::new(Mutex::new(None));
-                indicator.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Moved(pos) = event {
-                        let now = Instant::now();
-                        let mut guard = last_saved.lock().unwrap();
-                        let should_write = match *guard {
-                            Some((lx, ly, last)) => {
-                                let moved_enough =
-                                    (pos.x - lx).abs() >= 2 || (pos.y - ly).abs() >= 2;
-                                let elapsed_enough =
-                                    now.duration_since(last) >= Duration::from_millis(300);
-                                moved_enough && elapsed_enough
-                            }
-                            None => true,
-                        };
-                        if should_write {
-                            *guard = Some((pos.x, pos.y, now));
-                            drop(guard);
-                            if let Ok(conn) = persist_conn.lock() {
-                                let _ = storage::save_indicator_position(
-                                    &conn,
-                                    (pos.x, pos.y),
-                                );
-                            }
-                        }
-                    }
+                    let _ = tray_handle.set_title(title);
                 });
             }
+
+            let shared_db_conn = db_conn.clone();
 
             // Register this process with the macOS Accessibility permission
             // database so it shows up in System Settings > Privacy & Security
@@ -1077,47 +1067,15 @@ pub fn run() {
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
                 let mut active_amplitude_stop: Option<Arc<std::sync::atomic::AtomicBool>> = None;
-                let mut pending_start_deadline: Option<Instant> = None;
 
                 loop {
-                    let recv_result = match pending_start_deadline {
-                        Some(deadline) => {
-                            let wait = deadline.saturating_duration_since(Instant::now());
-                            hotkey_rx.recv_timeout(wait)
-                        }
-                        None => hotkey_rx
-                            .recv()
-                            .map_err(|_| RecvTimeoutError::Disconnected),
-                    };
-
-                    let event = match recv_result {
-                        Err(RecvTimeoutError::Disconnected) => break,
-                        Err(RecvTimeoutError::Timeout) => {
-                            // Hold threshold elapsed without a cancel — commit the start.
-                            pending_start_deadline = None;
-                            hotkey::HotkeyEvent::RecordStart
-                        }
-                        Ok(hotkey::HotkeyEvent::RecordStart) => {
-                            // Debounce: arm a deadline instead of starting immediately.
-                            if pending_start_deadline.is_none()
-                                && matches!(
-                                    *shared_session_state.lock().unwrap(),
-                                    SessionState::Idle
-                                )
-                            {
-                                pending_start_deadline = Some(
-                                    Instant::now() + Duration::from_millis(HOLD_TO_START_MS),
-                                );
-                            }
-                            continue;
-                        }
-                        Ok(hotkey::HotkeyEvent::RecordStop) => {
-                            if pending_start_deadline.take().is_some() {
-                                // Released before threshold → never entered recording.
-                                continue;
-                            }
-                            hotkey::HotkeyEvent::RecordStop
-                        }
+                    // Start capturing the moment the hotkey goes down — no
+                    // arming delay, so the first words are never cut off.
+                    // Accidental taps are filtered after release by the
+                    // MIN_DICTATION_MS duration guard instead.
+                    let event = match hotkey_rx.recv() {
+                        Ok(event) => event,
+                        Err(_) => break,
                     };
 
                     match event {
@@ -1271,28 +1229,22 @@ pub fn run() {
                                     continue;
                                 }
                             };
-                            if capture.duration_ms < 180 {
+                            if capture.duration_ms < MIN_DICTATION_MS {
+                                // Accidental tap — discard silently, no error UI.
                                 let _ = app_handle.emit(
-                                    "pipeline-error",
-                                    PipelineErrorEvent {
-                                        session_id,
-                                        stage: "audio-finalize",
-                                        message: "Recording too short. Hold the hotkey longer and try again."
-                                            .to_string(),
+                                    "recording-state",
+                                    RecordingState {
+                                        is_recording: false,
                                     },
-                                );
-                                let _ = app_handle.emit(
-                                    "session-phase",
-                                    SessionPhaseEvent { phase: "error" },
                                 );
                                 let _ = app_handle.emit(
                                     "session-phase",
                                     SessionPhaseEvent { phase: "idle" },
                                 );
                                 let _ = storage::append_log(
-                                    "WARN",
+                                    "INFO",
                                     &format!(
-                                        "Session {session_id} dropped due to short duration ({}ms)",
+                                        "Session {session_id} dropped as accidental tap ({}ms)",
                                         capture.duration_ms
                                     ),
                                 );
@@ -1336,6 +1288,7 @@ pub fn run() {
                                     language_mode,
                                     smart_formatting,
                                     transcription_mode,
+                                    local_model,
                                 ) = persisted_for_task
                                     .lock()
                                     .ok()
@@ -1355,6 +1308,7 @@ pub fn run() {
                                             state.settings.language.mode.clone(),
                                             state.settings.extras.smart_formatting,
                                             state.settings.transcription.provider.clone(),
+                                            state.settings.transcription.local_model.clone(),
                                         )
                                     })
                                     .unwrap_or((
@@ -1362,10 +1316,10 @@ pub fn run() {
                                         None,
                                         "system".to_string(),
                                         true,
-                                        "api".to_string(),
+                                        "local".to_string(),
+                                        "whisper-small-q5".to_string(),
                                     ));
 
-                                // Always fan out to all 4 models for data collection.
                                 let dictation_id = uuid::Uuid::new_v4().to_string();
                                 let started_at = chrono::Utc::now().to_rfc3339();
                                 if let Ok(conn) = db_conn_for_task.lock() {
@@ -1385,15 +1339,6 @@ pub fn run() {
                                         },
                                     );
                                 }
-
-                                let primary_label: String = if transcription_mode == "local" {
-                                    "distil-small-en".to_string()
-                                } else {
-                                    match provider {
-                                        storage::Provider::Groq => "groq-api".to_string(),
-                                        storage::Provider::Openai => "openai-api".to_string(),
-                                    }
-                                };
 
                                 // Build a Whisper `prompt` from the intended terms the
                                 // user has taught us, so the decoder biases toward
@@ -1420,54 +1365,77 @@ pub fn run() {
                                         )
                                     });
 
-                                let (primary, pending) = lab::run_with_primary_first(
-                                    session_id,
-                                    wav_path_for_task.clone(),
-                                    capture.duration_ms,
-                                    provider,
-                                    runtime_api_key.clone(),
-                                    language_mode.clone(),
-                                    primary_label.clone(),
-                                    correction_prompt.clone(),
-                                )
-                                .await;
+                                // Run exactly one transcription — the model the user
+                                // picked. (Earlier builds fanned out to 4 models per
+                                // dictation, which saturated CPU/RAM and froze the UI.)
+                                let local_model_id = model_manager::ModelId::from_str(&local_model);
+                                let installed = local_model_id
+                                    .and_then(|id| model_manager::model_path(id).ok())
+                                    .map(|p| p.exists())
+                                    .unwrap_or(false);
+                                let use_local = transcription_mode == "local" && installed;
 
-                                // Detach the loser tasks: await them in the background,
-                                // persist all 4 results to the DB, then clean up the WAV.
-                                {
-                                    let primary_for_detach = primary.clone();
-                                    let db_conn_for_detach = db_conn_for_task.clone();
-                                    let dictation_id_for_detach = dictation_id.clone();
-                                    let wav_path_for_detach = wav_path_for_task.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let losers = pending.join_all().await;
-                                        if let Ok(conn) = db_conn_for_detach.lock() {
-                                            let all_results = std::iter::once(&primary_for_detach)
-                                                .chain(losers.iter());
-                                            for r in all_results {
-                                                let _ = db::insert_transcription(
-                                                    &conn,
-                                                    &db::TranscriptionRow {
-                                                        id: uuid::Uuid::new_v4().to_string(),
-                                                        dictation_id: dictation_id_for_detach
-                                                            .clone(),
-                                                        model: r.model.clone(),
-                                                        text: r.text.clone(),
-                                                        latency_ms: Some(r.latency_ms),
-                                                        error: r.error.clone(),
-                                                        created_at: chrono::Utc::now()
-                                                            .to_rfc3339(),
-                                                    },
-                                                );
-                                            }
-                                            let _ = db::clear_wav_path(
-                                                &conn,
-                                                &dictation_id_for_detach,
-                                            );
-                                        }
-                                        let _ = std::fs::remove_file(&wav_path_for_detach);
-                                    });
+                                let started = Instant::now();
+                                let (primary_label, transcript_result): (String, Result<String, String>) =
+                                    if use_local {
+                                        let id = local_model_id.unwrap();
+                                        let result = local_transcribe::transcribe_local(
+                                            id,
+                                            &wav_path_for_task,
+                                            &language_mode,
+                                            correction_prompt.clone(),
+                                        )
+                                        .await
+                                        .map(|(text, _latency)| text);
+                                        (local_model.clone(), result)
+                                    } else if transcription_mode == "local"
+                                        && runtime_api_key.is_none()
+                                    {
+                                        (
+                                            local_model.clone(),
+                                            Err(format!(
+                                                "Local model '{local_model}' is not downloaded yet. Open Settings → Transcription to download it."
+                                            )),
+                                        )
+                                    } else {
+                                        // Cloud path: chosen explicitly, or fallback
+                                        // because the local model isn't installed but
+                                        // an API key is configured.
+                                        let label = match provider {
+                                            storage::Provider::Groq => "groq-api".to_string(),
+                                            storage::Provider::Openai => "openai-api".to_string(),
+                                        };
+                                        let result = transcribe::transcribe_audio(
+                                            session_id,
+                                            &wav_path_for_task,
+                                            capture.duration_ms,
+                                            provider,
+                                            runtime_api_key.as_deref(),
+                                            Some(&language_mode),
+                                            correction_prompt.as_deref(),
+                                        )
+                                        .await;
+                                        (label, result)
+                                    };
+                                let latency_ms = started.elapsed().as_millis() as u64;
+
+                                // Persist the result row, then clean up the WAV.
+                                if let Ok(conn) = db_conn_for_task.lock() {
+                                    let _ = db::insert_transcription(
+                                        &conn,
+                                        &db::TranscriptionRow {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            dictation_id: dictation_id.clone(),
+                                            model: primary_label.clone(),
+                                            text: transcript_result.as_ref().ok().cloned(),
+                                            latency_ms: Some(latency_ms),
+                                            error: transcript_result.as_ref().err().cloned(),
+                                            created_at: chrono::Utc::now().to_rfc3339(),
+                                        },
+                                    );
+                                    let _ = db::clear_wav_path(&conn, &dictation_id);
                                 }
+                                let _ = std::fs::remove_file(&wav_path_for_task);
 
                                 // Stale session — skip injection; detached task still persists + cleans up.
                                 {
@@ -1483,8 +1451,8 @@ pub fn run() {
                                     }
                                 }
 
-                                if primary.text.is_some() {
-                                    let raw = primary.text.clone().unwrap();
+                                if let Ok(raw) = &transcript_result {
+                                    let raw = raw.clone();
                                     // Apply learned corrections before smart formatting so
                                     // capitalisation rules run on the final word shape.
                                     let correction_pairs: Vec<(String, String)> =
@@ -1520,7 +1488,7 @@ pub fn run() {
                                             *guard = Some(PendingCapture {
                                                 session_id,
                                                 dictation_id: dictation_id.clone(),
-                                                model: primary.model.clone(),
+                                                model: primary_label.clone(),
                                                 injected_text: text.clone(),
                                                 captured_at: Instant::now(),
                                             });
@@ -1580,11 +1548,7 @@ pub fn run() {
                                         SessionPhaseEvent { phase: "idle" },
                                     );
                                 } else {
-                                    let message = primary.error.clone().unwrap_or_else(|| {
-                                        format!(
-                                            "Primary model {primary_label} produced no output"
-                                        )
-                                    });
+                                    let message = transcript_result.unwrap_err();
                                     let _ = app_handle_for_task.emit(
                                         "pipeline-error",
                                         PipelineErrorEvent {
@@ -1655,6 +1619,7 @@ pub fn run() {
             get_persisted_state,
             save_onboarding_state,
             check_accessibility_permission,
+            check_input_monitoring_permission,
             open_accessibility_settings,
             run_injection_test,
             open_logs_folder,
@@ -1677,7 +1642,6 @@ pub fn run() {
             download_model,
             delete_model,
             list_lab_sessions,
-            get_model_tally,
             get_top_mistranscribed,
             list_corrections,
             delete_correction,
@@ -1685,6 +1649,21 @@ pub fn run() {
             save_correction_from_edit,
             get_app_version
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                // Terminate immediately with `_exit`, which skips atexit /
+                // __cxa_finalize handlers. A normal `exit()` runs ggml's
+                // C++ static destructors, and freeing the Metal device there
+                // calls ggml_abort → "quit unexpectedly" dialog on every
+                // shutdown. All state is persisted eagerly, so skipping
+                // destructors is safe.
+                let _ = storage::append_log("INFO", "Exit requested — shutting down");
+                unsafe { libc::_exit(0) };
+            }
+        });
 }

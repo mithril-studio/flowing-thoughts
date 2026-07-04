@@ -12,6 +12,7 @@
 #![cfg(target_os = "macos")]
 
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -85,6 +86,29 @@ extern "C" {
     );
 }
 
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOHIDCheckAccess(request_type: u32) -> u32;
+    fn IOHIDRequestAccess(request_type: u32) -> bool;
+}
+
+const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+
+/// Whether macOS lets us observe keyboard events from *other* apps. Without
+/// this permission a listen-only event tap still gets created, but silently
+/// only receives events aimed at our own app — the hotkey then appears to
+/// work only while FlowingThoughts is focused.
+pub fn input_monitoring_granted() -> bool {
+    unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) == K_IOHID_ACCESS_TYPE_GRANTED }
+}
+
+/// Show the system Input Monitoring prompt (and register the app in the
+/// System Settings list). Returns the resulting grant state.
+pub fn request_input_monitoring() -> bool {
+    unsafe { IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) }
+}
+
 // --- Constants -----------------------------------------------------------
 
 const K_CG_HID_EVENT_TAP: u32 = 0;
@@ -125,6 +149,11 @@ struct TapContext {
     mode_state: Arc<Mutex<HotkeyMode>>,
     tx: mpsc::Sender<HotkeyEvent>,
     state: Mutex<HotkeyFsm>,
+    /// The CFMachPortRef of our event tap, stored as usize once created.
+    /// Needed so the callback can re-enable the tap after macOS disables it
+    /// (kCGEventTapDisabledByTimeout) — without this the hotkey silently
+    /// stops working until the app is restarted.
+    tap_port: AtomicUsize,
 }
 
 #[derive(Default)]
@@ -157,16 +186,21 @@ extern "C" fn tap_callback(
     event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef {
-    // If macOS disabled our tap (timeout or user interrupt), the runloop
-    // keeps delivering events to us — re-enable and pass through.
-    if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
-        || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
-    {
-        // We don't have the port here; the runloop driver will reinstall.
+    if user_info.is_null() {
         return event;
     }
 
-    if user_info.is_null() {
+    // If macOS disabled our tap (timeout or user interrupt), re-enable it
+    // immediately — otherwise the hotkey stops working until app restart.
+    if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+    {
+        let ctx: &TapContext = unsafe { &*(user_info as *const TapContext) };
+        let port = ctx.tap_port.load(Ordering::Acquire);
+        if port != 0 {
+            unsafe { CGEventTapEnable(port as CFMachPortRef, true) };
+            eprintln!("Hotkey event tap was disabled by macOS — re-enabled.");
+        }
         return event;
     }
     // SAFETY: we allocated this Box and leaked it; pointer is valid.
@@ -238,6 +272,7 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
         mode_state,
         tx,
         state: Mutex::new(HotkeyFsm::default()),
+        tap_port: AtomicUsize::new(0),
     });
     // Pass the context pointer through the thread boundary as `usize`.
     // The raw `*mut c_void` isn't `Send`, and wrapping it in a newtype
@@ -247,6 +282,16 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
 
     thread::spawn(move || {
         let ctx_ptr = ctx_addr as *mut c_void;
+
+        // Without Input Monitoring the tap only sees our own app's events,
+        // making the hotkey appear dead outside FlowingThoughts. Ask for it
+        // up front so the user gets the system prompt on first launch.
+        if !input_monitoring_granted() && !request_input_monitoring() {
+            eprintln!(
+                "Input Monitoring permission missing — the dictation hotkey will only work while FlowingThoughts is focused. Enable it in System Settings → Privacy & Security → Input Monitoring."
+            );
+        }
+
         // SAFETY: CGEventTapCreate requires Accessibility permission. If
         // it's missing we get NULL back and log — no crash.
         let tap = unsafe {
@@ -264,6 +309,12 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
                 "CGEventTapCreate returned null — grant FlowingThoughts Accessibility permission."
             );
             return;
+        }
+        // SAFETY: ctx was leaked via Box::into_raw and lives for the process.
+        unsafe {
+            (*(ctx_ptr as *const TapContext))
+                .tap_port
+                .store(tap as usize, Ordering::Release);
         }
 
         let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0) };

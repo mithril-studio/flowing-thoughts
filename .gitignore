@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Conductor workspace context (never commit — may contain screenshots/logs)
+.context/

@@ -4,7 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import RecordingIndicator from "../components/RecordingIndicator";
 
 interface TranscriptionEntry {
+  /** Backend session id — not guaranteed unique for old history rows. */
   id: number;
+  /** Unique per entry; keys UI state like copy/edit highlights. */
+  uid: string;
   text: string;
   timestamp: string;
 }
@@ -24,24 +27,24 @@ export default function Home({ shortcutLabel }: HomeProps) {
   const [amplitude, setAmplitude] = useState(0);
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<string>("");
   const [editSaving, setEditSaving] = useState(false);
 
-  const handleCopy = (id: number, text: string) => {
+  const handleCopy = (uid: string, text: string) => {
     void invoke("copy_to_clipboard", { text })
       .then(() => {
-        setCopiedId(id);
+        setCopiedId(uid);
         setTimeout(() => {
-          setCopiedId((current) => (current === id ? null : current));
+          setCopiedId((current) => (current === uid ? null : current));
         }, 1500);
       })
       .catch((e) => setLastError(String(e)));
   };
 
   const beginEdit = (entry: TranscriptionEntry) => {
-    setEditingId(entry.id);
+    setEditingId(entry.uid);
     setEditDraft(entry.text);
   };
 
@@ -64,7 +67,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
         newText: edited,
       });
       setTranscriptions((prev) =>
-        prev.map((t) => (t.id === entry.id ? { ...t, text: edited } : t))
+        prev.map((t) => (t.uid === entry.uid ? { ...t, text: edited } : t))
       );
       await invoke("save_correction_from_edit", {
         sessionId: entry.id,
@@ -87,6 +90,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
         setTranscriptions(
           state.history.map((entry) => ({
             id: entry.session_id,
+            uid: `${entry.session_id}-${entry.timestamp}`,
             text: entry.text,
             timestamp: entry.timestamp,
           }))
@@ -119,6 +123,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
       setTranscriptions((prev) => [
         {
           id: event.payload.session_id,
+          uid: `${event.payload.session_id}-${event.payload.timestamp}`,
           text: event.payload.text,
           timestamp: event.payload.timestamp,
         },
@@ -183,11 +188,11 @@ export default function Home({ shortcutLabel }: HomeProps) {
 
       {lastError && (
         <div className="px-4 pb-3">
-          <div className="rounded-lg border border-red-900 bg-red-950/40 p-3 text-xs text-red-300 flex items-start justify-between gap-2">
+          <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 p-3 text-xs text-red-700 dark:text-red-300 flex items-start justify-between gap-2">
             <span>{lastError}</span>
             <button
               onClick={() => setLastError(null)}
-              className="text-red-400 hover:text-red-200 transition-colors"
+              className="text-red-600 dark:text-red-400 hover:text-red-200 transition-colors"
             >
               Dismiss
             </button>
@@ -198,10 +203,10 @@ export default function Home({ shortcutLabel }: HomeProps) {
       {/* Timeline */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {Object.keys(grouped).length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-neutral-500">
+          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <p className="text-sm">No transcriptions yet</p>
             <p className="text-xs mt-1">
-              Hold <kbd className="px-1 py-0.5 bg-neutral-800 rounded">{shortcutLabel}</kbd> and speak
+              Hold <kbd className="px-1 py-0.5 bg-zinc-200 dark:bg-zinc-800 rounded">{shortcutLabel}</kbd> and speak
             </p>
             {(phase === "transcribing" || phase === "injecting") && (
               <p className="text-xs mt-1 text-amber-400">
@@ -212,16 +217,16 @@ export default function Home({ shortcutLabel }: HomeProps) {
         ) : (
           Object.entries(grouped).map(([date, entries]) => (
             <div key={date} className="mb-4">
-              <h3 className="text-xs text-neutral-500 font-medium mb-2 sticky top-0 bg-neutral-950 py-1">
+              <h3 className="text-xs text-zinc-500 font-medium mb-2 sticky top-0 bg-white dark:bg-zinc-950 py-1">
                 {date}
               </h3>
               <div className="space-y-2">
                 {entries.map((entry) => {
-                  const isEditing = editingId === entry.id;
+                  const isEditing = editingId === entry.uid;
                   return (
                     <div
-                      key={entry.id}
-                      className="w-full p-3 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 transition-colors group"
+                      key={entry.uid}
+                      className="w-full p-3 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-700 transition-colors group"
                     >
                       {isEditing ? (
                         <textarea
@@ -232,15 +237,15 @@ export default function Home({ shortcutLabel }: HomeProps) {
                             Math.max(2, editDraft.split("\n").length)
                           )}
                           disabled={editSaving}
-                          className="w-full text-sm text-neutral-100 bg-neutral-950 border border-neutral-700 rounded p-2 outline-none focus:border-neutral-500 resize-y"
+                          className="w-full text-sm text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded p-2 outline-none focus:border-zinc-500 resize-y"
                         />
                       ) : (
-                        <p className="text-sm text-neutral-200 leading-relaxed select-text cursor-text">
+                        <p className="text-sm text-zinc-800 dark:text-zinc-200 leading-relaxed select-text cursor-text">
                           {entry.text}
                         </p>
                       )}
                       <div className="flex justify-between items-center mt-2">
-                        <span className="text-xs text-neutral-600">
+                        <span className="text-xs text-zinc-600">
                           {formatTime(entry.timestamp)}
                         </span>
                         <div className="flex items-center gap-1">
@@ -250,7 +255,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                                 type="button"
                                 onClick={cancelEdit}
                                 disabled={editSaving}
-                                className="text-xs px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+                                className="text-xs px-2 py-0.5 rounded text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
                               >
                                 Cancel
                               </button>
@@ -258,7 +263,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
                                 type="button"
                                 onClick={() => void saveEdit(entry)}
                                 disabled={editSaving}
-                                className="text-xs px-2 py-0.5 rounded bg-emerald-800/60 text-emerald-200 hover:bg-emerald-700/60 disabled:opacity-50"
+                                className="text-xs px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-800/60 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-200 dark:hover:bg-emerald-700/60 disabled:opacity-50"
                               >
                                 {editSaving ? "Saving…" : "Save"}
                               </button>
@@ -268,20 +273,20 @@ export default function Home({ shortcutLabel }: HomeProps) {
                               <button
                                 type="button"
                                 onClick={() => beginEdit(entry)}
-                                className="text-xs px-2 py-0.5 rounded text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
+                                className="text-xs px-2 py-0.5 rounded text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                               >
                                 Edit
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleCopy(entry.id, entry.text)}
+                                onClick={() => handleCopy(entry.uid, entry.text)}
                                 className={`text-xs px-2 py-0.5 rounded transition-colors ${
-                                  copiedId === entry.id
-                                    ? "bg-emerald-900/40 text-emerald-300"
-                                    : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800"
+                                  copiedId === entry.uid
+                                    ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300"
+                                    : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                                 }`}
                               >
-                                {copiedId === entry.id ? "Copied" : "Copy"}
+                                {copiedId === entry.uid ? "Copied" : "Copy"}
                               </button>
                             </>
                           )}

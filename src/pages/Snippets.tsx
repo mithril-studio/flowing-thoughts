@@ -85,14 +85,14 @@ export default function Snippets() {
       <div className="flex items-center justify-between px-4 py-3">
         <div>
           <h2 className="text-sm font-medium text-white">Snippets</h2>
-          <p className="text-xs text-neutral-500">
+          <p className="text-xs text-zinc-500">
             Help the AI sound like you
           </p>
         </div>
         {!showForm && (
           <button
             onClick={() => setShowForm(true)}
-            className="text-xs px-3 py-1.5 rounded-md bg-white text-black font-medium hover:bg-neutral-200 transition-colors"
+            className="text-xs px-3 py-1.5 rounded-md bg-white text-black font-medium hover:bg-zinc-200 transition-colors"
           >
             + Add
           </button>
@@ -101,7 +101,7 @@ export default function Snippets() {
 
       {/* Add/Edit form */}
       {showForm && (
-        <div className="mx-4 mb-3 p-3 rounded-lg bg-neutral-900 border border-neutral-800">
+        <div className="mx-4 mb-3 p-3 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
           {/* Type selector */}
           <div className="flex gap-1.5 mb-3">
             {(["name", "link", "custom"] as const).map((t) => (
@@ -111,7 +111,7 @@ export default function Snippets() {
                 className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
                   type === t
                     ? "bg-white text-black"
-                    : "bg-neutral-800 text-neutral-400 hover:text-white"
+                    : "bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-white"
                 }`}
               >
                 {typeLabels[t]}
@@ -124,26 +124,26 @@ export default function Snippets() {
             placeholder={typePlaceholders[type].label}
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            className="w-full text-sm px-3 py-2 rounded-md bg-neutral-800 border border-neutral-700 text-white placeholder-neutral-500 focus:outline-none focus:border-neutral-500 mb-2"
+            className="w-full text-sm px-3 py-2 rounded-md bg-zinc-200 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 mb-2"
           />
           <input
             type="text"
             placeholder={typePlaceholders[type].value}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            className="w-full text-sm px-3 py-2 rounded-md bg-neutral-800 border border-neutral-700 text-white placeholder-neutral-500 focus:outline-none focus:border-neutral-500 mb-3"
+            className="w-full text-sm px-3 py-2 rounded-md bg-zinc-200 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 mb-3"
           />
 
           <div className="flex gap-2">
             <button
               onClick={handleSave}
-              className="flex-1 text-xs py-1.5 rounded-md bg-white text-black font-medium hover:bg-neutral-200 transition-colors"
+              className="flex-1 text-xs py-1.5 rounded-md bg-white text-black font-medium hover:bg-zinc-200 transition-colors"
             >
               {editId ? "Update" : "Save"}
             </button>
             <button
               onClick={resetForm}
-              className="text-xs px-3 py-1.5 rounded-md bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+              className="text-xs px-3 py-1.5 rounded-md bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-white transition-colors"
             >
               Cancel
             </button>
@@ -154,7 +154,7 @@ export default function Snippets() {
       {/* Snippets list */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {snippets.length === 0 && !showForm ? (
-          <div className="flex flex-col items-center justify-center h-full text-neutral-500">
+          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <p className="text-sm">No snippets yet</p>
             <p className="text-xs mt-1">
               Add names, links, and context so the AI knows you
@@ -165,31 +165,31 @@ export default function Snippets() {
             {snippets.map((snippet) => (
               <div
                 key={snippet.id}
-                className="flex items-center justify-between p-3 rounded-lg bg-neutral-900 border border-neutral-800 group"
+                className="flex items-center justify-between p-3 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 group"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-500">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 text-zinc-500">
                       {typeLabels[snippet.type]}
                     </span>
                     <span className="text-sm text-white truncate">
                       {snippet.label}
                     </span>
                   </div>
-                  <p className="text-xs text-neutral-500 mt-1 truncate">
+                  <p className="text-xs text-zinc-500 mt-1 truncate">
                     {snippet.value}
                   </p>
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
                   <button
                     onClick={() => handleEdit(snippet)}
-                    className="text-xs px-2 py-1 rounded bg-neutral-800 text-neutral-400 hover:text-white"
+                    className="text-xs px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-white"
                   >
                     Edit
                   </button>
                   <button
                     onClick={() => handleDelete(snippet.id)}
-                    className="text-xs px-2 py-1 rounded bg-neutral-800 text-red-400 hover:text-red-300"
+                    className="text-xs px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-red-600 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
                   >
                     Del
                   </button>

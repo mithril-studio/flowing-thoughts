@@ -1,6 +1,6 @@
 [package]
 name = "flowing-thoughts"
-version = "0.2.0"
+version = "0.3.0"
 description = "Voice dictation for macOS — hold to record, release to type"
 authors = ["Joost Dolstra"]
 edition = "2021"
@@ -31,6 +31,7 @@ futures = "0.3"
 futures-util = "0.3"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rdev = "0.5"
