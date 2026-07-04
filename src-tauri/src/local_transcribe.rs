@@ -89,12 +89,17 @@ fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     Ok(out)
 }
 
+/// Languages the app supports. When auto-detecting, any detection outside
+/// this set is treated as a misdetection and the audio is re-decoded with a
+/// forced language, so dictations can't come out in e.g. German or Afrikaans.
+const ALLOWED_LANGS: [&str; 2] = ["en", "nl"];
+
 fn run_inference(
     ctx: &WhisperContext,
     audio: &[f32],
     language: &str,
     prompt: Option<&str>,
-) -> Result<String, String> {
+) -> Result<(String, i32), String> {
     let mut state = ctx
         .create_state()
         .map_err(|e| format!("Failed to create whisper state: {e}"))?;
@@ -127,7 +132,7 @@ fn run_inference(
             .map_err(|e| format!("Failed to decode segment {i}: {e}"))?;
         text.push_str(seg_text);
     }
-    Ok(text.trim().to_string())
+    Ok((text.trim().to_string(), state.full_lang_id_from_state()))
 }
 
 fn num_cpus_threads() -> i32 {
@@ -160,10 +165,22 @@ pub async fn transcribe_local(
     let wav_path = wav_path.to_path_buf();
     let language = whisper_language(model_id, language_mode);
     let started = Instant::now();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
         let ctx = get_or_load_context(model_id)?;
         let audio = load_wav_as_mono_16k(&wav_path)?;
-        run_inference(&ctx, &audio, language, prompt.as_deref())
+        let (text, lang_id) = run_inference(&ctx, &audio, language, prompt.as_deref())?;
+        if language == "auto" {
+            let detected = whisper_rs::get_lang_str(lang_id).unwrap_or("");
+            if !ALLOWED_LANGS.contains(&detected) {
+                // Detection landed outside the supported set — in practice
+                // almost always Dutch misread as Afrikaans/German. Re-decode
+                // forced to Dutch (English detection is reliable, so an
+                // out-of-set detection was not English speech).
+                let (text_nl, _) = run_inference(&ctx, &audio, "nl", prompt.as_deref())?;
+                return Ok(text_nl);
+            }
+        }
+        Ok(text)
     })
     .await
     .map_err(|e| format!("Local transcription task panicked: {e}"))?;

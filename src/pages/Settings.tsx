@@ -98,6 +98,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [openaiConfigured, setOpenaiConfigured] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState<boolean | null>(null);
+  const [inputMonitoringGranted, setInputMonitoringGranted] = useState<boolean | null>(null);
   const [helpInfo, setHelpInfo] = useState<AccessibilityHelpInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -331,6 +332,31 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       setSetupBusy(false);
     }
   };
+
+  const checkInputMonitoring = async () => {
+    setSetupBusy(true);
+    setError(null);
+    try {
+      const granted = await invoke<boolean>("check_input_monitoring_permission", {
+        prompt: true,
+      });
+      setInputMonitoringGranted(granted);
+    } catch (e) {
+      setError(String(e));
+      setInputMonitoringGranted(false);
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
+  // Passive status read on mount (no system prompt).
+  useEffect(() => {
+    invoke<boolean>("check_input_monitoring_permission", { prompt: false })
+      .then(setInputMonitoringGranted)
+      .catch(() => {
+        // Non-blocking.
+      });
+  }, []);
 
   const selectedLocalModel = local.transcription.local_model;
 
@@ -757,16 +783,33 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
 
       <Section title="Permissions">
         <p className="text-xs text-zinc-600 dark:text-zinc-400">
-          Accessibility:{" "}
+          Accessibility (typing into apps):{" "}
           {accessibilityGranted === null
             ? "not checked"
             : accessibilityGranted
               ? "granted"
               : "not granted"}
         </p>
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">
+          Input Monitoring (hotkey outside the app):{" "}
+          {inputMonitoringGranted === null
+            ? "not checked"
+            : inputMonitoringGranted
+              ? "granted"
+              : "not granted"}
+        </p>
+        {inputMonitoringGranted === false && (
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            Without Input Monitoring the dictation hotkey only works while
+            FlowingThoughts itself is focused. Enable it, then restart the app.
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-2">
           <SecondaryButton onClick={checkAccessibility} disabled={setupBusy}>
             {setupBusy ? "Checking..." : "Check Accessibility"}
+          </SecondaryButton>
+          <SecondaryButton onClick={checkInputMonitoring} disabled={setupBusy}>
+            {setupBusy ? "Checking..." : "Check Input Monitoring"}
           </SecondaryButton>
           <SecondaryButton
             onClick={() =>

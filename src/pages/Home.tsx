@@ -4,7 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import RecordingIndicator from "../components/RecordingIndicator";
 
 interface TranscriptionEntry {
+  /** Backend session id — not guaranteed unique for old history rows. */
   id: number;
+  /** Unique per entry; keys UI state like copy/edit highlights. */
+  uid: string;
   text: string;
   timestamp: string;
 }
@@ -24,24 +27,24 @@ export default function Home({ shortcutLabel }: HomeProps) {
   const [amplitude, setAmplitude] = useState(0);
   const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<string>("");
   const [editSaving, setEditSaving] = useState(false);
 
-  const handleCopy = (id: number, text: string) => {
+  const handleCopy = (uid: string, text: string) => {
     void invoke("copy_to_clipboard", { text })
       .then(() => {
-        setCopiedId(id);
+        setCopiedId(uid);
         setTimeout(() => {
-          setCopiedId((current) => (current === id ? null : current));
+          setCopiedId((current) => (current === uid ? null : current));
         }, 1500);
       })
       .catch((e) => setLastError(String(e)));
   };
 
   const beginEdit = (entry: TranscriptionEntry) => {
-    setEditingId(entry.id);
+    setEditingId(entry.uid);
     setEditDraft(entry.text);
   };
 
@@ -64,7 +67,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
         newText: edited,
       });
       setTranscriptions((prev) =>
-        prev.map((t) => (t.id === entry.id ? { ...t, text: edited } : t))
+        prev.map((t) => (t.uid === entry.uid ? { ...t, text: edited } : t))
       );
       await invoke("save_correction_from_edit", {
         sessionId: entry.id,
@@ -87,6 +90,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
         setTranscriptions(
           state.history.map((entry) => ({
             id: entry.session_id,
+            uid: `${entry.session_id}-${entry.timestamp}`,
             text: entry.text,
             timestamp: entry.timestamp,
           }))
@@ -119,6 +123,7 @@ export default function Home({ shortcutLabel }: HomeProps) {
       setTranscriptions((prev) => [
         {
           id: event.payload.session_id,
+          uid: `${event.payload.session_id}-${event.payload.timestamp}`,
           text: event.payload.text,
           timestamp: event.payload.timestamp,
         },
@@ -217,10 +222,10 @@ export default function Home({ shortcutLabel }: HomeProps) {
               </h3>
               <div className="space-y-2">
                 {entries.map((entry) => {
-                  const isEditing = editingId === entry.id;
+                  const isEditing = editingId === entry.uid;
                   return (
                     <div
-                      key={entry.id}
+                      key={entry.uid}
                       className="w-full p-3 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-700 transition-colors group"
                     >
                       {isEditing ? (
@@ -274,14 +279,14 @@ export default function Home({ shortcutLabel }: HomeProps) {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleCopy(entry.id, entry.text)}
+                                onClick={() => handleCopy(entry.uid, entry.text)}
                                 className={`text-xs px-2 py-0.5 rounded transition-colors ${
-                                  copiedId === entry.id
+                                  copiedId === entry.uid
                                     ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300"
                                     : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                                 }`}
                               >
-                                {copiedId === entry.id ? "Copied" : "Copy"}
+                                {copiedId === entry.uid ? "Copied" : "Copy"}
                               </button>
                             </>
                           )}

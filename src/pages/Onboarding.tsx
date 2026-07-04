@@ -170,12 +170,23 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     setBusy(true);
     setError(null);
     try {
-      const granted = await invokeWithTimeout<boolean>("check_accessibility_permission");
-      setAccessibilityGranted(granted);
-      if (granted) setStep(3);
-      if (!granted) {
+      const accessibility = await invokeWithTimeout<boolean>(
+        "check_accessibility_permission",
+      );
+      const inputMonitoring = await invokeWithTimeout<boolean>(
+        "check_input_monitoring_permission",
+        { prompt: true },
+      ).catch(() => true);
+      setAccessibilityGranted(accessibility);
+      if (accessibility && inputMonitoring) {
+        setStep(3);
+      } else if (!accessibility) {
         setError(
           "Accessibility is still disabled. Enable it in System Settings or continue anyway.",
+        );
+      } else {
+        setError(
+          "Input Monitoring is still disabled — without it the hotkey only works inside FlowingThoughts. Enable it in System Settings or continue anyway.",
         );
       }
     } catch (e) {
@@ -297,6 +308,10 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             <p className="mb-2 text-sm text-zinc-800 dark:text-zinc-200">
               Grant Accessibility permission so FlowingThoughts can paste into apps
             </p>
+            <p className="mb-2 text-xs text-zinc-500">
+              Also enable Input Monitoring so the hotkey works while you're in
+              other apps — macOS shows a prompt when you press Check Access.
+            </p>
             <div className="flex gap-2">
               <button
                 onClick={() =>
@@ -314,6 +329,14 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                 {busy ? "Checking..." : "Check Access"}
               </button>
             </div>
+            <button
+              onClick={() =>
+                invoke("open_input_monitoring_settings").catch((e) => setError(String(e)))
+              }
+              className="mt-2 w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-2 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              Open Input Monitoring Settings
+            </button>
             <button
               onClick={() => setStep(3)}
               className="mt-2 w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-2 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"

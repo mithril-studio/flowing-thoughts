@@ -287,6 +287,19 @@ pub fn list_history(conn: &Connection, limit: i64) -> Result<Vec<HistoryEntry>, 
     Ok(out)
 }
 
+/// Highest session id ever recorded. Used to seed the in-memory session
+/// counter so ids stay unique across app restarts — reusing ids made the
+/// history UI treat distinct dictations as the same entry.
+pub fn max_history_session_id(conn: &Connection) -> Result<u64, String> {
+    conn.query_row(
+        "SELECT COALESCE(MAX(session_id), 0) FROM history",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v.max(0) as u64)
+    .map_err(|e| format!("Failed to read max session id: {e}"))
+}
+
 pub fn kv_get(conn: &Connection, key: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT value FROM kv WHERE key = ?1",

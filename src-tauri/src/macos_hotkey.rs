@@ -86,6 +86,29 @@ extern "C" {
     );
 }
 
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOHIDCheckAccess(request_type: u32) -> u32;
+    fn IOHIDRequestAccess(request_type: u32) -> bool;
+}
+
+const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+
+/// Whether macOS lets us observe keyboard events from *other* apps. Without
+/// this permission a listen-only event tap still gets created, but silently
+/// only receives events aimed at our own app — the hotkey then appears to
+/// work only while FlowingThoughts is focused.
+pub fn input_monitoring_granted() -> bool {
+    unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) == K_IOHID_ACCESS_TYPE_GRANTED }
+}
+
+/// Show the system Input Monitoring prompt (and register the app in the
+/// System Settings list). Returns the resulting grant state.
+pub fn request_input_monitoring() -> bool {
+    unsafe { IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) }
+}
+
 // --- Constants -----------------------------------------------------------
 
 const K_CG_HID_EVENT_TAP: u32 = 0;
@@ -259,6 +282,16 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
 
     thread::spawn(move || {
         let ctx_ptr = ctx_addr as *mut c_void;
+
+        // Without Input Monitoring the tap only sees our own app's events,
+        // making the hotkey appear dead outside FlowingThoughts. Ask for it
+        // up front so the user gets the system prompt on first launch.
+        if !input_monitoring_granted() && !request_input_monitoring() {
+            eprintln!(
+                "Input Monitoring permission missing — the dictation hotkey will only work while FlowingThoughts is focused. Enable it in System Settings → Privacy & Security → Input Monitoring."
+            );
+        }
+
         // SAFETY: CGEventTapCreate requires Accessibility permission. If
         // it's missing we get NULL back and log — no crash.
         let tap = unsafe {

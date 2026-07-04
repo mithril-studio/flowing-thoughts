@@ -459,18 +459,20 @@ fn update_app_settings(
     let mut next_settings = settings;
     sanitize_settings(&mut next_settings);
 
-    {
+    let previous_settings = {
         let mut state = persisted
             .inner()
             .lock()
             .map_err(|_| "Persisted state lock poisoned".to_string())?;
+        let previous = state.settings.clone();
         state.settings = next_settings.clone();
         let conn = db_conn
             .inner()
             .lock()
             .map_err(|_| "DB lock poisoned".to_string())?;
         storage::save(&conn, &state)?;
-    }
+        previous
+    };
 
     if hotkey::mode_from_env().is_none() {
         if let Ok(mut mode) = hotkey_mode.inner().lock() {
@@ -478,18 +480,31 @@ fn update_app_settings(
         }
     }
 
+    // Only apply (and only warn about) side effects for settings the user
+    // actually changed — re-applying everything on every toggle produced
+    // spurious "settings not correct" warnings and re-centred the window.
     let mut warnings = Vec::new();
     if let Some(window) = app.get_webview_window("main") {
-        apply_window_movable(&window, next_settings.general.window_movable);
-        if let Err(e) = apply_window_position(&window, &next_settings.general.window_position) {
+        if next_settings.general.window_movable != previous_settings.general.window_movable {
+            apply_window_movable(&window, next_settings.general.window_movable);
+        }
+        if next_settings.general.window_position != previous_settings.general.window_position {
+            if let Err(e) =
+                apply_window_position(&window, &next_settings.general.window_position)
+            {
+                warnings.push(e);
+            }
+        }
+    }
+    if next_settings.general.show_in_dock != previous_settings.general.show_in_dock {
+        if let Err(e) = apply_show_in_dock(&app, next_settings.general.show_in_dock) {
             warnings.push(e);
         }
     }
-    if let Err(e) = apply_show_in_dock(&app, next_settings.general.show_in_dock) {
-        warnings.push(e);
-    }
-    if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
-        warnings.push(e);
+    if next_settings.general.launch_at_login != previous_settings.general.launch_at_login {
+        if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
+            warnings.push(e);
+        }
     }
 
     for message in &warnings {
@@ -540,6 +555,25 @@ fn check_accessibility_permission() -> Result<bool, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn check_input_monitoring_permission(prompt: bool) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if macos_hotkey::input_monitoring_granted() {
+            return Ok(true);
+        }
+        if prompt {
+            return Ok(macos_hotkey::request_input_monitoring());
+        }
+        Ok(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = prompt;
         Ok(true)
     }
 }
@@ -927,17 +961,20 @@ fn open_input_monitoring_settings() -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let session_state = Arc::new(Mutex::new(SessionState::Idle));
-    let next_session_id = Arc::new(Mutex::new(1_u64));
     let pending_capture: Arc<Mutex<Option<PendingCapture>>> = Arc::new(Mutex::new(None));
     let db_conn = Arc::new(Mutex::new(
         db::open().expect("Failed to initialize SQLite database"),
     ));
-    let persisted_state = {
+    let (persisted_state, first_session_id) = {
         let conn = db_conn.lock().expect("DB lock poisoned during startup");
         let mut loaded = storage::load(&conn).unwrap_or_default();
         sanitize_settings(&mut loaded.settings);
-        loaded
+        // Session ids must stay unique across restarts — they key the
+        // history UI and edits.
+        let next_id = db::max_history_session_id(&conn).unwrap_or(0) + 1;
+        (loaded, next_id)
     };
+    let next_session_id = Arc::new(Mutex::new(first_session_id));
     let configured_hotkey_mode =
         hotkey::HotkeyMode::from_preset(&persisted_state.settings.shortcuts.preset);
     let runtime_hotkey_mode = hotkey::mode_from_env().unwrap_or(configured_hotkey_mode);
@@ -1628,6 +1665,7 @@ pub fn run() {
             get_persisted_state,
             save_onboarding_state,
             check_accessibility_permission,
+            check_input_monitoring_permission,
             open_accessibility_settings,
             run_injection_test,
             open_logs_folder,
@@ -1657,6 +1695,16 @@ pub fn run() {
             save_correction_from_edit,
             get_app_version
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                // Hard-exit instead of unwinding through native teardown:
+                // dropping the cached whisper/Metal contexts during normal
+                // shutdown crashes with a "quit unexpectedly" dialog. All
+                // state is persisted eagerly, so skipping destructors is safe.
+                let _ = storage::append_log("INFO", "Exit requested — shutting down");
+                std::process::exit(0);
+            }
+        });
 }
