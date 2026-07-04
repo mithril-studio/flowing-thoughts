@@ -1068,7 +1068,19 @@ pub fn run() {
                             let max_y = mpos.y + (msize.height as i32 - size.height as i32).max(0);
                             (sx.clamp(min_x, max_x), sy.clamp(min_y, max_y))
                         }
-                        None => (mpos.x + 24, mpos.y + 48),
+                        // Default: bottom-center, floating just above the Dock
+                        // (Wispr-style) so the emblem is always in view.
+                        None => {
+                            let dock_clearance = (msize.height as f64 * 0.06) as i32;
+                            (
+                                mpos.x + (msize.width as i32 - size.width as i32).max(0) / 2,
+                                mpos.y
+                                    + (msize.height as i32
+                                        - size.height as i32
+                                        - dock_clearance)
+                                        .max(0),
+                            )
+                        }
                     };
                     let _ = indicator.set_position(Position::Physical(
                         PhysicalPosition { x, y },

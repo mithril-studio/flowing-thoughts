@@ -3,8 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import Waveform, { type WavePhase } from "../components/Waveform";
 
 /**
- * The small always-on-top pill that floats on screen. Draggable anywhere;
- * shows a live waveform while you speak, a sweep while transcribing.
+ * The small always-on-top emblem that floats on screen (all Spaces, above
+ * fullscreen apps). Idle: a glowing orb — the FlowingThoughts logo — so you
+ * always know dictation is ready. Active: a pill with a live waveform while
+ * you speak and a sweep while transcribing. Draggable anywhere.
  */
 export default function IndicatorOverlay() {
   const [phase, setPhase] = useState<WavePhase>("idle");
@@ -61,26 +63,45 @@ export default function IndicatorOverlay() {
         cursor: "grab",
         userSelect: "none",
         WebkitUserSelect: "none",
-        background: active ? "rgba(10,10,12,0.92)" : "rgba(10,10,12,0.72)",
-        border: "1px solid rgba(255,255,255,0.14)",
+        background: active ? "rgba(10,10,12,0.92)" : "transparent",
+        border: active
+          ? "1px solid rgba(255,255,255,0.14)"
+          : "1px solid transparent",
         borderRadius: 9999,
-        boxShadow: "0 4px 24px rgba(0,0,0,0.35)",
+        boxShadow: active ? "0 4px 24px rgba(0,0,0,0.35)" : "none",
         transition: "background 200ms ease-out",
         overflow: "hidden",
       }}
     >
-      <div style={{ pointerEvents: "none", width: "72%", height: "60%" }}>
-        <Waveform
-          phase={phase}
-          amplitude={amplitude}
-          bars={7}
-          gapClassName="gap-[2px]"
-          className="w-full h-full"
-          barClassName={
-            phase === "error" ? "w-[2px] bg-red-400" : "w-[2px] bg-white"
-          }
+      {active ? (
+        <div style={{ pointerEvents: "none", width: "72%", height: "60%" }}>
+          <Waveform
+            phase={phase}
+            amplitude={amplitude}
+            bars={7}
+            gapClassName="gap-[2px]"
+            className="w-full h-full"
+            barClassName={
+              phase === "error" ? "w-[2px] bg-red-400" : "w-[2px] bg-white"
+            }
+          />
+        </div>
+      ) : (
+        // Idle emblem: the glowing orb from the app logo.
+        <div
+          style={{
+            pointerEvents: "none",
+            width: 15,
+            height: 15,
+            borderRadius: "50%",
+            background:
+              "radial-gradient(circle at 50% 45%, #2C2C32 0%, #17171B 55%, #0A0A0C 100%)",
+            border: "1px solid rgba(255,255,255,0.28)",
+            boxShadow:
+              "0 0 8px rgba(120,120,140,0.55), 0 0 2px rgba(255,255,255,0.35), 0 1px 4px rgba(0,0,0,0.5)",
+          }}
         />
-      </div>
+      )}
     </div>
   );
 }
