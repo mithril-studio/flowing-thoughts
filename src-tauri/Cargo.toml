@@ -31,6 +31,7 @@ futures = "0.3"
 futures-util = "0.3"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rdev = "0.5"
@@ -39,3 +40,4 @@ rdev = "0.5"
 core-foundation = "0.9"
 core-foundation-sys = "0.8"
 core-graphics = "0.23"
+objc2 = "0.6"

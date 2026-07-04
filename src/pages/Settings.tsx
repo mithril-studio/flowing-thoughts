@@ -319,44 +319,50 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     }
   };
 
-  const checkAccessibility = async () => {
-    setSetupBusy(true);
-    setError(null);
-    try {
-      const granted = await invoke<boolean>("check_accessibility_permission");
-      setAccessibilityGranted(granted);
-    } catch (e) {
-      setError(String(e));
-      setAccessibilityGranted(false);
-    } finally {
-      setSetupBusy(false);
-    }
-  };
+  // Silent status polling — no system prompts. Statuses flip to green by
+  // themselves once the user flips the toggles in System Settings.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      invoke<boolean>("check_accessibility_permission", { prompt: false })
+        .then((granted) => {
+          if (!cancelled) setAccessibilityGranted(granted);
+        })
+        .catch(() => {});
+      invoke<boolean>("check_input_monitoring_permission", { prompt: false })
+        .then((granted) => {
+          if (!cancelled) setInputMonitoringGranted(granted);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
-  const checkInputMonitoring = async () => {
+  // Explicit request — shows the macOS permission dialogs when not granted.
+  const requestPermissions = async () => {
     setSetupBusy(true);
     setError(null);
     try {
-      const granted = await invoke<boolean>("check_input_monitoring_permission", {
+      const accessibility = await invoke<boolean>("check_accessibility_permission", {
         prompt: true,
       });
-      setInputMonitoringGranted(granted);
+      setAccessibilityGranted(accessibility);
+      const inputMonitoring = await invoke<boolean>(
+        "check_input_monitoring_permission",
+        { prompt: true },
+      );
+      setInputMonitoringGranted(inputMonitoring);
     } catch (e) {
       setError(String(e));
-      setInputMonitoringGranted(false);
     } finally {
       setSetupBusy(false);
     }
   };
-
-  // Passive status read on mount (no system prompt).
-  useEffect(() => {
-    invoke<boolean>("check_input_monitoring_permission", { prompt: false })
-      .then(setInputMonitoringGranted)
-      .catch(() => {
-        // Non-blocking.
-      });
-  }, []);
 
   const selectedLocalModel = local.transcription.local_model;
 
@@ -782,48 +788,31 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       </Section>
 
       <Section title="Permissions">
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
-          Accessibility (typing into apps):{" "}
-          {accessibilityGranted === null
-            ? "not checked"
-            : accessibilityGranted
-              ? "granted"
-              : "not granted"}
+        <PermissionRow
+          title="Accessibility"
+          description="Lets FlowingThoughts type dictations into other apps."
+          granted={accessibilityGranted}
+          onOpenSettings={() =>
+            invoke("open_accessibility_settings").catch((e) => setError(String(e)))
+          }
+        />
+        <PermissionRow
+          title="Input Monitoring"
+          description="Lets the hotkey work while you're in other apps."
+          granted={inputMonitoringGranted}
+          onOpenSettings={() =>
+            invoke("open_input_monitoring_settings").catch((e) => setError(String(e)))
+          }
+        />
+        <p className="text-[11px] text-zinc-500">
+          Statuses refresh automatically. Toggle on but still "Not granted"?
+          Remove FlowingThoughts from the list with the − button, add it again,
+          and restart the app — after an app update macOS can treat it as a new
+          app.
         </p>
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
-          Input Monitoring (hotkey outside the app):{" "}
-          {inputMonitoringGranted === null
-            ? "not checked"
-            : inputMonitoringGranted
-              ? "granted"
-              : "not granted"}
-        </p>
-        {inputMonitoringGranted === false && (
-          <p className="text-xs text-amber-700 dark:text-amber-300">
-            Without Input Monitoring the dictation hotkey only works while
-            FlowingThoughts itself is focused. Enable it, then restart the app.
-          </p>
-        )}
         <div className="grid grid-cols-1 gap-2">
-          <SecondaryButton onClick={checkAccessibility} disabled={setupBusy}>
-            {setupBusy ? "Checking..." : "Check Accessibility"}
-          </SecondaryButton>
-          <SecondaryButton onClick={checkInputMonitoring} disabled={setupBusy}>
-            {setupBusy ? "Checking..." : "Check Input Monitoring"}
-          </SecondaryButton>
-          <SecondaryButton
-            onClick={() =>
-              invoke("open_accessibility_settings").catch((e) => setError(String(e)))
-            }
-          >
-            Open Accessibility Settings
-          </SecondaryButton>
-          <SecondaryButton
-            onClick={() =>
-              invoke("open_input_monitoring_settings").catch((e) => setError(String(e)))
-            }
-          >
-            Open Input Monitoring Settings
+          <SecondaryButton onClick={requestPermissions} disabled={setupBusy}>
+            {setupBusy ? "Requesting…" : "Request Permission Prompts"}
           </SecondaryButton>
           <SecondaryButton
             onClick={() =>
@@ -927,6 +916,55 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h3>
       {children}
     </section>
+  );
+}
+
+function PermissionRow({
+  title,
+  description,
+  granted,
+  onOpenSettings,
+}: {
+  title: string;
+  description: string;
+  granted: boolean | null;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between gap-3 rounded-xl border p-3 transition-colors ${
+        granted
+          ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
+          : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/80"
+      }`}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-zinc-800 dark:text-zinc-200">{title}</p>
+          <span
+            className={`shrink-0 rounded-full px-2 py-px text-[10px] font-medium ${
+              granted === null
+                ? "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                : granted
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300"
+                  : "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300"
+            }`}
+          >
+            {granted === null ? "Checking…" : granted ? "✓ Granted" : "Not granted"}
+          </span>
+        </div>
+        <p className="text-[11px] text-zinc-500">{description}</p>
+      </div>
+      {!granted && (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="shrink-0 rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-800 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
+          Open Settings
+        </button>
+      )}
+    </div>
   );
 }
 

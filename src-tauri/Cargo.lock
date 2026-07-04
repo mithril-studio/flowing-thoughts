@@ -1208,6 +1208,8 @@ dependencies = [
  "futures",
  "futures-util",
  "hound",
+ "libc",
+ "objc2",
  "rdev",
  "reqwest 0.12.28",
  "rusqlite",

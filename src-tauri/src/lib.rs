@@ -544,17 +544,18 @@ fn save_onboarding_state(
 }
 
 #[tauri::command]
-fn check_accessibility_permission() -> Result<bool, String> {
+fn check_accessibility_permission(prompt: Option<bool>) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        // `prompt: true` registers FlowingThoughts in
-        // System Settings > Privacy & Security > Accessibility the first time
-        // it's called, and surfaces a system dialog if the user hasn't toggled
-        // us on yet. Calling it repeatedly is safe.
-        Ok(macos_ax::is_process_trusted(true))
+        // With `prompt: true` this registers FlowingThoughts in
+        // System Settings > Privacy & Security > Accessibility and surfaces a
+        // system dialog if not yet granted. `prompt: false` is a silent status
+        // read, safe for UI polling.
+        Ok(macos_ax::is_process_trusted(prompt.unwrap_or(true)))
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = prompt;
         Ok(true)
     }
 }
@@ -1033,6 +1034,22 @@ pub fn run() {
             // display can't strand the window off-screen).
             if let Some(indicator) = app.get_webview_window("indicator") {
                 let _ = indicator.set_always_on_top(true);
+                let _ = indicator.set_visible_on_all_workspaces(true);
+                // Keep the pill visible over fullscreen apps too (Wispr-style):
+                // canJoinAllSpaces (1<<0) | fullScreenAuxiliary (1<<8), raised
+                // to status-window level.
+                #[cfg(target_os = "macos")]
+                if let Ok(ns_window) = indicator.ns_window() {
+                    unsafe {
+                        use objc2::msg_send;
+                        use objc2::runtime::AnyObject;
+                        let win = &*(ns_window as *const AnyObject);
+                        let behavior: u64 = (1 << 0) | (1 << 8);
+                        let level: isize = 25; // NSStatusWindowLevel
+                        let _: () = msg_send![win, setCollectionBehavior: behavior];
+                        let _: () = msg_send![win, setLevel: level];
+                    }
+                }
                 if let Some(monitor) = indicator.current_monitor().ok().flatten() {
                     let size = indicator.outer_size().unwrap_or_default();
                     let mpos = monitor.position();
@@ -1698,13 +1715,18 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-                // Hard-exit instead of unwinding through native teardown:
-                // dropping the cached whisper/Metal contexts during normal
-                // shutdown crashes with a "quit unexpectedly" dialog. All
-                // state is persisted eagerly, so skipping destructors is safe.
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                // Terminate immediately with `_exit`, which skips atexit /
+                // __cxa_finalize handlers. A normal `exit()` runs ggml's
+                // C++ static destructors, and freeing the Metal device there
+                // calls ggml_abort → "quit unexpectedly" dialog on every
+                // shutdown. All state is persisted eagerly, so skipping
+                // destructors is safe.
                 let _ = storage::append_log("INFO", "Exit requested — shutting down");
-                std::process::exit(0);
+                unsafe { libc::_exit(0) };
             }
         });
 }
