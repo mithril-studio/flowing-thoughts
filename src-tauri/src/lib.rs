@@ -12,6 +12,11 @@ use std::time::{Duration, Instant};
 /// discarded silently — no error toast, no pipeline run.
 const MIN_DICTATION_MS: u64 = 300;
 
+/// Peak amplitude below which a capture is considered silence and skipped.
+/// Whisper reliably hallucinates on silent audio — subtitle credits from its
+/// training data ("(C) TV GELDERLAND 2021") and markers like [BLANK_AUDIO].
+const SILENCE_PEAK_THRESHOLD: f32 = 0.015;
+
 mod audio;
 #[cfg(target_os = "macos")]
 mod ax_snapshot;
@@ -152,6 +157,56 @@ fn maybe_learn_from_pending_capture(
     );
 }
 
+/// Whisper hallucinates non-speech markers and subtitle credits from its
+/// training data on silent or noisy audio: "[BLANK_AUDIO]", "*Muziek*",
+/// "(C) TV GELDERLAND 2021", "Ondertiteld door ...". Strip the bracketed and
+/// starred markers and reject short transcripts that are known credit lines.
+/// Returns an empty string when nothing real remains — callers treat that as
+/// "no speech detected" and skip injection.
+fn sanitize_transcript(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '[' => {
+                for n in chars.by_ref() {
+                    if n == ']' {
+                        break;
+                    }
+                }
+            }
+            '*' => {
+                for n in chars.by_ref() {
+                    if n == '*' {
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    let cleaned = out.trim();
+    if !cleaned.chars().any(|c| c.is_alphanumeric()) {
+        return String::new();
+    }
+    // Known credit-line hallucinations only ever appear as short standalone
+    // outputs; the length cap keeps real dictations that mention these words
+    // (e.g. "zet de ondertiteling aan…") from being dropped.
+    if cleaned.chars().count() < 60 {
+        let lower = cleaned.to_lowercase();
+        const HALLUCINATED_CREDITS: [&str; 4] = [
+            "tv gelderland",
+            "ondertiteld door",
+            "ondertiteling",
+            "subtitles by the amara",
+        ];
+        if HALLUCINATED_CREDITS.iter().any(|h| lower.contains(h)) {
+            return String::new();
+        }
+    }
+    cleaned.to_string()
+}
+
 fn apply_smart_formatting(text: &str) -> String {
     // Preserve all whitespace (spaces, tabs, newlines) — only capitalise the
     // first visible character. Whisper already returns proper punctuation, so
@@ -173,7 +228,29 @@ fn apply_smart_formatting(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::apply_smart_formatting;
+    use super::{apply_smart_formatting, sanitize_transcript};
+
+    #[test]
+    fn sanitize_drops_silence_hallucinations() {
+        assert_eq!(sanitize_transcript("[BLANK_AUDIO]"), "");
+        assert_eq!(sanitize_transcript("*Muziek*"), "");
+        assert_eq!(sanitize_transcript("***"), "");
+        assert_eq!(sanitize_transcript("(C) TV GELDERLAND 2021"), "");
+        assert_eq!(sanitize_transcript("Ondertiteld door de NOS"), "");
+        assert_eq!(sanitize_transcript(" [ Silence ] "), "");
+    }
+
+    #[test]
+    fn sanitize_strips_markers_but_keeps_speech() {
+        assert_eq!(
+            sanitize_transcript("Hello world [BLANK_AUDIO]"),
+            "Hello world"
+        );
+        assert_eq!(sanitize_transcript("Dit is een test."), "Dit is een test.");
+        // Long real dictations mentioning blocklisted words are kept.
+        let long = "Zet de ondertiteling aan voor deze video want ik wil hem kunnen volgen tijdens de lunch.";
+        assert_eq!(sanitize_transcript(long), long);
+    }
 
     #[test]
     fn smart_formatting_preserves_whitespace_and_capitalises_first_letter() {
@@ -1229,8 +1306,11 @@ pub fn run() {
                                     continue;
                                 }
                             };
-                            if capture.duration_ms < MIN_DICTATION_MS {
-                                // Accidental tap — discard silently, no error UI.
+                            if capture.duration_ms < MIN_DICTATION_MS
+                                || capture.peak_amplitude < SILENCE_PEAK_THRESHOLD
+                            {
+                                // Accidental tap or silent capture — discard
+                                // silently, no error UI, no transcription run.
                                 let _ = app_handle.emit(
                                     "recording-state",
                                     RecordingState {
@@ -1244,8 +1324,8 @@ pub fn run() {
                                 let _ = storage::append_log(
                                     "INFO",
                                     &format!(
-                                        "Session {session_id} dropped as accidental tap ({}ms)",
-                                        capture.duration_ms
+                                        "Session {session_id} dropped as accidental tap or silence ({}ms, peak {:.3})",
+                                        capture.duration_ms, capture.peak_amplitude
                                     ),
                                 );
                                 let _ = std::fs::remove_file(&capture.wav_path);
@@ -1452,7 +1532,34 @@ pub fn run() {
                                 }
 
                                 if let Ok(raw) = &transcript_result {
-                                    let raw = raw.clone();
+                                    // Filter Whisper's silence hallucinations
+                                    // (subtitle credits, [BLANK_AUDIO], *Muziek*).
+                                    // Nothing real left → end quietly, no injection.
+                                    let raw = sanitize_transcript(raw);
+                                    if raw.is_empty() {
+                                        let _ = storage::append_log(
+                                            "INFO",
+                                            &format!(
+                                                "Session {session_id} produced no speech (filtered: {:?})",
+                                                transcript_result.as_ref().ok()
+                                            ),
+                                        );
+                                        let _ = app_handle_for_task.emit(
+                                            "session-phase",
+                                            SessionPhaseEvent { phase: "idle" },
+                                        );
+                                        let mut session_state_guard =
+                                            session_state_for_task.lock().unwrap();
+                                        if matches!(
+                                            *session_state_guard,
+                                            SessionState::Transcribing {
+                                                session_id: current_id
+                                            } if current_id == session_id
+                                        ) {
+                                            *session_state_guard = SessionState::Idle;
+                                        }
+                                        return;
+                                    }
                                     // Apply learned corrections before smart formatting so
                                     // capitalisation rules run on the final word shape.
                                     let correction_pairs: Vec<(String, String)> =

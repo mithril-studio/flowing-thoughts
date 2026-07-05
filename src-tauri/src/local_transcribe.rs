@@ -113,6 +113,9 @@ fn run_inference(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_suppress_blank(true);
+    // Suppress non-speech tokens ([BLANK_AUDIO], music markers, etc.) at the
+    // decoder level; lib.rs additionally filters hallucinated credit lines.
+    params.set_suppress_nst(true);
     if let Some(p) = prompt.filter(|s| !s.trim().is_empty()) {
         params.set_initial_prompt(p);
     }
