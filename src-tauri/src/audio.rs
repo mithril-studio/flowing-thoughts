@@ -29,6 +29,10 @@ impl ActiveRecording {
 pub struct AudioCapture {
     pub wav_path: PathBuf,
     pub duration_ms: u64,
+    /// Loudest sample in the capture, in `[0.0, 1.0]`. Used to skip
+    /// transcription of silent recordings — Whisper hallucinates subtitle
+    /// credits and non-speech markers on silence.
+    pub peak_amplitude: f32,
 }
 
 /// Convert an `AtomicU32` amplitude slot back to a `0.0..=1.0` float.
@@ -135,11 +139,14 @@ pub fn stop_and_finalize(
     let mut writer = hound::WavWriter::create(&wav_path, spec)
         .map_err(|e| format!("Failed to create wav writer: {e}"))?;
 
+    let mut peak: i32 = 0;
     for sample in samples {
+        peak = peak.max((i32::from(sample)).abs());
         writer
             .write_sample(sample)
             .map_err(|e| format!("Failed to write wav sample: {e}"))?;
     }
+    let peak_amplitude = peak as f32 / f32::from(i16::MAX);
 
     writer
         .finalize()
@@ -156,6 +163,7 @@ pub fn stop_and_finalize(
     Ok(AudioCapture {
         wav_path,
         duration_ms,
+        peak_amplitude,
     })
 }
 
