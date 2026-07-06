@@ -44,9 +44,15 @@ if gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
 fi
 
 # Build signed update artifacts. Tauri v2 reads the key CONTENT from
-# TAURI_SIGNING_PRIVATE_KEY (the _PATH variant is not recognised).
+# TAURI_SIGNING_PRIVATE_KEY (the _PATH variant is not recognised). The key
+# password comes from the env or from a sibling ".password" file. Note: the
+# key MUST have a non-empty password — empty-password keys fail to decode
+# ("Wrong password") in current tauri CLI versions.
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ -f "${KEY_PATH}.password" ]; then
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "${KEY_PATH}.password")"
+fi
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 # The DMG bundler (Finder AppleScript) is flaky in non-interactive shells and
 # a failure there would otherwise abort the whole release. Build the app +
