@@ -43,10 +43,24 @@ if gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Build signed update artifacts. The --target flag restricts to the host arch;
-# drop it if you want universal binaries (requires extra setup).
-export TAURI_SIGNING_PRIVATE_KEY_PATH="$KEY_PATH"
-npx tauri build
+# Build signed update artifacts. Tauri v2 reads the key CONTENT from
+# TAURI_SIGNING_PRIVATE_KEY (the _PATH variant is not recognised).
+export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+
+# The DMG bundler (Finder AppleScript) is flaky in non-interactive shells and
+# a failure there would otherwise abort the whole release. Build the app +
+# updater artifacts first, then create the DMG ourselves with hdiutil.
+npx tauri build --bundles app
+
+BUNDLE_DIR_EARLY="src-tauri/target/release/bundle"
+mkdir -p "$BUNDLE_DIR_EARLY/dmg"
+DMG_OUT="$BUNDLE_DIR_EARLY/dmg/FlowingThoughts_${VERSION}_$(uname -m).dmg"
+STAGE="$(mktemp -d)"
+cp -R "$BUNDLE_DIR_EARLY/macos/FlowingThoughts.app" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname "FlowingThoughts" -srcfolder "$STAGE" -ov -format UDZO "$DMG_OUT" >/dev/null
+rm -rf "$STAGE"
 
 BUNDLE_DIR="src-tauri/target/release/bundle/macos"
 ARCH="$(uname -m)"
