@@ -32,7 +32,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJBOENDRUUxNTQ4QzgyQUEKUldTcWdveFU0YzZNdXA2OG9jRmpwQ1NwdWE2QkZhb3BsbmtQUGRTbFMzMlY5Qno0OWcvT0dZZnQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzNkQyMUY0RTMwMDhGMDUKUldRRmp3RGo5Q0Z0RXdic01nWW1WMVQ5K3k3UmpieXpYVFVtS05RRld2UEZRU3ZzamtidWlEY2sK",
       "endpoints": [
         "https://github.com/mithril-studio/flowing-thoughts-releases/releases/latest/download/latest.json"
       ]
