@@ -95,7 +95,10 @@ RELEASE_SIG="${RELEASE_TAR}.sig"
 cp "$APP_TAR" "$BUNDLE_DIR/$RELEASE_TAR"
 cp "$APP_SIG" "$BUNDLE_DIR/$RELEASE_SIG"
 
-LATEST_JSON="$(mktemp -t latest-XXXXXX.json)"
+# The file must literally be named latest.json — `gh release upload file#label`
+# only changes the display label, while the updater resolves assets by name.
+LATEST_JSON_DIR="$(mktemp -d)"
+LATEST_JSON="$LATEST_JSON_DIR/latest.json"
 cat > "$LATEST_JSON" <<EOF
 {
   "version": "${VERSION}",
@@ -119,7 +122,7 @@ echo "==> Creating GitHub release ${TAG} on ${RELEASES_REPO}"
 ASSETS=(
   "$BUNDLE_DIR/$RELEASE_TAR"
   "$BUNDLE_DIR/$RELEASE_SIG"
-  "$LATEST_JSON#latest.json"
+  "$LATEST_JSON"
 )
 if [ -n "$DMG_FILE" ]; then
   ASSETS+=("$DMG_FILE")
