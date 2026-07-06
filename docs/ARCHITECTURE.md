@@ -4,7 +4,10 @@
 
 A reliable "hold to record, release to type" dictation pipeline for macOS:
 
-1. User presses the global hotkey — recording starts **immediately** (no arming delay)
+1. User presses the global hotkey — audio capture starts **immediately** (no
+   speech is lost), but the session only *commits* (● feedback, transcription
+   eligibility) after the key has been held for 500 ms. Shorter presses are
+   discarded silently, so accidental taps never paste anything.
 2. App records audio while the key is held
 3. User releases the hotkey
 4. App transcribes speech with exactly one model (local by default)
@@ -26,8 +29,9 @@ Hotkey (CGEventTap, global)
 
 ### `src-tauri/src/lib.rs`
 - Owns session lifecycle: `Idle -> Recording -> Transcribing -> Injecting -> Idle`
-- Handles hotkey start/stop events; recordings shorter than `MIN_DICTATION_MS`
-  are discarded silently as accidental taps
+- Handles hotkey start/stop events; capture starts at key-down but the session
+  commits only after `HOLD_TO_COMMIT_MS` (500 ms) of hold — earlier releases
+  and captures shorter than `MIN_DICTATION_MS` are discarded silently
 - Emits frontend events: `session-phase`, `recording-amplitude`,
   `transcription-complete`, `pipeline-error`
 

@@ -4,6 +4,7 @@ use tauri::{
     ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
 };
 use std::process::Command;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +12,12 @@ use std::time::{Duration, Instant};
 /// Recordings shorter than this are treated as accidental hotkey taps and
 /// discarded silently — no error toast, no pipeline run.
 const MIN_DICTATION_MS: u64 = 300;
+
+/// The hotkey must be held this long before the session is committed —
+/// recording feedback shown and transcription allowed. Audio capture itself
+/// starts at key-down so no speech is lost; a shorter press is discarded
+/// silently, which stops accidental Fn taps from pasting anything.
+const HOLD_TO_COMMIT_MS: u64 = 500;
 
 /// Peak amplitude below which a capture is considered silence and skipped.
 /// Whisper reliably hallucinates on silent audio — subtitle credits from its
@@ -1144,15 +1151,67 @@ pub fn run() {
             thread::spawn(move || {
                 let mut active_recording: Option<(u64, audio::ActiveRecording)> = None;
                 let mut active_amplitude_stop: Option<Arc<std::sync::atomic::AtomicBool>> = None;
+                // Session id + deadline of a capture that is running but not
+                // yet committed (hotkey held < HOLD_TO_COMMIT_MS).
+                let mut pending_commit: Option<(u64, Instant)> = None;
 
                 loop {
-                    // Start capturing the moment the hotkey goes down — no
-                    // arming delay, so the first words are never cut off.
-                    // Accidental taps are filtered after release by the
-                    // MIN_DICTATION_MS duration guard instead.
-                    let event = match hotkey_rx.recv() {
+                    // Audio capture starts the moment the hotkey goes down so
+                    // the first words are never cut off — but the session only
+                    // becomes visible (● in the menu bar) and eligible for
+                    // transcription once the key has been held for
+                    // HOLD_TO_COMMIT_MS. Releasing earlier discards the
+                    // capture silently, so accidental taps paste nothing.
+                    let recv_result = match pending_commit {
+                        Some((_, deadline)) => {
+                            let wait = deadline.saturating_duration_since(Instant::now());
+                            hotkey_rx.recv_timeout(wait)
+                        }
+                        None => hotkey_rx
+                            .recv()
+                            .map_err(|_| RecvTimeoutError::Disconnected),
+                    };
+
+                    let event = match recv_result {
+                        Err(RecvTimeoutError::Disconnected) => break,
+                        Err(RecvTimeoutError::Timeout) => {
+                            // Held past the threshold — commit the session:
+                            // announce recording and start the amplitude feed.
+                            if let Some((session_id, _)) = pending_commit.take() {
+                                if let Some((_, recording)) = active_recording.as_ref() {
+                                    let amplitude_handle = recording.amplitude_handle();
+                                    let _ = app_handle.emit(
+                                        "recording-state",
+                                        RecordingState { is_recording: true },
+                                    );
+                                    let _ = app_handle.emit(
+                                        "session-phase",
+                                        SessionPhaseEvent { phase: "recording" },
+                                    );
+                                    let stop_flag =
+                                        Arc::new(std::sync::atomic::AtomicBool::new(false));
+                                    active_amplitude_stop = Some(stop_flag.clone());
+                                    let amplitude_app = app_handle.clone();
+                                    thread::spawn(move || {
+                                        while !stop_flag
+                                            .load(std::sync::atomic::Ordering::Relaxed)
+                                        {
+                                            let amp = audio::read_amplitude(&amplitude_handle);
+                                            let _ = amplitude_app.emit(
+                                                "recording-amplitude",
+                                                RecordingAmplitudeEvent {
+                                                    session_id,
+                                                    amplitude: amp,
+                                                },
+                                            );
+                                            thread::sleep(Duration::from_millis(60));
+                                        }
+                                    });
+                                }
+                            }
+                            continue;
+                        }
                         Ok(event) => event,
-                        Err(_) => break,
                     };
 
                     match event {
@@ -1211,43 +1270,58 @@ pub fn run() {
                                     continue;
                                 }
                             };
-                            let amplitude_handle = recording.amplitude_handle();
                             active_recording = Some((session_id, recording));
 
                             *session_state_guard = SessionState::Recording { session_id };
                             drop(id_guard);
                             drop(session_state_guard);
 
-                            let _ = app_handle.emit(
-                                "recording-state",
-                                RecordingState {
-                                    is_recording: true,
-                                },
-                            );
-                            let _ = app_handle.emit(
-                                "session-phase",
-                                SessionPhaseEvent { phase: "recording" },
-                            );
-
-                            let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                            active_amplitude_stop = Some(stop_flag.clone());
-                            let amplitude_app = app_handle.clone();
-                            let amplitude_session = session_id;
-                            thread::spawn(move || {
-                                while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                                    let amp = audio::read_amplitude(&amplitude_handle);
-                                    let _ = amplitude_app.emit(
-                                        "recording-amplitude",
-                                        RecordingAmplitudeEvent {
-                                            session_id: amplitude_session,
-                                            amplitude: amp,
-                                        },
-                                    );
-                                    thread::sleep(Duration::from_millis(60));
-                                }
-                            });
+                            // Don't announce yet — the session commits (UI
+                            // feedback + transcription eligibility) only once
+                            // the key has been held long enough.
+                            pending_commit = Some((
+                                session_id,
+                                Instant::now() + Duration::from_millis(HOLD_TO_COMMIT_MS),
+                            ));
                         }
                         hotkey::HotkeyEvent::RecordStop => {
+                            if pending_commit.take().is_some() {
+                                // Released before the arm threshold — an
+                                // accidental tap. Tear the capture down
+                                // without any UI events or transcription.
+                                let discarded = {
+                                    let mut session_state_guard =
+                                        shared_session_state.lock().unwrap();
+                                    let active_state = std::mem::replace(
+                                        &mut *session_state_guard,
+                                        SessionState::Idle,
+                                    );
+                                    match (active_state, active_recording.take()) {
+                                        (
+                                            SessionState::Recording { session_id },
+                                            Some((recording_session_id, recording)),
+                                        ) if recording_session_id == session_id => {
+                                            Some((session_id, recording))
+                                        }
+                                        _ => None,
+                                    }
+                                };
+                                if let Some((session_id, recording)) = discarded {
+                                    if let Ok(capture) =
+                                        audio::stop_and_finalize(recording, session_id)
+                                    {
+                                        let _ = std::fs::remove_file(&capture.wav_path);
+                                    }
+                                    let _ = storage::append_log(
+                                        "INFO",
+                                        &format!(
+                                            "Session {session_id} discarded — hotkey released before {HOLD_TO_COMMIT_MS}ms hold threshold"
+                                        ),
+                                    );
+                                }
+                                continue;
+                            }
+
                             if let Some(stop) = active_amplitude_stop.take() {
                                 stop.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
