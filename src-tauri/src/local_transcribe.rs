@@ -94,6 +94,13 @@ fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
 /// forced language, so dictations can't come out in e.g. German or Afrikaans.
 const ALLOWED_LANGS: [&str; 2] = ["en", "nl"];
 
+/// Segments whose no-speech probability exceeds this are dropped. Whisper
+/// hallucinates YouTube outros ("Thanks for watching!", "Subscribe to my
+/// channel!") on silence and breath/keyboard noise; those segments carry a
+/// high no-speech probability while real dictation stays well below it. 0.6
+/// is the threshold OpenAI's reference implementation uses.
+const NO_SPEECH_PROB_THRESHOLD: f32 = 0.6;
+
 fn run_inference(
     ctx: &WhisperContext,
     audio: &[f32],
@@ -126,14 +133,25 @@ fn run_inference(
 
     let n_segments = state.full_n_segments();
     let mut text = String::new();
+    let mut dropped = 0;
     for i in 0..n_segments {
         let seg = state
             .get_segment(i)
             .ok_or_else(|| format!("Missing whisper segment {i}"))?;
+        if seg.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
+            dropped += 1;
+            continue;
+        }
         let seg_text = seg
             .to_str()
             .map_err(|e| format!("Failed to decode segment {i}: {e}"))?;
         text.push_str(seg_text);
+    }
+    if dropped > 0 {
+        let _ = crate::storage::append_log(
+            "INFO",
+            &format!("Dropped {dropped}/{n_segments} whisper segments as no-speech hallucinations"),
+        );
     }
     Ok((text.trim().to_string(), state.full_lang_id_from_state()))
 }

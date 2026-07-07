@@ -196,18 +196,27 @@ fn sanitize_transcript(raw: &str) -> String {
     if !cleaned.chars().any(|c| c.is_alphanumeric()) {
         return String::new();
     }
-    // Known credit-line hallucinations only ever appear as short standalone
-    // outputs; the length cap keeps real dictations that mention these words
-    // (e.g. "zet de ondertiteling aan…") from being dropped.
-    if cleaned.chars().count() < 60 {
+    // Known hallucinations (subtitle credits, YouTube outros) only ever
+    // appear as short standalone outputs; the length cap keeps real
+    // dictations that mention these words (e.g. "zet de ondertiteling
+    // aan…") from being dropped.
+    if cleaned.chars().count() < 80 {
         let lower = cleaned.to_lowercase();
-        const HALLUCINATED_CREDITS: [&str; 4] = [
+        const HALLUCINATED_PHRASES: [&str; 12] = [
             "tv gelderland",
             "ondertiteld door",
             "ondertiteling",
             "subtitles by the amara",
+            "thanks for watching",
+            "thank you for watching",
+            "subscribe to my channel",
+            "like and subscribe",
+            "see you in the next video",
+            "in the comments below",
+            "bedankt voor het kijken",
+            "abonneer je op",
         ];
-        if HALLUCINATED_CREDITS.iter().any(|h| lower.contains(h)) {
+        if HALLUCINATED_PHRASES.iter().any(|h| lower.contains(h)) {
             return String::new();
         }
     }
@@ -245,6 +254,15 @@ mod tests {
         assert_eq!(sanitize_transcript("(C) TV GELDERLAND 2021"), "");
         assert_eq!(sanitize_transcript("Ondertiteld door de NOS"), "");
         assert_eq!(sanitize_transcript(" [ Silence ] "), "");
+        assert_eq!(sanitize_transcript("Thanks for watching!"), "");
+        assert_eq!(sanitize_transcript("Subscribe to my channel!"), "");
+        assert_eq!(
+            sanitize_transcript(
+                "So, if you have any questions, please leave them in the comments below."
+            ),
+            ""
+        );
+        assert_eq!(sanitize_transcript("Bedankt voor het kijken!"), "");
     }
 
     #[test]
