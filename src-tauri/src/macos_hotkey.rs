@@ -69,6 +69,10 @@ extern "C" {
     fn CGEventGetFlags(event: CGEventRef) -> u64;
 
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+
+    fn CGEventSourceFlagsState(state_id: u32) -> u64;
+
+    fn CGEventSourceKeyState(state_id: u32, keycode: u16) -> bool;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -132,6 +136,11 @@ const NS_EVENT_MODIFIER_FLAG_SHIFT: u64 = 1 << 17;
 // Virtual keycodes from <HIToolbox/Events.h>.
 const KC_SPACE: i64 = 49;
 
+// kCGEventSourceStateCombinedSessionState — the flags/key state the session
+// actually sees, queryable at any time regardless of whether our event tap
+// received the underlying events.
+const K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION: u32 = 0;
+
 fn event_mask() -> u64 {
     (1u64 << K_CG_EVENT_KEY_DOWN)
         | (1u64 << K_CG_EVENT_KEY_UP)
@@ -148,7 +157,7 @@ fn event_mask() -> u64 {
 struct TapContext {
     mode_state: Arc<Mutex<HotkeyMode>>,
     tx: mpsc::Sender<HotkeyEvent>,
-    state: Mutex<HotkeyFsm>,
+    state: Arc<Mutex<HotkeyFsm>>,
     /// The CFMachPortRef of our event tap, stored as usize once created.
     /// Needed so the callback can re-enable the tap after macOS disables it
     /// (kCGEventTapDisabledByTimeout) — without this the hotkey silently
@@ -178,6 +187,111 @@ impl HotkeyFsm {
         }
         ok
     }
+}
+
+// --- Release failsafe ----------------------------------------------------
+//
+// The event tap is the only source of RecordStop, and macOS can swallow the
+// release event (sleep, screen lock, secure input, tap disabled by timeout).
+// When that happens the FSM stays in `recording_active` until the next
+// keyboard event — which, if the user walks away or watches a video, is
+// minutes or hours later, and the whole ambient capture gets transcribed and
+// pasted. So while recording we also poll the *physical* key state via
+// CGEventSourceFlagsState/KeyState and synthesize the stop ourselves when
+// the hotkey is demonstrably up.
+
+const RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Pure debounce logic for the failsafe poller, split out so it's testable
+/// without CoreGraphics.
+///
+/// Two safety properties:
+/// - Fires only after two consecutive polls observe the hotkey up, so a
+///   single glitchy read can't kill a live dictation.
+/// - Fires only if a poll observed the hotkey *down* earlier in the same
+///   recording. On keyboards whose Fn never reaches the session flags state,
+///   the query would read "up" throughout a genuine hold — the `saw_held`
+///   gate means we never trust a source that can't see the key at all.
+#[derive(Default)]
+struct ReleaseFailsafe {
+    saw_held: bool,
+    released_polls: u32,
+}
+
+impl ReleaseFailsafe {
+    /// Feed one poll observation; returns true when the missed-release stop
+    /// should fire.
+    fn observe(&mut self, recording: bool, physically_held: bool) -> bool {
+        if !recording {
+            self.saw_held = false;
+            self.released_polls = 0;
+            return false;
+        }
+        if physically_held {
+            self.saw_held = true;
+            self.released_polls = 0;
+            return false;
+        }
+        if !self.saw_held {
+            return false;
+        }
+        self.released_polls += 1;
+        if self.released_polls >= 2 {
+            self.saw_held = false;
+            self.released_polls = 0;
+            return true;
+        }
+        false
+    }
+}
+
+fn hotkey_physically_held(mode: HotkeyMode) -> bool {
+    let flags = unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION) };
+    match mode {
+        HotkeyMode::Fn => flags & NS_EVENT_MODIFIER_FLAG_FUNCTION != 0,
+        HotkeyMode::CmdShiftSpace => {
+            let space_down = unsafe {
+                CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION, KC_SPACE as u16)
+            };
+            flags & NS_EVENT_MODIFIER_FLAG_COMMAND != 0
+                && flags & NS_EVENT_MODIFIER_FLAG_SHIFT != 0
+                && space_down
+        }
+    }
+}
+
+fn start_release_failsafe(
+    mode_state: Arc<Mutex<HotkeyMode>>,
+    fsm: Arc<Mutex<HotkeyFsm>>,
+    tx: mpsc::Sender<HotkeyEvent>,
+) {
+    thread::spawn(move || {
+        let mut failsafe = ReleaseFailsafe::default();
+        loop {
+            thread::sleep(RELEASE_POLL_INTERVAL);
+            let recording = fsm.lock().map(|g| g.recording_active).unwrap_or(false);
+            let mode = mode_state.lock().map(|g| *g).unwrap_or(HotkeyMode::Fn);
+            let held = recording && hotkey_physically_held(mode);
+            if !failsafe.observe(recording, held) {
+                continue;
+            }
+            // Re-check under the lock — a real release event may have won the
+            // race since the poll; only synthesize the stop if we're still
+            // stuck in recording.
+            if let Ok(mut guard) = fsm.lock() {
+                if guard.recording_active {
+                    guard.recording_active = false;
+                    guard.fn_was_down = false;
+                    guard.space_was_down = false;
+                    let _ = tx.send(HotkeyEvent::RecordStop);
+                    let _ = crate::storage::append_log(
+                        "WARN",
+                        "Hotkey release failsafe fired — physical key state shows the hotkey is up but no release event was delivered (sleep, screen lock, or dropped tap event)",
+                    );
+                }
+            }
+        }
+    });
 }
 
 extern "C" fn tap_callback(
@@ -268,10 +382,13 @@ extern "C" fn tap_callback(
 pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<HotkeyEvent> {
     let (tx, rx) = mpsc::channel();
 
+    let fsm = Arc::new(Mutex::new(HotkeyFsm::default()));
+    start_release_failsafe(mode_state.clone(), fsm.clone(), tx.clone());
+
     let ctx = Box::new(TapContext {
         mode_state,
         tx,
-        state: Mutex::new(HotkeyFsm::default()),
+        state: fsm,
         tap_port: AtomicUsize::new(0),
     });
     // Pass the context pointer through the thread boundary as `usize`.
@@ -339,4 +456,56 @@ pub fn start_listener(mode_state: Arc<Mutex<HotkeyMode>>) -> mpsc::Receiver<Hotk
     });
 
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReleaseFailsafe;
+
+    #[test]
+    fn failsafe_fires_after_two_released_polls_when_key_was_seen_held() {
+        let mut f = ReleaseFailsafe::default();
+        assert!(!f.observe(true, true)); // key down, recording
+        assert!(!f.observe(true, false)); // first released poll — debounce
+        assert!(f.observe(true, false)); // second released poll — fire
+    }
+
+    #[test]
+    fn failsafe_never_fires_if_key_state_never_showed_held() {
+        // Keyboards whose Fn never reaches the session flags state read "up"
+        // for the whole recording — the failsafe must not kill the session.
+        let mut f = ReleaseFailsafe::default();
+        for _ in 0..100 {
+            assert!(!f.observe(true, false));
+        }
+    }
+
+    #[test]
+    fn failsafe_debounce_resets_when_key_reads_held_again() {
+        let mut f = ReleaseFailsafe::default();
+        assert!(!f.observe(true, true));
+        assert!(!f.observe(true, false)); // glitchy single read
+        assert!(!f.observe(true, true)); // key is actually still down
+        assert!(!f.observe(true, false));
+        assert!(f.observe(true, false));
+    }
+
+    #[test]
+    fn failsafe_resets_between_recordings() {
+        let mut f = ReleaseFailsafe::default();
+        assert!(!f.observe(true, true));
+        assert!(!f.observe(false, false)); // recording ended normally
+        // New recording: needs to see the key held again before it can fire.
+        assert!(!f.observe(true, false));
+        assert!(!f.observe(true, false));
+        assert!(!f.observe(true, false));
+    }
+
+    #[test]
+    fn failsafe_idle_polls_do_nothing() {
+        let mut f = ReleaseFailsafe::default();
+        for _ in 0..10 {
+            assert!(!f.observe(false, false));
+        }
+    }
 }

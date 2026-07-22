@@ -1,6 +1,6 @@
 [package]
 name = "flowing-thoughts"
-version = "0.3.0"
+version = "0.3.1"
 description = "Voice dictation for macOS — hold to record, release to type"
 authors = ["Joost Dolstra"]
 edition = "2021"

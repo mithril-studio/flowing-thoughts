@@ -24,6 +24,25 @@ const HOLD_TO_COMMIT_MS: u64 = 500;
 /// training data ("(C) TV GELDERLAND 2021") and markers like [BLANK_AUDIO].
 const SILENCE_PEAK_THRESHOLD: f32 = 0.015;
 
+/// Hard ceiling on a single capture. Recording normally ends at key release,
+/// but macOS can swallow the release event (sleep, screen lock, secure
+/// input) — field logs show sessions that recorded 40 minutes to 6 hours of
+/// ambient audio and pasted the whole transcript. The cap force-stops the
+/// session as if the key were released.
+const MAX_RECORDING_MS: u64 = 300_000;
+
+/// Transcripts longer than this — or from captures longer than
+/// MAX_AUTO_INJECT_MS — are never auto-pasted into the focused app. They go
+/// to history and the clipboard instead. 2000 chars is roughly two minutes
+/// of continuous speech; anything beyond that pasted unreviewed into an
+/// arbitrary focused field does more harm than good.
+const MAX_AUTO_INJECT_CHARS: usize = 2_000;
+const MAX_AUTO_INJECT_MS: u64 = 120_000;
+
+fn should_withhold_injection(char_count: usize, capture_duration_ms: u64) -> bool {
+    char_count > MAX_AUTO_INJECT_CHARS || capture_duration_ms > MAX_AUTO_INJECT_MS
+}
+
 mod audio;
 #[cfg(target_os = "macos")]
 mod ax_snapshot;
@@ -244,7 +263,24 @@ fn apply_smart_formatting(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_smart_formatting, sanitize_transcript};
+    use super::{
+        apply_smart_formatting, sanitize_transcript, should_withhold_injection,
+        MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS,
+    };
+
+    #[test]
+    fn injection_guard_allows_normal_dictations() {
+        assert!(!should_withhold_injection(150, 8_000));
+        assert!(!should_withhold_injection(MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS));
+    }
+
+    #[test]
+    fn injection_guard_withholds_oversized_transcripts() {
+        // 29k chars from a 46-minute stuck capture (field session 340).
+        assert!(should_withhold_injection(29_110, 2_760_000));
+        assert!(should_withhold_injection(MAX_AUTO_INJECT_CHARS + 1, 10_000));
+        assert!(should_withhold_injection(500, MAX_AUTO_INJECT_MS + 1));
+    }
 
     #[test]
     fn sanitize_drops_silence_hallucinations() {
@@ -1172,6 +1208,9 @@ pub fn run() {
                 // Session id + deadline of a capture that is running but not
                 // yet committed (hotkey held < HOLD_TO_COMMIT_MS).
                 let mut pending_commit: Option<(u64, Instant)> = None;
+                // Deadline after which the running capture is force-stopped
+                // (MAX_RECORDING_MS) — the backstop for a missed key release.
+                let mut recording_cap: Option<Instant> = None;
 
                 loop {
                     // Audio capture starts the moment the hotkey goes down so
@@ -1180,8 +1219,13 @@ pub fn run() {
                     // transcription once the key has been held for
                     // HOLD_TO_COMMIT_MS. Releasing earlier discards the
                     // capture silently, so accidental taps paste nothing.
-                    let recv_result = match pending_commit {
-                        Some((_, deadline)) => {
+                    let commit_deadline = pending_commit.map(|(_, deadline)| deadline);
+                    let next_deadline = match (commit_deadline, recording_cap) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
+                    };
+                    let recv_result = match next_deadline {
+                        Some(deadline) => {
                             let wait = deadline.saturating_duration_since(Instant::now());
                             hotkey_rx.recv_timeout(wait)
                         }
@@ -1192,7 +1236,11 @@ pub fn run() {
 
                     let event = match recv_result {
                         Err(RecvTimeoutError::Disconnected) => break,
-                        Err(RecvTimeoutError::Timeout) => {
+                        Err(RecvTimeoutError::Timeout)
+                            if commit_deadline
+                                .map(|d| d <= Instant::now())
+                                .unwrap_or(false) =>
+                        {
                             // Held past the threshold — commit the session:
                             // announce recording and start the amplitude feed.
                             if let Some((session_id, _)) = pending_commit.take() {
@@ -1228,6 +1276,26 @@ pub fn run() {
                                 }
                             }
                             continue;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            // The only other armed deadline is the recording
+                            // cap — force-stop the runaway capture as if the
+                            // key had been released.
+                            if recording_cap.map(|d| d <= Instant::now()).unwrap_or(false) {
+                                if let Some((session_id, _)) = active_recording.as_ref() {
+                                    let _ = storage::append_log(
+                                        "WARN",
+                                        &format!(
+                                            "Session {session_id} force-stopped at the {MAX_RECORDING_MS}ms recording cap — hotkey release was never delivered"
+                                        ),
+                                    );
+                                }
+                                hotkey::HotkeyEvent::RecordStop
+                            } else {
+                                // Spurious wake — deadlines were cleared or
+                                // moved since the wait was armed.
+                                continue;
+                            }
                         }
                         Ok(event) => event,
                     };
@@ -1289,6 +1357,8 @@ pub fn run() {
                                 }
                             };
                             active_recording = Some((session_id, recording));
+                            recording_cap =
+                                Some(Instant::now() + Duration::from_millis(MAX_RECORDING_MS));
 
                             *session_state_guard = SessionState::Recording { session_id };
                             drop(id_guard);
@@ -1303,6 +1373,7 @@ pub fn run() {
                             ));
                         }
                         hotkey::HotkeyEvent::RecordStop => {
+                            recording_cap = None;
                             if pending_commit.take().is_some() {
                                 // Released before the arm threshold — an
                                 // accidental tap. Tear the capture down
@@ -1671,28 +1742,64 @@ pub fn run() {
                                     } else {
                                         replaced
                                     };
-                                    {
-                                        let mut session_state_guard =
-                                            session_state_for_task.lock().unwrap();
-                                        *session_state_guard =
-                                            SessionState::Injecting { session_id };
-                                    }
-                                    let _ = app_handle_for_task.emit(
-                                        "session-phase",
-                                        SessionPhaseEvent { phase: "injecting" },
-                                    );
-                                    let inject_result = text_inject::inject_text(&text);
-                                    if inject_result.is_ok() {
-                                        if let Ok(mut guard) = pending_capture_for_task.lock() {
-                                            *guard = Some(PendingCapture {
+                                    // Last line of defense against runaway
+                                    // captures: an oversized transcript is
+                                    // never auto-pasted into whatever app
+                                    // happens to be focused — it goes to
+                                    // history and the clipboard instead.
+                                    let inject_result = if should_withhold_injection(
+                                        text.chars().count(),
+                                        capture.duration_ms,
+                                    ) {
+                                        let _ = text_inject::write_clipboard(&text);
+                                        let _ = storage::append_log(
+                                            "WARN",
+                                            &format!(
+                                                "Session {session_id} transcript withheld from auto-paste ({} chars from a {}s capture) — saved to history and clipboard",
+                                                text.chars().count(),
+                                                capture.duration_ms / 1000,
+                                            ),
+                                        );
+                                        let _ = app_handle_for_task.emit(
+                                            "pipeline-error",
+                                            PipelineErrorEvent {
                                                 session_id,
-                                                dictation_id: dictation_id.clone(),
-                                                model: primary_label.clone(),
-                                                injected_text: text.clone(),
-                                                captured_at: Instant::now(),
-                                            });
+                                                stage: "inject-guard",
+                                                message: format!(
+                                                    "Transcript too large to auto-paste ({} characters from a {}-second recording). It's saved in History and on the clipboard — press ⌘V to paste it.",
+                                                    text.chars().count(),
+                                                    capture.duration_ms / 1000,
+                                                ),
+                                            },
+                                        );
+                                        None
+                                    } else {
+                                        {
+                                            let mut session_state_guard =
+                                                session_state_for_task.lock().unwrap();
+                                            *session_state_guard =
+                                                SessionState::Injecting { session_id };
                                         }
-                                    }
+                                        let _ = app_handle_for_task.emit(
+                                            "session-phase",
+                                            SessionPhaseEvent { phase: "injecting" },
+                                        );
+                                        let result = text_inject::inject_text(&text);
+                                        if result.is_ok() {
+                                            if let Ok(mut guard) =
+                                                pending_capture_for_task.lock()
+                                            {
+                                                *guard = Some(PendingCapture {
+                                                    session_id,
+                                                    dictation_id: dictation_id.clone(),
+                                                    model: primary_label.clone(),
+                                                    injected_text: text.clone(),
+                                                    captured_at: Instant::now(),
+                                                });
+                                            }
+                                        }
+                                        Some(result)
+                                    };
                                     let _ = storage::append_log(
                                         "INFO",
                                         &format!(
@@ -1722,7 +1829,7 @@ pub fn run() {
                                     if let Ok(conn) = db_conn_for_task.lock() {
                                         let _ = storage::record_history(&conn, &history_entry);
                                     }
-                                    if let Err(message) = inject_result {
+                                    if let Some(Err(message)) = inject_result {
                                         let _ = app_handle_for_task.emit(
                                             "pipeline-error",
                                             PipelineErrorEvent {
