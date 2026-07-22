@@ -48,6 +48,7 @@ mod audio;
 mod ax_snapshot;
 mod corrections;
 mod db;
+mod dev_vocab;
 mod hotkey;
 mod local_transcribe;
 #[cfg(target_os = "macos")]
@@ -1532,6 +1533,7 @@ pub fn run() {
                                     smart_formatting,
                                     transcription_mode,
                                     local_model,
+                                    developer_dictionary,
                                 ) = persisted_for_task
                                     .lock()
                                     .ok()
@@ -1552,6 +1554,7 @@ pub fn run() {
                                             state.settings.extras.smart_formatting,
                                             state.settings.transcription.provider.clone(),
                                             state.settings.transcription.local_model.clone(),
+                                            state.settings.extras.developer_dictionary,
                                         )
                                     })
                                     .unwrap_or((
@@ -1561,6 +1564,7 @@ pub fn run() {
                                         true,
                                         "local".to_string(),
                                         "whisper-small-q5".to_string(),
+                                        true,
                                     ));
 
                                 let dictation_id = uuid::Uuid::new_v4().to_string();
@@ -1585,8 +1589,10 @@ pub fn run() {
 
                                 // Build a Whisper `prompt` from the intended terms the
                                 // user has taught us, so the decoder biases toward
-                                // them on ambiguous audio.
-                                let correction_prompt: Option<String> = db_conn_for_task
+                                // them on ambiguous audio. With the developer
+                                // dictionary on, the built-in vocabulary fills
+                                // whatever budget the user's terms leave over.
+                                let user_terms: Vec<String> = db_conn_for_task
                                     .lock()
                                     .ok()
                                     .and_then(|conn| {
@@ -1597,16 +1603,22 @@ pub fn run() {
                                         )
                                         .ok()
                                     })
-                                    .and_then(|rows| {
-                                        let terms: Vec<String> = rows
-                                            .into_iter()
-                                            .map(|r| r.intended_text)
-                                            .collect();
-                                        corrections::build_prompt_from_corrections(
-                                            &terms,
-                                            CORRECTION_PROMPT_CHAR_CAP,
-                                        )
-                                    });
+                                    .map(|rows| {
+                                        rows.into_iter().map(|r| r.intended_text).collect()
+                                    })
+                                    .unwrap_or_default();
+                                let correction_prompt: Option<String> = if developer_dictionary
+                                {
+                                    dev_vocab::build_biased_prompt(
+                                        &user_terms,
+                                        CORRECTION_PROMPT_CHAR_CAP,
+                                    )
+                                } else {
+                                    corrections::build_prompt_from_corrections(
+                                        &user_terms,
+                                        CORRECTION_PROMPT_CHAR_CAP,
+                                    )
+                                };
 
                                 // Run exactly one transcription — the model the user
                                 // picked. (Earlier builds fanned out to 4 models per
@@ -1723,8 +1735,16 @@ pub fn run() {
                                         }
                                         return;
                                     }
-                                    // Apply learned corrections before smart formatting so
+                                    // Repair developer jargon first, then apply the
+                                    // user's learned corrections on top (so a personal
+                                    // correction always wins over the built-in
+                                    // dictionary), all before smart formatting so
                                     // capitalisation rules run on the final word shape.
+                                    let raw = if developer_dictionary {
+                                        dev_vocab::normalize(&raw)
+                                    } else {
+                                        raw
+                                    };
                                     let correction_pairs: Vec<(String, String)> =
                                         db_conn_for_task
                                             .lock()
