@@ -99,6 +99,10 @@ pub struct ExtrasSettings {
     pub dangerously_skip_permissions: bool,
     #[serde(default = "default_true")]
     pub auto_learn_corrections: bool,
+    /// Bias transcription toward the built-in developer vocabulary and
+    /// repair casing/split-word mishears (API, GitHub, TypeScript, …).
+    #[serde(default = "default_true")]
+    pub developer_dictionary: bool,
 }
 
 fn default_true() -> bool {
@@ -128,6 +132,7 @@ impl Default for ExtrasSettings {
             smart_formatting: false,
             dangerously_skip_permissions: false,
             auto_learn_corrections: true,
+            developer_dictionary: true,
         }
     }
 }

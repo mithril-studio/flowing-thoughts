@@ -105,7 +105,7 @@ fn is_boundary_punct(c: char) -> bool {
     )
 }
 
-fn split_boundary_punct(word: &str) -> (&str, &str, &str) {
+pub(crate) fn split_boundary_punct(word: &str) -> (&str, &str, &str) {
     let leading_end = word
         .char_indices()
         .find(|(_, c)| !is_boundary_punct(*c))
@@ -148,7 +148,7 @@ fn preserve_case(original: &str, replacement: &str) -> String {
 // Splits text into tokens while preserving whitespace as separate "tokens" so
 // we can reconstruct the original spacing on re-join. Each returned piece is
 // either a run of non-whitespace or a run of whitespace.
-fn split_preserving_whitespace(text: &str) -> Vec<String> {
+pub(crate) fn split_preserving_whitespace(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut in_whitespace: Option<bool> = None;

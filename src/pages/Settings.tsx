@@ -753,6 +753,23 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
         />
         <div className="space-y-1">
           <Toggle
+            label="Developer dictionary"
+            checked={local.extras.developer_dictionary}
+            onChange={(checked) =>
+              update({
+                ...local,
+                extras: { ...local.extras, developer_dictionary: checked },
+              })
+            }
+            disabled={busy}
+          />
+          <p className="pl-1 text-xs text-zinc-500">
+            Recognize developer and AI terms — API, JSON, GitHub, TypeScript,
+            Kubernetes — and fix their spelling and casing in dictations.
+          </p>
+        </div>
+        <div className="space-y-1">
+          <Toggle
             label="Learn from my edits"
             checked={local.extras.auto_learn_corrections}
             onChange={(checked) =>
