@@ -6,6 +6,7 @@ import Home from "./pages/Home";
 import Snippets from "./pages/Snippets";
 import Notes from "./pages/Notes";
 import Corrections from "./pages/Corrections";
+import Coach from "./pages/Coach";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
@@ -60,6 +61,7 @@ function App() {
     snippets: <Snippets />,
     notes: <Notes />,
     corrections: <Corrections />,
+    coach: <Coach settings={appSettings} />,
     settings: (
       <Settings
         settings={appSettings}
@@ -156,10 +158,19 @@ function App() {
     );
   }
 
+  // If coaching gets turned off while its tab is open, fall back to Home.
+  const coachingEnabled = appSettings.coaching.enabled;
+  const effectiveTab =
+    activeTab === "coach" && !coachingEnabled ? "home" : activeTab;
+
   return shell(
     <>
-      <div className="flex-1 overflow-hidden">{pages[activeTab]}</div>
-      <TabBar active={activeTab} onTabChange={setActiveTab} />
+      <div className="flex-1 overflow-hidden">{pages[effectiveTab]}</div>
+      <TabBar
+        active={effectiveTab}
+        onTabChange={setActiveTab}
+        showCoach={coachingEnabled}
+      />
     </>,
   );
 }

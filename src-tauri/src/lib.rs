@@ -46,6 +46,7 @@ fn should_withhold_injection(char_count: usize, capture_duration_ms: u64) -> boo
 mod audio;
 #[cfg(target_os = "macos")]
 mod ax_snapshot;
+mod coach;
 mod corrections;
 mod db;
 mod dev_vocab;
@@ -395,12 +396,107 @@ fn set_active_provider(
     Ok(())
 }
 
+#[tauri::command]
+fn set_openrouter_api_key(
+    key: String,
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("API key cannot be empty".to_string());
+    }
+    let mut state = persisted
+        .inner()
+        .lock()
+        .map_err(|_| "Persisted state lock poisoned".to_string())?;
+    state.openrouter_api_key = Some(trimmed.to_string());
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    storage::save(&conn, &state)?;
+    Ok(())
+}
+
+const COACHING_TIPS_KV_KEY: &str = "last_coaching_tips";
+
+#[tauri::command]
+async fn get_coaching_tips(
+    persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<coach::CoachingResult, String> {
+    // Read the key + coaching config, then release the lock before any await.
+    let (api_key, model, batch_size) = {
+        let state = persisted
+            .inner()
+            .lock()
+            .map_err(|_| "Persisted state lock poisoned".to_string())?;
+        if !state.settings.coaching.enabled {
+            return Err("Coaching is turned off. Enable it in Settings → Coaching.".to_string());
+        }
+        let key = state
+            .openrouter_api_key
+            .clone()
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                "No OpenRouter API key configured. Add one in Settings → Coaching.".to_string()
+            })?;
+        (
+            key,
+            state.settings.coaching.model.clone(),
+            state.settings.coaching.batch_size,
+        )
+    };
+
+    // Fetch the last N dictations, then release the DB lock before the await.
+    let entries = {
+        let conn = db_conn
+            .inner()
+            .lock()
+            .map_err(|_| "DB lock poisoned".to_string())?;
+        db::list_history(&conn, batch_size.max(1) as i64)?
+    };
+
+    let tips = coach::generate_tips(&entries, &model, &api_key).await?;
+    let sample_count = entries.iter().filter(|e| !e.text.trim().is_empty()).count();
+    let result = coach::CoachingResult {
+        tips,
+        sample_count,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    // Cache the result so reopening the tab is free.
+    if let Ok(conn) = db_conn.inner().lock() {
+        if let Ok(json) = serde_json::to_string(&result) {
+            let _ = db::kv_set(&conn, COACHING_TIPS_KV_KEY, &json);
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn get_cached_coaching_tips(
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Option<coach::CoachingResult>, String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    match db::kv_get(&conn, COACHING_TIPS_KV_KEY)? {
+        Some(raw) => Ok(serde_json::from_str(&raw).ok()),
+        None => Ok(None),
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct PersistedStateView {
     onboarding_complete: bool,
     license_key: Option<String>,
     groq_api_key_configured: bool,
     openai_api_key_configured: bool,
+    openrouter_api_key_configured: bool,
     active_provider: String,
     history: Vec<storage::HistoryEntry>,
     settings: storage::AppSettings,
@@ -419,6 +515,7 @@ fn get_persisted_state(
         license_key: state.license_key.clone(),
         groq_api_key_configured: state.groq_api_key.is_some(),
         openai_api_key_configured: state.openai_api_key.is_some(),
+        openrouter_api_key_configured: state.openrouter_api_key.is_some(),
         active_provider: state.active_provider.as_str().to_string(),
         history: state.history.clone(),
         settings: state.settings.clone(),
@@ -456,6 +553,10 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if !valid_themes.contains(&settings.general.theme.as_str()) {
         settings.general.theme = "light".to_string();
     }
+    if settings.coaching.model.trim().is_empty() {
+        settings.coaching.model = "openai/gpt-4o-mini".to_string();
+    }
+    settings.coaching.batch_size = settings.coaching.batch_size.clamp(5, 100);
 }
 
 fn apply_window_movable(window: &WebviewWindow, movable: bool) {
@@ -1942,6 +2043,9 @@ pub fn run() {
             get_recording_state,
             set_api_key,
             set_active_provider,
+            set_openrouter_api_key,
+            get_coaching_tips,
+            get_cached_coaching_tips,
             get_persisted_state,
             save_onboarding_state,
             check_accessibility_permission,

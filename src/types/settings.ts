@@ -30,6 +30,11 @@ export interface AppSettings {
     provider: "api" | "local";
     local_model: string;
   };
+  coaching: {
+    enabled: boolean;
+    model: string;
+    batch_size: number;
+  };
 }
 
 export interface AppSettingsUpdateResult {
@@ -68,5 +73,10 @@ export const defaultAppSettings: AppSettings = {
   transcription: {
     provider: "local",
     local_model: "whisper-small-q5",
+  },
+  coaching: {
+    enabled: false,
+    model: "openai/gpt-4o-mini",
+    batch_size: 20,
   },
 };

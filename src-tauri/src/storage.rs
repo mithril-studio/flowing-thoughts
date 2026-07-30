@@ -125,6 +125,27 @@ impl Default for TranscriptionSettings {
     }
 }
 
+/// On-demand English coaching. Sends the last N dictation transcripts to an
+/// OpenRouter model and returns concise, actionable tips. Off by default; the
+/// tab stays hidden until the user turns it on and adds their own key.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct CoachingSettings {
+    pub enabled: bool,
+    pub model: String,
+    pub batch_size: u32,
+}
+
+impl Default for CoachingSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: "openai/gpt-4o-mini".to_string(),
+            batch_size: 20,
+        }
+    }
+}
+
 impl Default for ExtrasSettings {
     fn default() -> Self {
         Self {
@@ -153,6 +174,8 @@ pub struct AppSettings {
     pub extras: ExtrasSettings,
     #[serde(default)]
     pub transcription: TranscriptionSettings,
+    #[serde(default)]
+    pub coaching: CoachingSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -194,6 +217,10 @@ pub struct PersistedState {
     pub groq_api_key: Option<String>,
     #[serde(default)]
     pub openai_api_key: Option<String>,
+    // OpenRouter key powers the coaching feature only — kept separate from the
+    // transcription providers (Groq/OpenAI) above.
+    #[serde(default)]
+    pub openrouter_api_key: Option<String>,
     #[serde(default)]
     pub active_provider: Provider,
     #[serde(default)]
@@ -236,6 +263,9 @@ pub fn load(conn: &Connection) -> Result<PersistedState, String> {
     if let Some(raw) = db::kv_get(conn, "groq_api_key")? {
         state.groq_api_key = serde_json::from_str(&raw).unwrap_or(None);
     }
+    if let Some(raw) = db::kv_get(conn, "openrouter_api_key")? {
+        state.openrouter_api_key = serde_json::from_str(&raw).unwrap_or(None);
+    }
     if let Some(raw) = db::kv_get(conn, "active_provider")? {
         state.active_provider = Provider::parse(raw.trim_matches('"')).unwrap_or_default();
     }
@@ -268,6 +298,12 @@ pub fn save(conn: &Connection, state: &PersistedState) -> Result<(), String> {
         "groq_api_key",
         &serde_json::to_string(&state.groq_api_key)
             .map_err(|e| format!("Failed to serialize groq_api_key: {e}"))?,
+    )?;
+    db::kv_set(
+        conn,
+        "openrouter_api_key",
+        &serde_json::to_string(&state.openrouter_api_key)
+            .map_err(|e| format!("Failed to serialize openrouter_api_key: {e}"))?,
     )?;
     db::kv_set(conn, "active_provider", state.active_provider.as_str())?;
     db::kv_set(
