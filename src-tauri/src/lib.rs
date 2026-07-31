@@ -13,11 +13,13 @@ use std::time::{Duration, Instant};
 /// discarded silently — no error toast, no pipeline run.
 const MIN_DICTATION_MS: u64 = 300;
 
-/// The hotkey must be held this long before the session is committed —
-/// recording feedback shown and transcription allowed. Audio capture itself
-/// starts at key-down so no speech is lost; a shorter press is discarded
-/// silently, which stops accidental Fn taps from pasting anything.
-const HOLD_TO_COMMIT_MS: u64 = 500;
+/// The hotkey must be held this long — a full second — before the session is
+/// committed: recording feedback shown and transcription allowed. Audio
+/// capture itself starts at key-down so no speech is lost once the hold is
+/// honoured; any shorter press is discarded silently, which stops accidental
+/// Fn taps (and the whisper hallucinations they produce — "Thank you",
+/// "Thanks for watching") from pasting anything into the focused app.
+const HOLD_TO_COMMIT_MS: u64 = 1_000;
 
 /// Peak amplitude below which a capture is considered silence and skipped.
 /// Whisper reliably hallucinates on silent audio — subtitle credits from its
