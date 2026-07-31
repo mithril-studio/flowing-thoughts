@@ -84,7 +84,14 @@ interface PersistedStateView {
   active_provider: Provider;
   groq_api_key_configured: boolean;
   openai_api_key_configured: boolean;
+  openrouter_api_key_configured: boolean;
 }
+
+const COACHING_MODEL_SUGGESTIONS = [
+  "openai/gpt-4o-mini",
+  "google/gemini-2.5-flash-lite",
+  "meta-llama/llama-3.1-8b-instruct",
+];
 
 export default function Settings({ settings, onSettingsChange }: SettingsProps) {
   const [local, setLocal] = useState<AppSettings>(settings ?? defaultAppSettings);
@@ -97,6 +104,10 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [groqConfigured, setGroqConfigured] = useState(false);
   const [openaiConfigured, setOpenaiConfigured] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
+  const [openrouterKey, setOpenrouterKey] = useState("");
+  const [openrouterConfigured, setOpenrouterConfigured] = useState(false);
+  const [coachBusy, setCoachBusy] = useState(false);
+  const [coachMessage, setCoachMessage] = useState<string | null>(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState<boolean | null>(null);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState<boolean | null>(null);
   const [helpInfo, setHelpInfo] = useState<AccessibilityHelpInfo | null>(null);
@@ -121,6 +132,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       .then((state) => {
         setGroqConfigured(Boolean(state.groq_api_key_configured));
         setOpenaiConfigured(Boolean(state.openai_api_key_configured));
+        setOpenrouterConfigured(Boolean(state.openrouter_api_key_configured));
         if (state.active_provider === "openai" || state.active_provider === "groq") {
           setActiveProvider(state.active_provider);
           setEditingProvider(state.active_provider);
@@ -316,6 +328,26 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
       setApiMessage(String(e));
     } finally {
       setApiBusy(false);
+    }
+  };
+
+  const saveOpenrouterKey = async () => {
+    const trimmed = openrouterKey.trim();
+    if (!trimmed) {
+      setCoachMessage("Please enter your OpenRouter API key.");
+      return;
+    }
+    setCoachBusy(true);
+    setCoachMessage(null);
+    try {
+      await invoke("set_openrouter_api_key", { key: trimmed });
+      setOpenrouterKey("");
+      setCoachMessage("OpenRouter API key saved.");
+      refreshProviderState();
+    } catch (e) {
+      setCoachMessage(String(e));
+    } finally {
+      setCoachBusy(false);
     }
   };
 
@@ -801,6 +833,137 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
             Warning: This bypasses permission checks in onboarding and may cause
             injection failures.
           </p>
+        )}
+      </Section>
+
+      <Section title="Coaching">
+        <div className="space-y-1">
+          <Toggle
+            label="English coach"
+            checked={local.coaching.enabled}
+            onChange={(checked) =>
+              update({
+                ...local,
+                coaching: { ...local.coaching, enabled: checked },
+              })
+            }
+            disabled={busy}
+          />
+          <p className="pl-1 text-xs text-zinc-500">
+            Adds a Coach tab that sends your recent dictations to an OpenRouter
+            model and returns concise tips on filler words, repetition, and
+            phrasing. On-demand only — nothing runs automatically.
+          </p>
+        </div>
+
+        {local.coaching.enabled && (
+          <div className="space-y-3 pt-1">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  OpenRouter API key
+                </p>
+                <span className="text-[11px] text-zinc-500">
+                  {openrouterConfigured ? "configured" : "not configured"}
+                </span>
+              </div>
+              <input
+                type="password"
+                value={openrouterKey}
+                onChange={(e) => setOpenrouterKey(e.target.value)}
+                placeholder="sk-or-..."
+                className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500"
+              />
+              <button
+                type="button"
+                onClick={saveOpenrouterKey}
+                disabled={coachBusy}
+                className="w-full rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white disabled:opacity-60"
+              >
+                {coachBusy ? "Saving..." : "Save OpenRouter API Key"}
+              </button>
+              <a
+                href="https://openrouter.ai/keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-[11px] text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
+              >
+                How to get an OpenRouter API key →
+              </a>
+              {coachMessage && (
+                <p className="text-xs text-zinc-700 dark:text-zinc-300">{coachMessage}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">Model</p>
+              <input
+                type="text"
+                value={local.coaching.model}
+                onChange={(e) =>
+                  setLocal({
+                    ...local,
+                    coaching: { ...local.coaching, model: e.target.value },
+                  })
+                }
+                onBlur={() => update(local)}
+                placeholder="openai/gpt-4o-mini"
+                className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500"
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {COACHING_MODEL_SUGGESTIONS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() =>
+                      update({
+                        ...local,
+                        coaching: { ...local.coaching, model: m },
+                      })
+                    }
+                    className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+                      local.coaching.model === m
+                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300"
+                        : "border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-400 dark:hover:border-zinc-600"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                Any OpenRouter model id. Cheap ones work well for short tips.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                Dictations analyzed: {local.coaching.batch_size}
+              </p>
+              <input
+                type="range"
+                min={5}
+                max={100}
+                step={5}
+                value={local.coaching.batch_size}
+                onChange={(e) =>
+                  setLocal({
+                    ...local,
+                    coaching: {
+                      ...local.coaching,
+                      batch_size: Number(e.target.value),
+                    },
+                  })
+                }
+                onMouseUp={() => update(local)}
+                onKeyUp={() => update(local)}
+                className="w-full accent-emerald-500"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Fewer is cheaper and more current; more captures broader patterns.
+              </p>
+            </div>
+          </div>
         )}
       </Section>
 
