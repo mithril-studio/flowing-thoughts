@@ -103,6 +103,7 @@ impl ModelId {
     }
 }
 
+#[derive(Clone, Copy)]
 struct ModelSpec {
     id: &'static str,
     display_name: &'static str,
@@ -112,6 +113,44 @@ struct ModelSpec {
     sha256: &'static str,
     size_bytes: u64,
     multilingual: bool,
+}
+
+/// Silero VAD, as packaged for whisper.cpp.
+///
+/// This is not a transcription model and deliberately never appears in the
+/// model picker — it is a prerequisite that gates whether audio reaches the
+/// decoder at all. Whisper is an autoregressive language model with no
+/// "output nothing" state, so on silence it emits whatever its training data
+/// associated with silence (subtitle credits, "Thank you.", or a continuation
+/// of our own vocabulary prompt) and reports high confidence while doing it.
+/// The only reliable fix is to not hand it silence.
+const VAD_SPEC: ModelSpec = ModelSpec {
+    id: "silero-vad",
+    display_name: "Silero VAD",
+    description: "Voice activity detection. Keeps silence away from the decoder.",
+    filename: "ggml-silero-v5.1.2.bin",
+    url: "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
+    sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+    size_bytes: 885_098,
+    multilingual: true,
+};
+
+pub fn vad_model_path() -> Result<PathBuf, String> {
+    Ok(models_dir()?.join(VAD_SPEC.filename))
+}
+
+pub fn vad_model_installed() -> bool {
+    vad_model_path().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Fetch the VAD model if it isn't on disk yet. Cheap (865 KB) next to the
+/// 190 MB speech model, so this runs unprompted at startup. A failure here is
+/// never fatal: transcription still works, just without the silence gate.
+pub async fn ensure_vad_model(app: AppHandle) -> Result<(), String> {
+    if vad_model_installed() {
+        return Ok(());
+    }
+    download_spec(app, VAD_SPEC).await
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -193,7 +232,10 @@ pub fn delete_model(id: ModelId) -> Result<(), String> {
 }
 
 pub async fn download_model(app: AppHandle, id: ModelId) -> Result<(), String> {
-    let spec = id.spec();
+    download_spec(app, id.spec()).await
+}
+
+async fn download_spec(app: AppHandle, spec: ModelSpec) -> Result<(), String> {
     let dir = models_dir()?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create models directory: {e}"))?;

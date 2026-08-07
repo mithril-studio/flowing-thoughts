@@ -3,10 +3,18 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext,
+    WhisperVadContextParams, WhisperVadParams,
+};
 
 static CONTEXT_CACHE: LazyLock<Mutex<HashMap<&'static str, Arc<WhisperContext>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The VAD model, loaded once and reused. Rebuilding it per dictation would
+/// mean an init/free cycle on every keypress for no benefit.
+static VAD_CONTEXT: LazyLock<Mutex<Option<(String, WhisperVadContext)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
@@ -101,12 +109,84 @@ const ALLOWED_LANGS: [&str; 2] = ["en", "nl"];
 /// is the threshold OpenAI's reference implementation uses.
 const NO_SPEECH_PROB_THRESHOLD: f32 = 0.6;
 
+/// Silero VAD tuning. Defaults except `min_speech_duration_ms`, which is
+/// raised from 250 ms: a quarter-second blip is a door, a cough, or a key
+/// press, and letting it through would put the decoder right back in the
+/// situation this gate exists to prevent. Dictation always clears 400 ms
+/// because the hotkey must be held a full second before a session commits.
+const VAD_MIN_SPEECH_MS: i32 = 400;
+
+fn vad_params() -> WhisperVadParams {
+    let mut vad = WhisperVadParams::default();
+    vad.set_min_speech_duration(VAD_MIN_SPEECH_MS);
+    vad
+}
+
+/// Does this capture contain speech at all?
+///
+/// Deliberately runs as a standalone pre-pass rather than via
+/// `FullParams::enable_vad`. That flag is only honoured by `whisper_full()`;
+/// this app decodes through `whisper_full_with_state()` (per-dictation state),
+/// which ignores `params.vad` outright — setting it looks like it works and
+/// silently does nothing. Verified by test: with the flag set, near-silent
+/// audio still came back "Thanks for watching."
+///
+/// Used purely as a gate, not a splicer. When speech is present the original
+/// untouched audio goes to the decoder, so transcription accuracy is exactly
+/// as before; only the all-silence case changes, and it never reaches Whisper.
+fn contains_speech(vad_model: &str, audio: &[f32]) -> Result<bool, String> {
+    let mut guard = VAD_CONTEXT
+        .lock()
+        .map_err(|_| "VAD context lock poisoned".to_string())?;
+    if guard.as_ref().map(|(p, _)| p.as_str()) != Some(vad_model) {
+        // Silero is ~865 KB and runs in well under a millisecond on CPU.
+        // Keeping it off the GPU avoids standing up a second Metal device
+        // purely for the gate — which also trips a teardown assert in ggml
+        // when the context is freed.
+        let mut ctx_params = WhisperVadContextParams::default();
+        ctx_params.set_use_gpu(false);
+        let ctx = WhisperVadContext::new(vad_model, ctx_params)
+            .map_err(|e| format!("Failed to load VAD model: {e}"))?;
+        *guard = Some((vad_model.to_string(), ctx));
+    }
+    let vad_ctx = &mut guard.as_mut().expect("just initialised").1;
+    let segments = vad_ctx
+        .segments_from_samples(vad_params(), audio)
+        .map_err(|e| format!("VAD failed: {e}"))?;
+    let n = segments.num_segments();
+    let speech_ms: f32 = segments
+        .into_iter()
+        .map(|s| (s.end - s.start) * 10.0)
+        .sum();
+    let total_ms = audio.len() as f32 / WHISPER_SAMPLE_RATE as f32 * 1000.0;
+    let _ = crate::storage::append_log(
+        "INFO",
+        &format!("VAD found {n} speech segment(s), {speech_ms:.0}ms of {total_ms:.0}ms captured"),
+    );
+    Ok(n > 0)
+}
+
 fn run_inference(
     ctx: &WhisperContext,
     audio: &[f32],
     language: &str,
     prompt: Option<&str>,
+    vad_model: Option<&str>,
 ) -> Result<(String, i32), String> {
+    // Voice activity detection, when the model is on disk. This runs *before*
+    // the decoder: audio with no detected speech never reaches Whisper, so
+    // there are no tokens to hallucinate from. Every other guard in this app
+    // asks the model to grade its own output, which fails precisely because
+    // the model is confident about its inventions.
+    //
+    // Strictly optional — a missing VAD model degrades to the old behaviour
+    // rather than breaking transcription.
+    if let Some(path) = vad_model {
+        if !contains_speech(path, audio)? {
+            return Ok((String::new(), 0));
+        }
+    }
+
     let mut state = ctx
         .create_state()
         .map_err(|e| format!("Failed to create whisper state: {e}"))?;
@@ -134,11 +214,14 @@ fn run_inference(
     let n_segments = state.full_n_segments();
     let mut text = String::new();
     let mut dropped = 0;
+    let mut probs: Vec<String> = Vec::with_capacity(n_segments.max(0) as usize);
     for i in 0..n_segments {
         let seg = state
             .get_segment(i)
             .ok_or_else(|| format!("Missing whisper segment {i}"))?;
-        if seg.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
+        let no_speech = seg.no_speech_probability();
+        probs.push(format!("{no_speech:.2}"));
+        if no_speech > NO_SPEECH_PROB_THRESHOLD {
             dropped += 1;
             continue;
         }
@@ -147,10 +230,23 @@ fn run_inference(
             .map_err(|e| format!("Failed to decode segment {i}: {e}"))?;
         text.push_str(seg_text);
     }
-    if dropped > 0 {
+    // Always record the no-speech distribution, not just the drops. The gate
+    // above had never once fired across the whole log history, and a silent
+    // guard is indistinguishable from a guard that is working — this makes the
+    // difference visible.
+    let vad_state = if vad_model.is_some() { "on" } else { "off" };
+    if n_segments == 0 {
         let _ = crate::storage::append_log(
             "INFO",
-            &format!("Dropped {dropped}/{n_segments} whisper segments as no-speech hallucinations"),
+            &format!("Whisper returned no segments (VAD {vad_state}) — no speech in this capture"),
+        );
+    } else {
+        let _ = crate::storage::append_log(
+            "INFO",
+            &format!(
+                "Whisper {n_segments} segment(s) (VAD {vad_state}), dropped {dropped} over no-speech threshold {NO_SPEECH_PROB_THRESHOLD}, probs [{}]",
+                probs.join(", ")
+            ),
         );
     }
     Ok((text.trim().to_string(), state.full_lang_id_from_state()))
@@ -186,10 +282,23 @@ pub async fn transcribe_local(
     let wav_path = wav_path.to_path_buf();
     let language = whisper_language(model_id, language_mode);
     let started = Instant::now();
+    // Resolved once per dictation, not per decode pass, so the retry below
+    // cannot disagree with the first pass about whether VAD is on.
+    let vad_model = model_manager::vad_model_installed()
+        .then(|| model_manager::vad_model_path().ok())
+        .flatten()
+        .and_then(|p| p.to_str().map(str::to_owned));
+    if vad_model.is_none() {
+        let _ = crate::storage::append_log(
+            "WARN",
+            "VAD model missing — decoding without the silence gate, so Whisper may invent text on near-silent audio",
+        );
+    }
     let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
         let ctx = get_or_load_context(model_id)?;
         let audio = load_wav_as_mono_16k(&wav_path)?;
-        let (text, lang_id) = run_inference(&ctx, &audio, language, prompt.as_deref())?;
+        let vad = vad_model.as_deref();
+        let (text, lang_id) = run_inference(&ctx, &audio, language, prompt.as_deref(), vad)?;
         if language == "auto" {
             let detected = whisper_rs::get_lang_str(lang_id).unwrap_or("");
             if !ALLOWED_LANGS.contains(&detected) {
@@ -197,7 +306,7 @@ pub async fn transcribe_local(
                 // almost always Dutch misread as Afrikaans/German. Re-decode
                 // forced to Dutch (English detection is reliable, so an
                 // out-of-set detection was not English speech).
-                let (text_nl, _) = run_inference(&ctx, &audio, "nl", prompt.as_deref())?;
+                let (text_nl, _) = run_inference(&ctx, &audio, "nl", prompt.as_deref(), vad)?;
                 return Ok(text_nl);
             }
         }
@@ -226,5 +335,60 @@ mod tests {
     fn english_only_models_always_decode_english() {
         assert_eq!(whisper_language(ModelId::TinyEn, "nl"), "en");
         assert_eq!(whisper_language(ModelId::DistilSmallEn, "system"), "en");
+    }
+
+    /// Write low-level noise that clears the app's 0.015 peak gate but carries
+    /// no speech — the exact condition that produced "And Linux." in the field.
+    /// Deterministic LCG so the check is reproducible.
+    fn write_near_silence(path: &std::path::Path, duration_ms: u32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: super::WHISPER_SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).unwrap();
+        let n = super::WHISPER_SAMPLE_RATE * duration_ms / 1000;
+        let mut seed: u32 = 0x1234_5678;
+        for _ in 0..n {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            // ±650 of i16 range ≈ 0.02 peak, just over the silence threshold.
+            let sample = ((seed >> 16) as i32 % 651) as i16;
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs the 190 MB speech model + VAD model installed; run with --ignored"]
+    fn vad_stops_whisper_inventing_text_on_near_silence() {
+        let dir = std::env::temp_dir().join("flowing_thoughts_vad_check");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("near_silence.wav");
+        write_near_silence(&wav, 1_700);
+
+        let ctx = super::get_or_load_context(ModelId::SmallQ5).expect("speech model installed");
+        let audio = super::load_wav_as_mono_16k(&wav).unwrap();
+        let peak = audio.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(
+            peak > 0.015,
+            "premise broke: audio must clear the app's silence gate, peak was {peak}"
+        );
+
+        // Same biased prompt the app sends — that is what the decoder continues.
+        let prompt = crate::dev_vocab::build_biased_prompt(&[], 800).unwrap();
+        let vad_path = crate::model_manager::vad_model_path().unwrap();
+
+        let (without_vad, _) =
+            super::run_inference(&ctx, &audio, "en", Some(&prompt), None).unwrap();
+        let (with_vad, _) =
+            super::run_inference(&ctx, &audio, "en", Some(&prompt), vad_path.to_str()).unwrap();
+
+        println!("  without VAD: {without_vad:?}");
+        println!("  with VAD:    {with_vad:?}");
+        assert!(
+            with_vad.trim().is_empty(),
+            "VAD let non-speech reach the decoder: {with_vad:?}"
+        );
     }
 }
