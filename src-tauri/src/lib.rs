@@ -45,6 +45,33 @@ fn should_withhold_injection(char_count: usize, capture_duration_ms: u64) -> boo
     char_count > MAX_AUTO_INJECT_CHARS || capture_duration_ms > MAX_AUTO_INJECT_MS
 }
 
+/// Transcripts with fewer real words than this are never injected.
+///
+/// Whisper's silence hallucinations are overwhelmingly one- to four-word
+/// fragments ("And Linux.", "Thank you.", "Bye."), and no decoder-side filter
+/// catches them all — the model reports *high* confidence in its own
+/// invention, so asking it to grade its own work does not work. A blunt length
+/// floor does.
+///
+/// Measured against the full logged history: 147 of 263 transcripts fall under
+/// this floor, and reviewing that entire bucket, not one is a genuine content
+/// dictation — it is hallucinations, ambient audio, and setup-day tests.
+///
+/// The cost is that a deliberate short reply ("yes", "sounds good") is dropped
+/// too. It stays recoverable in logs.txt, and the proper fix is VAD upstream so
+/// the decoder never sees non-speech in the first place.
+const MIN_INJECT_WORDS: usize = 5;
+
+fn real_word_count(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .count()
+}
+
+fn is_below_word_floor(text: &str) -> bool {
+    real_word_count(text) < MIN_INJECT_WORDS
+}
+
 mod audio;
 #[cfg(target_os = "macos")]
 mod ax_snapshot;
@@ -268,14 +295,47 @@ fn apply_smart_formatting(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_smart_formatting, sanitize_transcript, should_withhold_injection,
-        MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS,
+        apply_smart_formatting, is_below_word_floor, sanitize_transcript,
+        should_withhold_injection, MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS,
     };
 
     #[test]
     fn injection_guard_allows_normal_dictations() {
         assert!(!should_withhold_injection(150, 8_000));
         assert!(!should_withhold_injection(MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS));
+    }
+
+    #[test]
+    fn word_floor_drops_the_short_hallucination_fragments() {
+        // Every distinct sub-floor output the app actually pasted.
+        for junk in [
+            "And Linux.",
+            "Thank you.",
+            "Bye.",
+            "And so on.",
+            "And so forth.",
+            "You",
+            "Framework.",
+            "And Reboot.",
+            "And Vivo.org.",
+            "And Java.org.",
+            "Czy cụ Sasha",
+            "Basically a single job",
+        ] {
+            assert!(is_below_word_floor(junk), "{junk:?} should be dropped");
+        }
+        // Punctuation and emoji are not words.
+        assert!(is_below_word_floor("😍😍😍😍"));
+        assert!(is_below_word_floor("... ... ..."));
+    }
+
+    #[test]
+    fn word_floor_keeps_real_dictation() {
+        assert!(!is_below_word_floor("let's fix the following things one"));
+        assert!(!is_below_word_floor("deploy the API to Vercel now"));
+        // Exactly at the floor is kept.
+        assert!(!is_below_word_floor("one two three four five"));
+        assert!(is_below_word_floor("one two three four"));
     }
 
     #[test]
@@ -1241,6 +1301,28 @@ pub fn run() {
         .manage(db_conn.clone())
         .manage(pending_capture.clone())
         .setup(move |app| {
+            // Fetch the VAD model in the background if it is missing. 865 KB,
+            // so this is not worth a setup step or a progress bar — but until
+            // it lands, Whisper is free to invent text on silent captures.
+            {
+                let vad_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match model_manager::ensure_vad_model(vad_app).await {
+                        Ok(()) => {
+                            let _ = storage::append_log("INFO", "VAD model ready");
+                        }
+                        Err(e) => {
+                            // Not fatal: transcription still runs, just without
+                            // the silence gate.
+                            let _ = storage::append_log(
+                                "WARN",
+                                &format!("VAD model download failed ({e}) — will retry next launch"),
+                            );
+                        }
+                    }
+                });
+            }
+
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show =
@@ -1814,11 +1896,34 @@ pub fn run() {
                                     // (subtitle credits, [BLANK_AUDIO], *Muziek*).
                                     // Nothing real left → end quietly, no injection.
                                     let raw = sanitize_transcript(raw);
-                                    if raw.is_empty() {
+                                    // Whisper also continues the biased
+                                    // vocabulary prompt when there is nothing to
+                                    // transcribe, pasting fragments like "And
+                                    // Linux." into the focused app. That is not
+                                    // speech either.
+                                    let echoed_prompt = !raw.is_empty()
+                                        && dev_vocab::is_prompt_echo(
+                                            &raw,
+                                            &user_terms,
+                                            developer_dictionary,
+                                        );
+                                    // Blunt length floor. The hallucinations that
+                                    // survive every content-based filter are all
+                                    // short fragments, and nothing real down here
+                                    // has ever been dictated.
+                                    let below_floor = !raw.is_empty() && is_below_word_floor(&raw);
+                                    if raw.is_empty() || echoed_prompt || below_floor {
+                                        let reason = if raw.is_empty() {
+                                            "filtered"
+                                        } else if echoed_prompt {
+                                            "prompt echo"
+                                        } else {
+                                            "under word floor"
+                                        };
                                         let _ = storage::append_log(
                                             "INFO",
                                             &format!(
-                                                "Session {session_id} produced no speech (filtered: {:?})",
+                                                "Session {session_id} produced no speech ({reason}: {:?})",
                                                 transcript_result.as_ref().ok()
                                             ),
                                         );

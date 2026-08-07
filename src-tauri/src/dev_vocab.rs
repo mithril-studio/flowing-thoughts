@@ -212,10 +212,91 @@ pub fn build_biased_prompt(user_terms: &[String], max_chars: usize) -> Option<St
         .map(|term| term.to_string())
         .collect();
     let dev_part = corrections::build_prompt_from_corrections(&dev_terms, remaining);
-    match (dev_part, user_part) {
+    let combined = match (dev_part, user_part) {
         (Some(dev), Some(user)) => Some(format!("{dev}, {user}")),
         (Some(dev), None) => Some(dev),
         (None, user) => user,
+    };
+    // Close the list with a sentence-final period. The character budget cuts
+    // the vocabulary mid-list, and a prompt that trails off on a dangling item
+    // ("…, Netlify, Supabase") is an open invitation for the decoder to carry
+    // the list on when there is no speech to transcribe — which is exactly how
+    // "And Linux." got pasted into the user's editor. A terminated sentence is
+    // a much weaker continuation cue. Belt and braces: `is_prompt_echo` still
+    // catches whatever slips through. Only added when it fits, so a tiny
+    // budget still spends every character on terms.
+    combined.map(|p| {
+        if p.len() < max_chars && !p.ends_with('.') {
+            format!("{p}.")
+        } else {
+            p
+        }
+    })
+}
+
+/// Longest transcript that can be written off as a prompt echo. Real dictation
+/// runs longer; the hallucination is always a fragment.
+const MAX_ECHO_CHARS: usize = 40;
+
+/// Filler Whisper glues onto a regurgitated vocabulary term when it continues
+/// the prompt list instead of transcribing ("And Linux.", "the API").
+const ECHO_FILLER: &[&str] = &[
+    "and", "en", "the", "de", "het", "een", "a", "an", "of", "or", "to", "is",
+    "in", "on", "so", "then", "dan", "ook", "plus", "with", "met", "uh", "um",
+];
+
+/// True when `text` is Whisper regurgitating the biased prompt rather than
+/// transcribing speech.
+///
+/// The prompt is a comma-separated list of jargon. On near-silent audio the
+/// decoder continues that list instead of returning nothing, which produces
+/// short outputs like "And Linux." or "And Java.org.".
+///
+/// This matches against the *full* vocabulary, never the prompt string that
+/// was actually sent — and that distinction is the whole point. The character
+/// budget truncates the list partway through, so the term the decoder offers
+/// up is typically one that was cut off ("Linux" follows "Supabase" in
+/// [`PROMPT_TERMS`] but does not fit in the prompt). The model continues the
+/// list it inferred, not the literal text it was given.
+///
+/// Only short transcripts qualify and every content token must be a
+/// vocabulary term, so a real dictation that merely mentions Linux in a
+/// sentence is untouched. The cost is that dictating a single bare term
+/// ("Linux.") is dropped; that trade is worth it at the observed rate of
+/// hallucinated pastes.
+pub fn is_prompt_echo(text: &str, user_terms: &[String], include_dev_vocab: bool) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > MAX_ECHO_CHARS {
+        return false;
+    }
+    let mut matched_a_term = false;
+    for token in trimmed.split_whitespace() {
+        let core = token.trim_matches(|c: char| !c.is_alphanumeric());
+        if core.is_empty() || ECHO_FILLER.iter().any(|f| f.eq_ignore_ascii_case(core)) {
+            continue;
+        }
+        if !is_vocabulary_term(core, user_terms, include_dev_vocab) {
+            return false;
+        }
+        matched_a_term = true;
+    }
+    matched_a_term
+}
+
+fn is_vocabulary_term(token: &str, user_terms: &[String], include_dev_vocab: bool) -> bool {
+    let known = |t: &str| {
+        user_terms.iter().any(|u| u.trim().eq_ignore_ascii_case(t))
+            || (include_dev_vocab && PROMPT_TERMS.iter().any(|p| p.eq_ignore_ascii_case(t)))
+    };
+    if known(token) {
+        return true;
+    }
+    // "Java.org", "Vercel.com" — the decoder tacks a domain suffix onto a term
+    // it is continuing the list with. Match on the head. Terms that legitimately
+    // contain a dot ("Node.js") already matched whole, above.
+    match token.split_once('.') {
+        Some((head, _)) if !head.is_empty() => known(head),
+        _ => false,
     }
 }
 
@@ -284,9 +365,18 @@ mod tests {
     fn prompt_puts_user_terms_last_and_dedupes() {
         let user = vec!["Joost".to_string(), "GitHub".to_string()];
         let prompt = build_biased_prompt(&user, 800).unwrap();
-        assert!(prompt.ends_with("Joost, GitHub"));
+        assert!(prompt.ends_with("Joost, GitHub."));
         assert_eq!(prompt.matches("GitHub").count(), 1);
         assert!(prompt.starts_with("API"));
+    }
+
+    #[test]
+    fn prompt_never_trails_off_mid_list() {
+        // A dangling final list item is what invites the decoder to continue
+        // the list on silent audio.
+        let prompt = build_biased_prompt(&[], 800).unwrap();
+        assert!(prompt.ends_with('.'), "prompt was {prompt:?}");
+        assert!(prompt.len() <= 800);
     }
 
     #[test]
@@ -305,6 +395,81 @@ mod tests {
         let prompt = build_biased_prompt(&[], 800).unwrap();
         assert!(prompt.starts_with("API, CLI"));
         assert!(prompt.len() <= 800);
+    }
+
+    #[test]
+    fn echo_catches_the_terms_the_budget_truncated_away() {
+        // "Linux" does not fit in the 800-char prompt — it sits just past the
+        // cut, which is precisely why the decoder continues the list with it.
+        let prompt = build_biased_prompt(&[], 800).unwrap();
+        assert!(!prompt.contains("Linux"), "test premise broke: {prompt:?}");
+        assert!(is_prompt_echo("And Linux.", &[], true));
+        assert!(is_prompt_echo("And Java.org.", &[], true));
+        assert!(is_prompt_echo("Linux", &[], true));
+        assert!(is_prompt_echo("the API", &[], true));
+    }
+
+    #[test]
+    fn echo_leaves_real_dictation_alone() {
+        // Long enough to be speech, even though every word is jargon.
+        assert!(!is_prompt_echo(
+            "deploy the API to Vercel and check the Postgres logs afterwards",
+            &[],
+            true
+        ));
+        // A term inside an ordinary sentence.
+        assert!(!is_prompt_echo("I run Linux at home", &[], true));
+        // Nothing from the vocabulary at all.
+        assert!(!is_prompt_echo("And so on.", &[], true));
+        assert!(!is_prompt_echo("Thank you.", &[], true));
+        assert!(!is_prompt_echo("", &[], true));
+        // Filler only — no term was actually echoed.
+        assert!(!is_prompt_echo("And the", &[], true));
+    }
+
+    /// Every short transcript the app actually pasted between 2026-07-30 and
+    /// 2026-08-05, with its observed count. All of it was junk. The prompt-echo
+    /// family (26 of 47) is what this module is responsible for; the rest are
+    /// generic Whisper outros and noise that belong to `sanitize_transcript`.
+    const OBSERVED_JUNK: &[(&str, u32, bool)] = &[
+        ("And Linux.", 25, true),
+        ("And Java.org.", 1, true),
+        ("Thank you.", 9, false),
+        ("Bye.", 3, false),
+        ("And so on.", 2, false),
+        ("And so forth.", 1, false),
+        ("You", 1, false),
+        ("Framework.", 1, false),
+        ("Czy cụ Sasha", 1, false),
+        ("Basically a single job", 1, false),
+        ("And Vivo.org.", 1, false),
+        ("And Reboot.", 1, false),
+    ];
+
+    #[test]
+    fn echo_covers_the_observed_prompt_echoes_and_nothing_else() {
+        let mut caught = 0;
+        for (text, count, expected) in OBSERVED_JUNK {
+            assert_eq!(
+                is_prompt_echo(text, &[], true),
+                *expected,
+                "{text:?} classified wrong"
+            );
+            if *expected {
+                caught += count;
+            }
+        }
+        assert_eq!(caught, 26, "prompt-echo coverage of the observed corpus");
+    }
+
+    #[test]
+    fn echo_respects_the_vocabulary_sources_in_play() {
+        // Dev dictionary off: built-in terms are not echo candidates...
+        assert!(!is_prompt_echo("And Linux.", &[], false));
+        // ...but the user's own learned terms still are, since they are in the
+        // prompt either way.
+        let user = vec!["Mithril".to_string()];
+        assert!(is_prompt_echo("And Mithril.", &user, false));
     }
 
     #[test]
