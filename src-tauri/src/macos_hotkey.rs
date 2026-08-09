@@ -338,18 +338,27 @@ extern "C" fn tap_callback(
 
     match mode {
         HotkeyMode::Fn => {
-            let fn_down = (flags & NS_EVENT_MODIFIER_FLAG_FUNCTION) != 0;
-            if fn_down && !fsm.fn_was_down {
-                fsm.fn_was_down = true;
-                if !fsm.recording_active && fsm.start_debounce() {
-                    fsm.recording_active = true;
-                    let _ = ctx.tx.send(HotkeyEvent::RecordStart);
-                }
-            } else if !fn_down && fsm.fn_was_down {
-                fsm.fn_was_down = false;
-                if fsm.recording_active {
-                    fsm.recording_active = false;
-                    let _ = ctx.tx.send(HotkeyEvent::RecordStop);
+            // macOS sets the secondary-Fn modifier flag on the *navigation*
+            // keys (arrows, Home/End, Page Up/Down, forward-delete) and the
+            // F-row — not just the physical Fn/Globe key. So reading the flag
+            // off an arbitrary keyDown falsely fires on a bare arrow press or a
+            // Shift+Option+Arrow selection. The real Fn key announces itself
+            // through a flagsChanged event (arrow keys are keyDown/keyUp), so
+            // only trust the flag when it arrives on flagsChanged.
+            if event_type == K_CG_EVENT_FLAGS_CHANGED {
+                let fn_down = (flags & NS_EVENT_MODIFIER_FLAG_FUNCTION) != 0;
+                if fn_down && !fsm.fn_was_down {
+                    fsm.fn_was_down = true;
+                    if !fsm.recording_active && fsm.start_debounce() {
+                        fsm.recording_active = true;
+                        let _ = ctx.tx.send(HotkeyEvent::RecordStart);
+                    }
+                } else if !fn_down && fsm.fn_was_down {
+                    fsm.fn_was_down = false;
+                    if fsm.recording_active {
+                        fsm.recording_active = false;
+                        let _ = ctx.tx.send(HotkeyEvent::RecordStop);
+                    }
                 }
             }
         }
