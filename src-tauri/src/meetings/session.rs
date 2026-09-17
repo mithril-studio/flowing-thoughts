@@ -855,20 +855,25 @@ impl Session {
         }
         self.announce();
 
-        // Normally the devices first, so the recorders drain a ring nothing
-        // writes to any more. When quitting there is a second at most, and a
-        // HAL call may take longer: the chunks go first.
-        if quitting {
-            self.stop_recorders(&mut tracks);
-        }
-        for track in &mut tracks {
-            if let Err(e) = track.source.stop() {
-                log("WARN", &format!("Meetings: stopping the {} source: {e}", track.kind.as_str()));
+        let stop_sources = |tracks: &mut Vec<LiveTrack>| {
+            for track in tracks.iter_mut() {
+                if let Err(e) = track.source.stop() {
+                    log("WARN", &format!("Meetings: stopping the {} source: {e}", track.kind.as_str()));
+                }
             }
-        }
-        if !quitting {
+        };
+        if quitting {
+            // There is a second at most and a HAL call may take longer: the
+            // chunks and the rows go first, the devices get what is left.
             self.stop_recorders(&mut tracks);
+            let status = self.close_meeting(&meeting.id, outcome);
+            stop_sources(&mut tracks);
+            return status;
         }
+        // The devices first, so the recorders drain a ring nothing writes to
+        // any more.
+        stop_sources(&mut tracks);
+        self.stop_recorders(&mut tracks);
         drop(tracks);
         self.close_meeting(&meeting.id, outcome)
     }
@@ -894,14 +899,19 @@ impl Session {
             live.hold_clock();
             live.recorded.as_millis() as u64
         };
+        let mut empty = false;
         let settled = self.conn().and_then(|conn| {
             store::transaction(&conn, || {
                 store::finish_meeting(&conn, meeting_id, &chrono::Utc::now().to_rfc3339(), duration_ms)?;
+                empty = !store::meeting_has_frames(&conn, meeting_id)?;
+                if empty {
+                    // Empty chunk files are not audio: nothing to transcribe
+                    // again, nothing to delete later.
+                    store::mark_audio_deleted(&conn, meeting_id)?;
+                }
                 let failure = match &outcome {
                     Outcome::Failed(message) => Some(message.clone()),
-                    Outcome::Stopped if !store::meeting_has_frames(&conn, meeting_id)? => {
-                        Some("Nothing was recorded.".to_string())
-                    }
+                    Outcome::Stopped if empty => Some("Nothing was recorded.".to_string()),
                     Outcome::Stopped => {
                         // `enqueue_transcription` refuses a meeting that still
                         // says `recording`. What it refuses for (no model
@@ -917,9 +927,13 @@ impl Session {
                 Ok(())
             })
         });
-        if let Err(e) = settled {
+        match settled {
+            Ok(()) if empty => {
+                let _ = recording::delete_meeting_audio_in(&self.root, meeting_id);
+            }
+            Ok(()) => {}
             // Launch recovery picks the meeting up: it still says `recording`.
-            log("ERROR", &format!("Meetings: failed to settle meeting {meeting_id}: {e}"));
+            Err(e) => log("ERROR", &format!("Meetings: failed to settle meeting {meeting_id}: {e}")),
         }
         // The job was inserted inside a transaction: the worker may have
         // looked before the commit.
@@ -1636,6 +1650,8 @@ mod tests {
         assert_eq!(meeting.meeting.status, MeetingStatus::Failed);
         assert_eq!(meeting.error.as_deref(), Some("Nothing was recorded."));
         assert!(meeting.meeting.job.is_none());
+        assert!(!meeting.meeting.has_audio, "nothing to re-transcribe or delete");
+        assert!(!recording::meeting_dir(fx.root.path(), &meeting_id).unwrap().exists());
     }
 
     #[test]
