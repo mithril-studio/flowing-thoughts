@@ -8,7 +8,7 @@ use whisper_rs::{
     WhisperVadContextParams, WhisperVadParams,
 };
 
-static CONTEXT_CACHE: LazyLock<Mutex<HashMap<&'static str, Arc<WhisperContext>>>> =
+static CONTEXT_CACHE: LazyLock<Mutex<HashMap<String, Arc<WhisperContext>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The VAD model, loaded once and reused. Rebuilding it per dictation would
@@ -18,13 +18,13 @@ static VAD_CONTEXT: LazyLock<Mutex<Option<(String, WhisperVadContext)>>> =
 
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
-fn get_or_load_context(model_id: ModelId) -> Result<Arc<WhisperContext>, String> {
-    let key = model_id.as_str();
+fn get_or_load_context(model_id: &ModelId) -> Result<Arc<WhisperContext>, String> {
+    let key = model_id.id();
     {
         let guard = CONTEXT_CACHE
             .lock()
             .map_err(|_| "Whisper context cache lock poisoned".to_string())?;
-        if let Some(ctx) = guard.get(key) {
+        if let Some(ctx) = guard.get(&key) {
             return Ok(ctx.clone());
         }
     }
@@ -262,7 +262,7 @@ fn num_cpus_threads() -> i32 {
 /// Map the app-level language mode ("en" | "nl" | "system") to the whisper
 /// language code for a given model. English-only models always decode as
 /// English; multilingual models honour the hint or auto-detect.
-fn whisper_language(model_id: ModelId, language_mode: &str) -> &'static str {
+fn whisper_language(model_id: &ModelId, language_mode: &str) -> &'static str {
     if !model_id.is_multilingual() {
         return "en";
     }
@@ -280,7 +280,7 @@ pub async fn transcribe_local(
     prompt: Option<String>,
 ) -> Result<(String, u64), String> {
     let wav_path = wav_path.to_path_buf();
-    let language = whisper_language(model_id, language_mode);
+    let language = whisper_language(&model_id, language_mode);
     let started = Instant::now();
     // Resolved once per dictation, not per decode pass, so the retry below
     // cannot disagree with the first pass about whether VAD is on.
@@ -295,7 +295,7 @@ pub async fn transcribe_local(
         );
     }
     let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let ctx = get_or_load_context(model_id)?;
+        let ctx = get_or_load_context(&model_id)?;
         let audio = load_wav_as_mono_16k(&wav_path)?;
         let vad = vad_model.as_deref();
         let (text, lang_id) = run_inference(&ctx, &audio, language, prompt.as_deref(), vad)?;
@@ -325,16 +325,18 @@ mod tests {
 
     #[test]
     fn multilingual_models_honour_language_mode() {
-        assert_eq!(whisper_language(ModelId::SmallQ5, "nl"), "nl");
-        assert_eq!(whisper_language(ModelId::SmallQ5, "en"), "en");
-        assert_eq!(whisper_language(ModelId::SmallQ5, "system"), "auto");
-        assert_eq!(whisper_language(ModelId::BaseQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::SmallQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::SmallQ5, "en"), "en");
+        assert_eq!(whisper_language(&ModelId::SmallQ5, "system"), "auto");
+        assert_eq!(whisper_language(&ModelId::BaseQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::LargeV3TurboQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::LargeV3TurboQ5, "system"), "auto");
     }
 
     #[test]
     fn english_only_models_always_decode_english() {
-        assert_eq!(whisper_language(ModelId::TinyEn, "nl"), "en");
-        assert_eq!(whisper_language(ModelId::DistilSmallEn, "system"), "en");
+        assert_eq!(whisper_language(&ModelId::TinyEn, "nl"), "en");
+        assert_eq!(whisper_language(&ModelId::DistilSmallEn, "system"), "en");
     }
 
     /// Write low-level noise that clears the app's 0.015 peak gate but carries
@@ -367,7 +369,7 @@ mod tests {
         let wav = dir.join("near_silence.wav");
         write_near_silence(&wav, 1_700);
 
-        let ctx = super::get_or_load_context(ModelId::SmallQ5).expect("speech model installed");
+        let ctx = super::get_or_load_context(&ModelId::SmallQ5).expect("speech model installed");
         let audio = super::load_wav_as_mono_16k(&wav).unwrap();
         let peak = audio.iter().fold(0f32, |m, s| m.max(s.abs()));
         assert!(
@@ -390,5 +392,44 @@ mod tests {
             with_vad.trim().is_empty(),
             "VAD let non-speech reach the decoder: {with_vad:?}"
         );
+    }
+
+    /// Smoke test for the large-v3-turbo GGML file: it must load through the
+    /// bundled whisper.cpp (v3 models use 128 mel bins) and decode. Set
+    /// FT_SAMPLE_WAV to a 16 kHz mono WAV to also print a real transcript.
+    #[test]
+    #[ignore = "needs the 574 MB large-v3-turbo model + VAD model installed; run with --ignored"]
+    fn large_v3_turbo_loads_and_decodes() {
+        let ctx = super::get_or_load_context(&ModelId::LargeV3TurboQ5)
+            .expect("large-v3-turbo model installed");
+        let vad_path = crate::model_manager::vad_model_path().unwrap();
+
+        let dir = std::env::temp_dir().join("flowing_thoughts_turbo_check");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("near_silence.wav");
+        write_near_silence(&wav, 1_700);
+        let audio = super::load_wav_as_mono_16k(&wav).unwrap();
+        let (silence_text, _) =
+            super::run_inference(&ctx, &audio, "nl", None, vad_path.to_str()).unwrap();
+        assert!(
+            silence_text.trim().is_empty(),
+            "turbo invented text on near-silence: {silence_text:?}"
+        );
+
+        let sample = std::env::var("FT_SAMPLE_WAV").unwrap_or_default();
+        if !sample.is_empty() {
+            let audio = super::load_wav_as_mono_16k(std::path::Path::new(&sample)).unwrap();
+            for (label, model) in [("turbo", ModelId::LargeV3TurboQ5), ("small", ModelId::SmallQ5)] {
+                let Ok(ctx) = super::get_or_load_context(&model) else { continue };
+                let started = std::time::Instant::now();
+                let (text, lang) =
+                    super::run_inference(&ctx, &audio, "auto", None, vad_path.to_str()).unwrap();
+                println!(
+                    "  {label} transcript ({} ms, lang {}): {text:?}",
+                    started.elapsed().as_millis(),
+                    whisper_rs::get_lang_str(lang).unwrap_or("?")
+                );
+            }
+        }
     }
 }

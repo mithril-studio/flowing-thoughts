@@ -54,6 +54,15 @@ Hotkey (CGEventTap, global)
 ### `src-tauri/src/model_manager.rs`
 - Downloads GGML models from Hugging Face with SHA-256 verification
 - Models live in `~/Library/Application Support/FlowingThoughts/models/`
+- Built-in catalog: large-v3-turbo (q5_0), small, base, plus English-only
+  tiny/base/distil-small. Any other `ggml-*.bin` in the directory is listed
+  as a custom model (`ModelId::Custom`), selectable and deletable like the rest
+- Custom models are added by whisper.cpp catalog name (`medium-q5_0`, resolved
+  against ggerganov/whisper.cpp) or a direct `.bin` URL; Hugging Face's
+  `x-linked-etag` header supplies the SHA-256 when available
+- Catalog entries the user doesn't want can be removed from the picker
+  (`hidden_models` in the kv table) and restored later; downloaded files are
+  deleted outright
 
 ### `src-tauri/src/transcribe.rs`
 - Optional cloud path: Groq (`whisper-large-v3-turbo`) or OpenAI (`whisper-1`)
@@ -61,9 +70,13 @@ Hotkey (CGEventTap, global)
 
 ### `src-tauri/src/corrections.rs` + `ax_snapshot.rs`
 - After injection, the focused field is re-read (Accessibility API) at the
-  start of the next session; single-word diffs are stored as corrections
-- Corrections are applied to future transcripts (word-boundary,
-  case-insensitive) and fed into the Whisper prompt
+  start of the next session (within 10 minutes). A word-level LCS diff turns
+  every substitution hunk of up to 3 words per side into a correction;
+  pure insertions/deletions are skipped, and texts sharing under 50% of
+  their words are rejected as unrelated. Every outcome is written to
+  logs.txt ("Correction check ..." / "Learned N correction(s) ...")
+- Corrections are applied to future transcripts (whole-word or whole-phrase,
+  case-insensitive, longest match first) and fed into the Whisper prompt
 
 ### `src-tauri/src/text_inject.rs`
 - Clipboard-paste injection with clipboard preservation
