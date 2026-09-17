@@ -36,3 +36,5 @@ Checks: `npm run build` and `npm test` for the frontend, `cargo check && cargo t
 ## License
 
 [MIT](./LICENSE)
+
+The optional Parakeet model is [NVIDIA parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (CC-BY-4.0), downloaded as the [ONNX export by istupakov](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx).

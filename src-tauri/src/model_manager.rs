@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelId {
     LargeV3TurboQ5,
+    ParakeetV3,
     SmallQ5,
     BaseQ5,
     TinyEn,
@@ -33,6 +34,7 @@ impl ModelId {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "whisper-large-v3-turbo-q5" => Some(ModelId::LargeV3TurboQ5),
+            "parakeet-tdt-0.6b-v3" => Some(ModelId::ParakeetV3),
             "whisper-small-q5" => Some(ModelId::SmallQ5),
             "whisper-base-q5" => Some(ModelId::BaseQ5),
             "whisper-tiny-en" => Some(ModelId::TinyEn),
@@ -52,9 +54,10 @@ impl ModelId {
         }
     }
 
-    pub fn builtins() -> [ModelId; 6] {
+    pub fn builtins() -> [ModelId; 7] {
         [
             ModelId::LargeV3TurboQ5,
+            ModelId::ParakeetV3,
             ModelId::SmallQ5,
             ModelId::BaseQ5,
             ModelId::TinyEn,
@@ -74,6 +77,17 @@ impl ModelId {
         }
     }
 
+    /// Which runtime decodes this model. Everything the user adds by hand is
+    /// a whisper.cpp GGML file.
+    pub fn engine(&self) -> Engine {
+        match self {
+            ModelId::ParakeetV3 => Engine::Parakeet,
+            _ => Engine::Whisper,
+        }
+    }
+
+    /// Name under the models directory: a single GGML file for Whisper, a
+    /// directory of ONNX files for Parakeet.
     pub fn filename(&self) -> String {
         match self {
             ModelId::Custom(filename) => filename.clone(),
@@ -92,6 +106,19 @@ impl ModelId {
                 sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
                 size_bytes: 574_041_195,
                 multilingual: true,
+                bundle: &[],
+            },
+            ModelId::ParakeetV3 => ModelSpec {
+                id: "parakeet-tdt-0.6b-v3",
+                display_name: "Parakeet TDT 0.6B v3 (English + Dutch)",
+                description: "Fastest by a wide margin. Detects the language itself and ignores vocabulary hints.",
+                filename: "parakeet-tdt-0.6b-v3-int8",
+                // Pinned revision, so the per-file hashes below stay valid.
+                url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+                sha256: "",
+                size_bytes: 670_619_706,
+                multilingual: true,
+                bundle: &PARAKEET_V3_FILES,
             },
             ModelId::SmallQ5 => ModelSpec {
                 id: "whisper-small-q5",
@@ -102,6 +129,7 @@ impl ModelId {
                 sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
                 size_bytes: 190_085_487,
                 multilingual: true,
+                bundle: &[],
             },
             ModelId::BaseQ5 => ModelSpec {
                 id: "whisper-base-q5",
@@ -112,6 +140,7 @@ impl ModelId {
                 sha256: "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
                 size_bytes: 59_707_625,
                 multilingual: true,
+                bundle: &[],
             },
             ModelId::TinyEn => ModelSpec {
                 id: "whisper-tiny-en",
@@ -122,6 +151,7 @@ impl ModelId {
                 sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
                 size_bytes: 77_704_715,
                 multilingual: false,
+                bundle: &[],
             },
             ModelId::BaseEn => ModelSpec {
                 id: "whisper-base-en",
@@ -132,6 +162,7 @@ impl ModelId {
                 sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
                 size_bytes: 147_964_211,
                 multilingual: false,
+                bundle: &[],
             },
             ModelId::DistilSmallEn => ModelSpec {
                 id: "distil-small-en",
@@ -142,6 +173,7 @@ impl ModelId {
                 sha256: "7691eb11167ab7aaf6b3e05d8266f2fd9ad89c550e433f86ac266ebdee6c970a",
                 size_bytes: 336_191_657,
                 multilingual: false,
+                bundle: &[],
             },
             ModelId::Custom(_) => unreachable!("custom models have no static spec"),
         }
@@ -209,17 +241,61 @@ pub fn resolve_custom_source(input: &str) -> Result<CustomSource, String> {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// whisper.cpp, one GGML file.
+    Whisper,
+    /// NVIDIA Parakeet TDT on ONNX Runtime, a directory of files.
+    Parakeet,
+}
+
 #[derive(Clone, Copy)]
 struct ModelSpec {
     id: &'static str,
     display_name: &'static str,
     description: &'static str,
     filename: &'static str,
+    /// The file itself — or, for a bundle, the base URL its files hang off.
     url: &'static str,
+    /// Unused for bundles; each bundle file pins its own hash.
     sha256: &'static str,
     size_bytes: u64,
     multilingual: bool,
+    /// Non-empty when the model is a directory (`filename`) of several files.
+    bundle: &'static [BundleFile],
 }
+
+#[derive(Clone, Copy)]
+struct BundleFile {
+    name: &'static str,
+    sha256: &'static str,
+    size_bytes: u64,
+}
+
+/// The int8 ONNX export of parakeet-tdt-0.6b-v3 (CC-BY-4.0, NVIDIA; ONNX
+/// conversion by istupakov), in the layout transcribe-rs loads.
+const PARAKEET_V3_FILES: [BundleFile; 4] = [
+    BundleFile {
+        name: "encoder-model.int8.onnx",
+        sha256: "6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09",
+        size_bytes: 652_183_999,
+    },
+    BundleFile {
+        name: "decoder_joint-model.int8.onnx",
+        sha256: "eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70",
+        size_bytes: 18_202_004,
+    },
+    BundleFile {
+        name: "nemo128.onnx",
+        sha256: "a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f",
+        size_bytes: 139_764,
+    },
+    BundleFile {
+        name: "vocab.txt",
+        sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+        size_bytes: 93_939,
+    },
+];
 
 /// One file to fetch into the models directory. Built-ins carry a pinned
 /// SHA-256; custom downloads verify against the hash Hugging Face advertises
@@ -227,6 +303,7 @@ struct ModelSpec {
 #[derive(Debug, Clone)]
 struct DownloadJob {
     id: String,
+    /// Path relative to the models directory.
     filename: String,
     url: String,
     sha256: Option<String>,
@@ -255,6 +332,7 @@ impl From<ModelSpec> for DownloadJob {
 /// of our own vocabulary prompt) and reports high confidence while doing it.
 /// The only reliable fix is to not hand it silence.
 const VAD_SPEC: ModelSpec = ModelSpec {
+    bundle: &[],
     id: "silero-vad",
     display_name: "Silero VAD",
     description: "Voice activity detection. Keeps silence away from the decoder.",
@@ -331,6 +409,23 @@ pub fn model_path(id: &ModelId) -> Result<PathBuf, String> {
     Ok(models_dir()?.join(id.filename()))
 }
 
+/// A bundle only counts once every file is in place — an interrupted
+/// download leaves the directory behind with part of its contents.
+pub fn is_installed(id: &ModelId) -> bool {
+    let Ok(path) = model_path(id) else { return false };
+    match id {
+        ModelId::Custom(_) => path.is_file(),
+        builtin => {
+            let bundle = builtin.spec().bundle;
+            if bundle.is_empty() {
+                path.is_file()
+            } else {
+                bundle.iter().all(|f| path.join(f.name).is_file())
+            }
+        }
+    }
+}
+
 /// `hidden` holds catalog ids the user removed from the picker; the entries
 /// are still returned (flagged) so the UI can offer to restore them.
 pub fn list_installed(hidden: &[String]) -> Result<Vec<InstalledModel>, String> {
@@ -339,7 +434,7 @@ pub fn list_installed(hidden: &[String]) -> Result<Vec<InstalledModel>, String> 
     for id in ModelId::builtins() {
         let spec = id.spec();
         let path = dir.join(spec.filename);
-        let installed = path.exists();
+        let installed = is_installed(&id);
         out.push(InstalledModel {
             id: spec.id.to_string(),
             display_name: spec.display_name.to_string(),
@@ -394,7 +489,10 @@ pub fn list_installed(hidden: &[String]) -> Result<Vec<InstalledModel>, String> 
 
 pub fn delete_model(id: &ModelId) -> Result<(), String> {
     let path = model_path(id)?;
-    if path.exists() {
+    if path.is_dir() {
+        std::fs::remove_dir_all(&path)
+            .map_err(|e| format!("Failed to delete model directory: {e}"))?;
+    } else if path.exists() {
         std::fs::remove_file(&path)
             .map_err(|e| format!("Failed to delete model file: {e}"))?;
     }
@@ -406,8 +504,38 @@ pub async fn download_model(app: AppHandle, id: ModelId) -> Result<(), String> {
         ModelId::Custom(_) => Err(
             "Custom models are added by name or URL, not re-downloaded from the catalog".to_string(),
         ),
-        builtin => download_job(app, builtin.spec().into()).await,
+        builtin if builtin.spec().bundle.is_empty() => {
+            download_job(app, builtin.spec().into()).await
+        }
+        builtin => download_bundle(app, builtin.spec()).await,
     }
+}
+
+/// Fetch a multi-file model into its own directory, reporting progress as one
+/// download. Files that already verified on an earlier attempt are kept.
+async fn download_bundle(app: AppHandle, spec: ModelSpec) -> Result<(), String> {
+    let dir = models_dir()?.join(spec.filename);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create model directory: {e}"))?;
+
+    let total: u64 = spec.bundle.iter().map(|f| f.size_bytes).sum();
+    let mut done: u64 = 0;
+    for file in spec.bundle {
+        if !dir.join(file.name).is_file() {
+            let job = DownloadJob {
+                id: spec.id.to_string(),
+                filename: format!("{}/{}", spec.filename, file.name),
+                url: format!("{}/{}", spec.url, file.name),
+                sha256: Some(file.sha256.to_string()),
+                size_bytes: file.size_bytes,
+            };
+            fetch_file(&app, &job, Some((done, total))).await?;
+        }
+        done += file.size_bytes;
+    }
+
+    emit_download_complete(&app, spec.id, total, &dir);
+    Ok(())
 }
 
 /// Resolve a user-entered model name or URL, then fetch it in the background.
@@ -487,6 +615,38 @@ async fn hugging_face_metadata(url: &str) -> (Option<String>, u64) {
 }
 
 async fn download_job(app: AppHandle, spec: DownloadJob) -> Result<(), String> {
+    let (total_bytes, final_path) = fetch_file(&app, &spec, None).await?;
+    emit_download_complete(&app, &spec.id, total_bytes, &final_path);
+    Ok(())
+}
+
+fn emit_download_complete(app: &AppHandle, id: &str, total_bytes: u64, path: &std::path::Path) {
+    let _ = app.emit(
+        "model-download-progress",
+        DownloadProgressEvent {
+            id: id.to_string(),
+            bytes_downloaded: total_bytes,
+            total_bytes,
+        },
+    );
+    let _ = app.emit(
+        "model-download-complete",
+        DownloadCompleteEvent {
+            id: id.to_string(),
+            path: path.to_string_lossy().into_owned(),
+        },
+    );
+}
+
+/// Download and verify one file. `within` is `(bytes already done, bundle
+/// total)` when the file is part of a bundle, so progress events describe the
+/// whole model rather than restarting for each file. Returns the file's size
+/// and final path.
+async fn fetch_file(
+    app: &AppHandle,
+    spec: &DownloadJob,
+    within: Option<(u64, u64)>,
+) -> Result<(u64, PathBuf), String> {
     let dir = models_dir()?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create models directory: {e}"))?;
@@ -514,6 +674,7 @@ async fn download_job(app: AppHandle, spec: DownloadJob) -> Result<(), String> {
     }
 
     let total_bytes = response.content_length().unwrap_or(spec.size_bytes);
+    let (progress_base, progress_total) = within.unwrap_or((0, total_bytes));
     let mut file = File::create(&temp_path)
         .await
         .map_err(|e| format!("Failed to create temp file: {e}"))?;
@@ -537,8 +698,8 @@ async fn download_job(app: AppHandle, spec: DownloadJob) -> Result<(), String> {
                 "model-download-progress",
                 DownloadProgressEvent {
                     id: spec.id.to_string(),
-                    bytes_downloaded,
-                    total_bytes,
+                    bytes_downloaded: progress_base + bytes_downloaded,
+                    total_bytes: progress_total,
                 },
             );
             last_emit = Instant::now();
@@ -573,23 +734,7 @@ async fn download_job(app: AppHandle, spec: DownloadJob) -> Result<(), String> {
     std::fs::rename(&temp_path, &final_path)
         .map_err(|e| format!("Failed to finalize model file: {e}"))?;
 
-    let _ = app.emit(
-        "model-download-progress",
-        DownloadProgressEvent {
-            id: spec.id.to_string(),
-            bytes_downloaded: total_bytes,
-            total_bytes,
-        },
-    );
-    let _ = app.emit(
-        "model-download-complete",
-        DownloadCompleteEvent {
-            id: spec.id.to_string(),
-            path: final_path.to_string_lossy().into_owned(),
-        },
-    );
-
-    Ok(())
+    Ok((total_bytes, final_path))
 }
 
 #[cfg(test)]
@@ -624,6 +769,29 @@ mod tests {
         assert!(resolve_custom_source("https://example.com/model.zip").is_err());
         assert!(resolve_custom_source("ggml-silero-v5.1.2").is_err());
         assert!(ModelId::from_str("has space").is_none());
+    }
+
+    #[test]
+    fn parakeet_is_a_bundle_on_its_own_engine() {
+        let id = ModelId::from_str("parakeet-tdt-0.6b-v3").unwrap();
+        assert_eq!(id, ModelId::ParakeetV3);
+        assert_eq!(id.id(), "parakeet-tdt-0.6b-v3");
+        assert_eq!(id.engine(), Engine::Parakeet);
+        assert!(id.is_multilingual());
+        let spec = id.spec();
+        assert_eq!(
+            spec.bundle.iter().map(|f| f.size_bytes).sum::<u64>(),
+            spec.size_bytes
+        );
+        // Every other built-in, and anything custom, is a single whisper.cpp file.
+        for other in ModelId::builtins().into_iter().filter(|b| *b != id) {
+            assert_eq!(other.engine(), Engine::Whisper);
+            assert!(other.spec().bundle.is_empty());
+        }
+        assert_eq!(
+            ModelId::from_str("ggml-medium-q5_0").unwrap().engine(),
+            Engine::Whisper
+        );
     }
 
     #[test]

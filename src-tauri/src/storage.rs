@@ -109,7 +109,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct TranscriptionSettings {
     pub provider: String,

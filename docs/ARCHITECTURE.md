@@ -50,9 +50,16 @@ Hotkey (CGEventTap, global)
 - Multilingual models (`whisper-small-q5`, `whisper-base-q5`) support
   English + Dutch + auto-detect; `.en` models force English
 - Learned terms are passed as the Whisper initial prompt to bias decoding
+- Parakeet TDT 0.6B v3 runs on ONNX Runtime (CPU, via `transcribe-rs`). It
+  detects the language itself and takes no prompt, so the language setting
+  and vocabulary hints do not apply to it
+- The selected model is loaded and warmed in the background at launch and
+  whenever the selection changes; Whisper contexts use flash attention
 
 ### `src-tauri/src/model_manager.rs`
 - Downloads GGML models from Hugging Face with SHA-256 verification
+- Parakeet is a directory of four ONNX files, each hash-pinned, downloaded
+  as one model
 - Models live in `~/Library/Application Support/FlowingThoughts/models/`
 - Built-in catalog: large-v3-turbo (q5_0), small, base, plus English-only
   tiny/base/distil-small. Any other `ggml-*.bin` in the directory is listed

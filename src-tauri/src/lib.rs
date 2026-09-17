@@ -774,6 +774,29 @@ fn get_app_version() -> AppVersion {
     }
 }
 
+/// Warm the selected local model on a background thread, so the first
+/// dictation doesn't wait on a cold load. A no-op in cloud mode or when the
+/// model isn't downloaded yet; never fatal.
+fn preload_local_model(transcription: &storage::TranscriptionSettings) {
+    if transcription.provider != "local" {
+        return;
+    }
+    let Some(id) = model_manager::ModelId::from_str(&transcription.local_model) else {
+        return;
+    };
+    if !model_manager::is_installed(&id) {
+        return;
+    }
+    std::thread::spawn(move || match local_transcribe::preload(&id) {
+        Ok(ms) => {
+            let _ = storage::append_log("INFO", &format!("Preloaded {} in {ms}ms", id.id()));
+        }
+        Err(e) => {
+            let _ = storage::append_log("WARN", &format!("Preload of {} failed: {e}", id.id()));
+        }
+    });
+}
+
 #[tauri::command]
 fn get_app_settings(
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
@@ -843,6 +866,10 @@ fn update_app_settings(
         if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
             warnings.push(e);
         }
+    }
+
+    if next_settings.transcription != previous_settings.transcription {
+        preload_local_model(&next_settings.transcription);
     }
 
     for message in &warnings {
@@ -1451,6 +1478,10 @@ pub fn run() {
                 });
             }
 
+            if let Ok(state) = persisted.lock() {
+                preload_local_model(&state.settings.transcription);
+            }
+
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show =
@@ -1939,9 +1970,7 @@ pub fn run() {
                                 let local_model_id = model_manager::ModelId::from_str(&local_model);
                                 let installed = local_model_id
                                     .as_ref()
-                                    .and_then(|id| model_manager::model_path(id).ok())
-                                    .map(|p| p.exists())
-                                    .unwrap_or(false);
+                                    .is_some_and(model_manager::is_installed);
                                 let use_local = transcription_mode == "local" && installed;
 
                                 let started = Instant::now();

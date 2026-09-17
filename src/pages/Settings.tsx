@@ -810,6 +810,14 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
               Dutch.
             </p>
           )}
+        {local.transcription.provider === "local" &&
+          local.language.mode !== "system" &&
+          selectedLocalModel.startsWith("parakeet") && (
+            <p className="text-xs text-zinc-500">
+              Parakeet detects the language from your voice, so this choice only applies
+              to Whisper models.
+            </p>
+          )}
       </Section>
 
       <Section title="Shortcut">
