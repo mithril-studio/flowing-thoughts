@@ -107,6 +107,8 @@ fn run_parakeet(
         "INFO",
         &format!("Parakeet decoded {} chars (VAD {vad_state})", text.trim().len()),
     );
+    // Parakeet does not report which language it decoded, so `lang_id` is
+    // a placeholder the caller ignores.
     Ok(Decoded {
         text: text.trim().to_string(),
         lang_id: 0,
@@ -393,7 +395,7 @@ pub struct LocalTranscript {
     pub text: String,
     /// Whisper language code of the decode that produced `text`; `None` when
     /// the VAD gate stopped the audio before any decode, or when the engine
-    /// does not report one (Parakeet).
+    /// (Parakeet) does not report one.
     pub language: Option<String>,
     /// The VAD gate found no speech, so Whisper never ran.
     pub vad_rejected: bool,
@@ -618,8 +620,8 @@ mod tests {
         let wav = dir.join("near_silence.wav");
         write_near_silence(&wav, 1_700);
         let audio = super::load_wav_as_mono_16k(&wav).unwrap();
-        let gated = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap().text;
-        assert!(gated.is_empty(), "VAD let non-speech through: {gated:?}");
+        let gated = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap();
+        assert!(gated.vad_rejected, "VAD let non-speech through: {:?}", gated.text);
         let ungated = super::run_parakeet(&id, &audio, None).unwrap().text;
         println!("  parakeet on near-silence without VAD: {ungated:?}");
 
