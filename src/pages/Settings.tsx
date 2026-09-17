@@ -979,6 +979,25 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
             FlowingThoughts remembers the correction and applies it next time.
           </p>
         </div>
+        <div className="space-y-1">
+          <Toggle
+            label="Keep my dictations for evaluation"
+            checked={local.extras.keep_audio_for_eval}
+            onChange={(checked) =>
+              update({
+                ...local,
+                extras: { ...local.extras, keep_audio_for_eval: checked },
+              })
+            }
+            disabled={busy}
+          />
+          <p className="pl-1 text-xs text-zinc-500">
+            Off by default. When on, the audio and raw transcript of every
+            dictation are saved on this Mac (never uploaded) so transcription
+            quality can be measured. Turn it off again when you have enough
+            samples.
+          </p>
+        </div>
         <Toggle
           label="Dangerously skip permissions"
           checked={local.extras.dangerously_skip_permissions}
