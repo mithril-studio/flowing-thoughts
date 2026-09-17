@@ -1,3 +1,5 @@
+import type { MeetingLanguage } from "./meetings";
+
 export interface AppSettings {
   general: {
     window_movable: boolean;
@@ -38,8 +40,6 @@ export interface AppSettings {
   };
   meetings: MeetingsSettings;
 }
-
-export type MeetingLanguage = "auto" | "nl" | "en";
 
 /** Mirrors `MeetingsSettings` in src-tauri/src/storage.rs. */
 export interface MeetingsSettings {

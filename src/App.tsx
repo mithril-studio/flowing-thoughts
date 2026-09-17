@@ -7,6 +7,7 @@ import Snippets from "./pages/Snippets";
 import Notes from "./pages/Notes";
 import Corrections from "./pages/Corrections";
 import Coach from "./pages/Coach";
+import Meetings from "./pages/Meetings";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import { invoke } from "@tauri-apps/api/core";
@@ -58,6 +59,7 @@ function App() {
 
   const pages: Record<Tab, React.ReactNode> = {
     home: <Home shortcutLabel={shortcutLabel} />,
+    meetings: <Meetings settings={appSettings} />,
     snippets: <Snippets />,
     notes: <Notes />,
     corrections: <Corrections />,
@@ -160,8 +162,13 @@ function App() {
 
   // If coaching gets turned off while its tab is open, fall back to Home.
   const coachingEnabled = appSettings.coaching.enabled;
+  // Same for meetings.
+  const meetingsEnabled = appSettings.meetings.enabled;
   const effectiveTab =
-    activeTab === "coach" && !coachingEnabled ? "home" : activeTab;
+    (activeTab === "coach" && !coachingEnabled) ||
+    (activeTab === "meetings" && !meetingsEnabled)
+      ? "home"
+      : activeTab;
 
   return shell(
     <>
@@ -170,6 +177,7 @@ function App() {
         active={effectiveTab}
         onTabChange={setActiveTab}
         showCoach={coachingEnabled}
+        showMeetings={meetingsEnabled}
       />
     </>,
   );

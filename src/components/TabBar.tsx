@@ -1,13 +1,22 @@
-type Tab = "home" | "snippets" | "notes" | "corrections" | "coach" | "settings";
+type Tab =
+  | "home"
+  | "meetings"
+  | "snippets"
+  | "notes"
+  | "corrections"
+  | "coach"
+  | "settings";
 
 interface TabBarProps {
   active: Tab;
   onTabChange: (tab: Tab) => void;
   showCoach?: boolean;
+  showMeetings?: boolean;
 }
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "home", label: "Home" },
+  { id: "meetings", label: "Meetings" },
   { id: "notes", label: "Notes" },
   { id: "snippets", label: "Snippets" },
   { id: "corrections", label: "Words" },
@@ -15,8 +24,10 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "settings", label: "Settings" },
 ];
 
-export default function TabBar({ active, onTabChange, showCoach }: TabBarProps) {
-  const tabs = TABS.filter((tab) => tab.id !== "coach" || showCoach);
+export default function TabBar({ active, onTabChange, showCoach, showMeetings }: TabBarProps) {
+  const tabs = TABS.filter(
+    (tab) => (tab.id !== "coach" || showCoach) && (tab.id !== "meetings" || showMeetings),
+  );
   return (
     <nav className="mx-3 mb-3 flex gap-1 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/70 p-1">
       {tabs.map((tab) => (
