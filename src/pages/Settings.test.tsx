@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import Settings from "./Settings";
 import { defaultAppSettings } from "../types/settings";
@@ -288,6 +288,210 @@ describe("Settings", () => {
           }),
         })
       );
+    });
+  });
+
+  describe("Meetings section", () => {
+    const meetingsOn = {
+      ...defaultAppSettings,
+      meetings: { ...defaultAppSettings.meetings, enabled: true },
+    };
+
+    /** Echoes saved settings back, like the backend does. */
+    function mockMeetingsBackend(overrides: Record<string, unknown> = {}) {
+      invokeMock.mockReset();
+      invokeMock.mockImplementation((command: string, args?: { settings?: unknown }) => {
+        if (command in overrides) return Promise.resolve(overrides[command]);
+        switch (command) {
+          case "get_persisted_state":
+            return Promise.resolve({
+              groq_api_key_configured: false,
+              openai_api_key_configured: false,
+              openrouter_api_key_configured: false,
+              active_provider: "groq",
+            });
+          case "list_installed_models":
+            return Promise.resolve([]);
+          case "get_accessibility_help_info":
+            return Promise.resolve({ executable_path: "", is_dev_build: true, note: "" });
+          case "meetings_supported":
+            return Promise.resolve(true);
+          case "check_system_audio_permission":
+            return Promise.resolve({ state: "unknown", detail: null });
+          case "update_app_settings":
+            return Promise.resolve({ settings: args?.settings, warnings: [] });
+          default:
+            return Promise.resolve(null);
+        }
+      });
+    }
+
+    it("persists the enable toggle through update_app_settings", async () => {
+      mockMeetingsBackend();
+      const onSettingsChange = vi.fn();
+      render(<Settings settings={defaultAppSettings} onSettingsChange={onSettingsChange} />);
+
+      const toggle = screen.getByRole("switch", { name: "Meeting recording" });
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      // Off by default: no meeting options and no permission probe.
+      expect(screen.queryByRole("group", { name: "Meeting language" })).not.toBeInTheDocument();
+      expect(invokeMock).not.toHaveBeenCalledWith("check_system_audio_permission");
+
+      fireEvent.click(toggle);
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_app_settings",
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              meetings: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        );
+        expect(onSettingsChange).toHaveBeenCalledWith(
+          expect.objectContaining({ meetings: expect.objectContaining({ enabled: true }) }),
+        );
+      });
+      expect(await screen.findByRole("group", { name: "Meeting language" })).toBeInTheDocument();
+    });
+
+    it("saves the meeting language and an installed Whisper model", async () => {
+      const model = (id: string, display_name: string) => ({
+        id,
+        display_name,
+        description: "",
+        filename: `${id}.bin`,
+        installed: true,
+        expected_size_bytes: 1,
+        local_path: `/tmp/${id}.bin`,
+        multilingual: true,
+        custom: false,
+        hidden: false,
+      });
+      mockMeetingsBackend({
+        list_installed_models: [
+          model("whisper-small-q5", "Whisper Small"),
+          model("whisper-large-v3-turbo-q5", "Whisper Large Turbo"),
+          model("parakeet-tdt-0.6b-v3", "Parakeet"),
+        ],
+      });
+      render(<Settings settings={meetingsOn} onSettingsChange={vi.fn()} />);
+
+      const language = screen.getByRole("group", { name: "Meeting language" });
+      fireEvent.click(within(language).getByRole("button", { name: "Nederlands" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_app_settings",
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              meetings: expect.objectContaining({ language: "nl" }),
+            }),
+          }),
+        ),
+      );
+
+      const select = screen.getByLabelText("Meeting model");
+      await within(select).findByRole("option", { name: "Whisper Large Turbo" });
+      // Meetings decode through Whisper only.
+      expect(within(select).queryByRole("option", { name: "Parakeet" })).not.toBeInTheDocument();
+      await waitFor(() => expect(select).toBeEnabled());
+      fireEvent.change(select, { target: { value: "whisper-large-v3-turbo-q5" } });
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_app_settings",
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              meetings: expect.objectContaining({ model: "whisper-large-v3-turbo-q5" }),
+            }),
+          }),
+        ),
+      );
+    });
+
+    it("keeps summaries opt-in and saves the summary model on blur", async () => {
+      mockMeetingsBackend();
+      render(<Settings settings={meetingsOn} onSettingsChange={vi.fn()} />);
+
+      const toggle = screen.getByRole("switch", { name: "Meeting summaries" });
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      expect(screen.queryByLabelText("Summary model")).not.toBeInTheDocument();
+
+      fireEvent.click(toggle);
+      const field = await screen.findByLabelText("Summary model");
+      fireEvent.change(field, { target: { value: "google/gemini-2.5-flash-lite" } });
+      fireEvent.blur(field);
+
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_app_settings",
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              meetings: expect.objectContaining({
+                summary_enabled: true,
+                summary_model: "google/gemini-2.5-flash-lite",
+              }),
+            }),
+          }),
+        ),
+      );
+    });
+
+    it("turns audio auto-delete on with a day count and off with zero", async () => {
+      mockMeetingsBackend();
+      render(<Settings settings={meetingsOn} onSettingsChange={vi.fn()} />);
+
+      const toggle = screen.getByRole("switch", { name: "Auto-delete meeting audio" });
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      fireEvent.click(toggle);
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_app_settings",
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              meetings: expect.objectContaining({ auto_delete_audio_days: 30 }),
+            }),
+          }),
+        ),
+      );
+
+      const days = await screen.findByRole("group", { name: "Delete audio after" });
+      await waitFor(() => expect(within(days).getByRole("button", { name: "7 days" })).toBeEnabled());
+      fireEvent.click(within(days).getByRole("button", { name: "7 days" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "update_app_settings",
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              meetings: expect.objectContaining({ auto_delete_audio_days: 7 }),
+            }),
+          }),
+        ),
+      );
+    });
+
+    it("shows the system audio permission and opens System Settings", async () => {
+      mockMeetingsBackend({ check_system_audio_permission: { state: "denied", detail: null } });
+      render(<Settings settings={meetingsOn} onSettingsChange={vi.fn()} />);
+
+      const title = await screen.findByText("System Audio Recording");
+      const row = title.parentElement!.parentElement!.parentElement!;
+      expect(await within(row).findByText("Not granted")).toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Open Settings" }));
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("open_system_audio_settings"));
+    });
+
+    it("does not call an unknown permission a denial", async () => {
+      mockMeetingsBackend();
+      render(<Settings settings={meetingsOn} onSettingsChange={vi.fn()} />);
+      expect(await screen.findByText("Not checked yet")).toBeInTheDocument();
+      expect(screen.queryByText("Not granted")).not.toBeInTheDocument();
+    });
+
+    it("explains the macOS requirement instead of the permission row", async () => {
+      mockMeetingsBackend({ meetings_supported: false });
+      render(<Settings settings={meetingsOn} onSettingsChange={vi.fn()} />);
+      expect(await screen.findByText(/Meetings need macOS 14.4 or later/)).toBeInTheDocument();
+      expect(screen.queryByText("System Audio Recording")).not.toBeInTheDocument();
     });
   });
 });
