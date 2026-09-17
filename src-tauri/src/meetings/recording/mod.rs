@@ -32,6 +32,10 @@
 //! Tests need no hardware: fake `AudioSource`, fake `SampleSink`, fake
 //! `ChunkLedger`, a temp directory.
 
+// Nothing calls into this module until WP5 (capture) and WP7 (session) land.
+// Remove once they do.
+#![allow(dead_code)]
+
 pub mod chunk_writer;
 pub mod recovery;
 pub mod resample;
