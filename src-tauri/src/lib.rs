@@ -9,10 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Recordings shorter than this are treated as accidental hotkey taps and
-/// discarded silently — no error toast, no pipeline run.
-const MIN_DICTATION_MS: u64 = 300;
-
 /// The hotkey must be held this long — a full second — before the session is
 /// committed: recording feedback shown and transcription allowed. Audio
 /// capture itself starts at key-down so no speech is lost once the hold is
@@ -20,11 +16,6 @@ const MIN_DICTATION_MS: u64 = 300;
 /// Fn taps (and the whisper hallucinations they produce — "Thank you",
 /// "Thanks for watching") from pasting anything into the focused app.
 const HOLD_TO_COMMIT_MS: u64 = 1_000;
-
-/// Peak amplitude below which a capture is considered silence and skipped.
-/// Whisper reliably hallucinates on silent audio — subtitle credits from its
-/// training data ("(C) TV GELDERLAND 2021") and markers like [BLANK_AUDIO].
-const SILENCE_PEAK_THRESHOLD: f32 = 0.015;
 
 /// Hard ceiling on a single capture. Recording normally ends at key release,
 /// but macOS can swallow the release event (sleep, screen lock, secure
@@ -45,33 +36,6 @@ fn should_withhold_injection(char_count: usize, capture_duration_ms: u64) -> boo
     char_count > MAX_AUTO_INJECT_CHARS || capture_duration_ms > MAX_AUTO_INJECT_MS
 }
 
-/// Transcripts with fewer real words than this are never injected.
-///
-/// Whisper's silence hallucinations are overwhelmingly one- to four-word
-/// fragments ("And Linux.", "Thank you.", "Bye."), and no decoder-side filter
-/// catches them all — the model reports *high* confidence in its own
-/// invention, so asking it to grade its own work does not work. A blunt length
-/// floor does.
-///
-/// Measured against the full logged history: 147 of 263 transcripts fall under
-/// this floor, and reviewing that entire bucket, not one is a genuine content
-/// dictation — it is hallucinations, ambient audio, and setup-day tests.
-///
-/// The cost is that a deliberate short reply ("yes", "sounds good") is dropped
-/// too. It stays recoverable in logs.txt, and the proper fix is VAD upstream so
-/// the decoder never sees non-speech in the first place.
-const MIN_INJECT_WORDS: usize = 5;
-
-fn real_word_count(text: &str) -> usize {
-    text.split_whitespace()
-        .filter(|w| w.chars().any(char::is_alphanumeric))
-        .count()
-}
-
-fn is_below_word_floor(text: &str) -> bool {
-    real_word_count(text) < MIN_INJECT_WORDS
-}
-
 mod audio;
 #[cfg(target_os = "macos")]
 mod ax_snapshot;
@@ -86,6 +50,7 @@ mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_hotkey;
 mod model_manager;
+mod pipeline;
 mod storage;
 mod text_inject;
 mod transcribe;
@@ -110,8 +75,6 @@ struct PendingCapture {
 }
 
 const PENDING_CAPTURE_TTL: Duration = Duration::from_secs(10 * 60);
-const CORRECTION_PROMPT_CHAR_CAP: usize = 800;
-const CORRECTION_PROMPT_LIMIT: i64 = 40;
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct RecordingState {
@@ -250,90 +213,10 @@ fn maybe_learn_from_pending_capture(
     );
 }
 
-/// Whisper hallucinates non-speech markers and subtitle credits from its
-/// training data on silent or noisy audio: "[BLANK_AUDIO]", "*Muziek*",
-/// "(C) TV GELDERLAND 2021", "Ondertiteld door ...". Strip the bracketed and
-/// starred markers and reject short transcripts that are known credit lines.
-/// Returns an empty string when nothing real remains — callers treat that as
-/// "no speech detected" and skip injection.
-fn sanitize_transcript(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '[' => {
-                for n in chars.by_ref() {
-                    if n == ']' {
-                        break;
-                    }
-                }
-            }
-            '*' => {
-                for n in chars.by_ref() {
-                    if n == '*' {
-                        break;
-                    }
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    let cleaned = out.trim();
-    if !cleaned.chars().any(|c| c.is_alphanumeric()) {
-        return String::new();
-    }
-    // Known hallucinations (subtitle credits, YouTube outros) only ever
-    // appear as short standalone outputs; the length cap keeps real
-    // dictations that mention these words (e.g. "zet de ondertiteling
-    // aan…") from being dropped.
-    if cleaned.chars().count() < 80 {
-        let lower = cleaned.to_lowercase();
-        const HALLUCINATED_PHRASES: [&str; 12] = [
-            "tv gelderland",
-            "ondertiteld door",
-            "ondertiteling",
-            "subtitles by the amara",
-            "thanks for watching",
-            "thank you for watching",
-            "subscribe to my channel",
-            "like and subscribe",
-            "see you in the next video",
-            "in the comments below",
-            "bedankt voor het kijken",
-            "abonneer je op",
-        ];
-        if HALLUCINATED_PHRASES.iter().any(|h| lower.contains(h)) {
-            return String::new();
-        }
-    }
-    cleaned.to_string()
-}
-
-fn apply_smart_formatting(text: &str) -> String {
-    // Preserve all whitespace (spaces, tabs, newlines) — only capitalise the
-    // first visible character. Whisper already returns proper punctuation, so
-    // we don't force a trailing period.
-    let trimmed_start = text.trim_start_matches(|c: char| c.is_whitespace());
-    if trimmed_start.is_empty() {
-        return text.to_string();
-    }
-    let leading_ws_len = text.len() - trimmed_start.len();
-    let leading_ws = &text[..leading_ws_len];
-    let mut chars = trimmed_start.chars();
-    let first = chars
-        .next()
-        .map(|c| c.to_uppercase().collect::<String>())
-        .unwrap_or_default();
-    let rest: String = chars.collect();
-    format!("{leading_ws}{first}{rest}")
-}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_smart_formatting, is_below_word_floor, sanitize_transcript,
-        should_withhold_injection, MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS,
-    };
+    use super::{should_withhold_injection, MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS};
 
     #[test]
     fn injection_guard_allows_normal_dictations() {
@@ -341,38 +224,6 @@ mod tests {
         assert!(!should_withhold_injection(MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS));
     }
 
-    #[test]
-    fn word_floor_drops_the_short_hallucination_fragments() {
-        // Every distinct sub-floor output the app actually pasted.
-        for junk in [
-            "And Linux.",
-            "Thank you.",
-            "Bye.",
-            "And so on.",
-            "And so forth.",
-            "You",
-            "Framework.",
-            "And Reboot.",
-            "And Vivo.org.",
-            "And Java.org.",
-            "Czy cụ Sasha",
-            "Basically a single job",
-        ] {
-            assert!(is_below_word_floor(junk), "{junk:?} should be dropped");
-        }
-        // Punctuation and emoji are not words.
-        assert!(is_below_word_floor("😍😍😍😍"));
-        assert!(is_below_word_floor("... ... ..."));
-    }
-
-    #[test]
-    fn word_floor_keeps_real_dictation() {
-        assert!(!is_below_word_floor("let's fix the following things one"));
-        assert!(!is_below_word_floor("deploy the API to Vercel now"));
-        // Exactly at the floor is kept.
-        assert!(!is_below_word_floor("one two three four five"));
-        assert!(is_below_word_floor("one two three four"));
-    }
 
     #[test]
     fn injection_guard_withholds_oversized_transcripts() {
@@ -382,49 +233,6 @@ mod tests {
         assert!(should_withhold_injection(500, MAX_AUTO_INJECT_MS + 1));
     }
 
-    #[test]
-    fn sanitize_drops_silence_hallucinations() {
-        assert_eq!(sanitize_transcript("[BLANK_AUDIO]"), "");
-        assert_eq!(sanitize_transcript("*Muziek*"), "");
-        assert_eq!(sanitize_transcript("***"), "");
-        assert_eq!(sanitize_transcript("(C) TV GELDERLAND 2021"), "");
-        assert_eq!(sanitize_transcript("Ondertiteld door de NOS"), "");
-        assert_eq!(sanitize_transcript(" [ Silence ] "), "");
-        assert_eq!(sanitize_transcript("Thanks for watching!"), "");
-        assert_eq!(sanitize_transcript("Subscribe to my channel!"), "");
-        assert_eq!(
-            sanitize_transcript(
-                "So, if you have any questions, please leave them in the comments below."
-            ),
-            ""
-        );
-        assert_eq!(sanitize_transcript("Bedankt voor het kijken!"), "");
-    }
-
-    #[test]
-    fn sanitize_strips_markers_but_keeps_speech() {
-        assert_eq!(
-            sanitize_transcript("Hello world [BLANK_AUDIO]"),
-            "Hello world"
-        );
-        assert_eq!(sanitize_transcript("Dit is een test."), "Dit is een test.");
-        // Long real dictations mentioning blocklisted words are kept.
-        let long = "Zet de ondertiteling aan voor deze video want ik wil hem kunnen volgen tijdens de lunch.";
-        assert_eq!(sanitize_transcript(long), long);
-    }
-
-    #[test]
-    fn smart_formatting_preserves_whitespace_and_capitalises_first_letter() {
-        assert_eq!(
-            apply_smart_formatting("hello   world"),
-            "Hello   world"
-        );
-        assert_eq!(
-            apply_smart_formatting("line one\nline two"),
-            "Line one\nline two"
-        );
-        assert_eq!(apply_smart_formatting("already done?"), "Already done?");
-    }
 }
 
 #[tauri::command]
@@ -1783,9 +1591,10 @@ pub fn run() {
                                     continue;
                                 }
                             };
-                            if capture.duration_ms < MIN_DICTATION_MS
-                                || capture.peak_amplitude < SILENCE_PEAK_THRESHOLD
-                            {
+                            if pipeline::is_capture_discarded(
+                                capture.duration_ms,
+                                capture.peak_amplitude,
+                            ) {
                                 // Accidental tap or silent capture — discard
                                 // silently, no error UI, no transcription run.
                                 let _ = app_handle.emit(
@@ -1912,7 +1721,7 @@ pub fn run() {
                                         db::top_mistranscribed_words(
                                             &conn,
                                             None,
-                                            CORRECTION_PROMPT_LIMIT,
+                                            pipeline::CORRECTION_PROMPT_LIMIT,
                                         )
                                         .ok()
                                     })
@@ -1920,18 +1729,11 @@ pub fn run() {
                                         rows.into_iter().map(|r| r.intended_text).collect()
                                     })
                                     .unwrap_or_default();
-                                let correction_prompt: Option<String> = if developer_dictionary
-                                {
-                                    dev_vocab::build_biased_prompt(
+                                let correction_prompt: Option<String> =
+                                    pipeline::build_vocabulary_prompt(
                                         &user_terms,
-                                        CORRECTION_PROMPT_CHAR_CAP,
-                                    )
-                                } else {
-                                    corrections::build_prompt_from_corrections(
-                                        &user_terms,
-                                        CORRECTION_PROMPT_CHAR_CAP,
-                                    )
-                                };
+                                        developer_dictionary,
+                                    );
 
                                 // Run exactly one transcription — the model the user
                                 // picked. (Earlier builds fanned out to 4 models per
@@ -2021,66 +1823,40 @@ pub fn run() {
                                 }
 
                                 if let Ok(raw) = &transcript_result {
-                                    // Filter Whisper's silence hallucinations
-                                    // (subtitle credits, [BLANK_AUDIO], *Muziek*).
-                                    // Nothing real left → end quietly, no injection.
-                                    let raw = sanitize_transcript(raw);
-                                    // Whisper also continues the biased
-                                    // vocabulary prompt when there is nothing to
-                                    // transcribe, pasting fragments like "And
-                                    // Linux." into the focused app. That is not
-                                    // speech either.
-                                    let echoed_prompt = !raw.is_empty()
-                                        && dev_vocab::is_prompt_echo(
-                                            &raw,
-                                            &user_terms,
-                                            developer_dictionary,
-                                        );
-                                    // Blunt length floor. The hallucinations that
-                                    // survive every content-based filter are all
-                                    // short fragments, and nothing real down here
-                                    // has ever been dictated.
-                                    let below_floor = !raw.is_empty() && is_below_word_floor(&raw);
-                                    if raw.is_empty() || echoed_prompt || below_floor {
-                                        let reason = if raw.is_empty() {
-                                            "filtered"
-                                        } else if echoed_prompt {
-                                            "prompt echo"
-                                        } else {
-                                            "under word floor"
-                                        };
-                                        let _ = storage::append_log(
-                                            "INFO",
-                                            &format!(
-                                                "Session {session_id} produced no speech ({reason}: {:?})",
-                                                transcript_result.as_ref().ok()
-                                            ),
-                                        );
-                                        let _ = app_handle_for_task.emit(
-                                            "session-phase",
-                                            SessionPhaseEvent { phase: "idle" },
-                                        );
-                                        let mut session_state_guard =
-                                            session_state_for_task.lock().unwrap();
-                                        if matches!(
-                                            *session_state_guard,
-                                            SessionState::Transcribing {
-                                                session_id: current_id
-                                            } if current_id == session_id
-                                        ) {
-                                            *session_state_guard = SessionState::Idle;
+                                    // Silence hallucinations, prompt echoes and
+                                    // sub-floor fragments are not speech: end
+                                    // quietly, no injection.
+                                    let raw = match pipeline::filter_transcript(
+                                        raw,
+                                        &user_terms,
+                                        developer_dictionary,
+                                    ) {
+                                        Ok(filtered) => filtered,
+                                        Err(dropped) => {
+                                            let reason = dropped.as_str();
+                                            let _ = storage::append_log(
+                                                "INFO",
+                                                &format!(
+                                                    "Session {session_id} produced no speech ({reason}: {:?})",
+                                                    transcript_result.as_ref().ok()
+                                                ),
+                                            );
+                                            let _ = app_handle_for_task.emit(
+                                                "session-phase",
+                                                SessionPhaseEvent { phase: "idle" },
+                                            );
+                                            let mut session_state_guard =
+                                                session_state_for_task.lock().unwrap();
+                                            if matches!(
+                                                *session_state_guard,
+                                                SessionState::Transcribing {
+                                                    session_id: current_id
+                                                } if current_id == session_id
+                                            ) {
+                                                *session_state_guard = SessionState::Idle;
+                                            }
+                                            return;
                                         }
-                                        return;
-                                    }
-                                    // Repair developer jargon first, then apply the
-                                    // user's learned corrections on top (so a personal
-                                    // correction always wins over the built-in
-                                    // dictionary), all before smart formatting so
-                                    // capitalisation rules run on the final word shape.
-                                    let raw = if developer_dictionary {
-                                        dev_vocab::normalize(&raw)
-                                    } else {
-                                        raw
                                     };
                                     let correction_pairs: Vec<(String, String)> =
                                         db_conn_for_task
@@ -2090,15 +1866,12 @@ pub fn run() {
                                                 db::list_correction_pairs(&conn).ok()
                                             })
                                             .unwrap_or_default();
-                                    let replaced = corrections::apply_replacements(
-                                        &raw,
+                                    let text = pipeline::finalize_transcript(
+                                        raw,
+                                        developer_dictionary,
                                         &correction_pairs,
+                                        smart_formatting,
                                     );
-                                    let text = if smart_formatting {
-                                        apply_smart_formatting(&replaced)
-                                    } else {
-                                        replaced
-                                    };
                                     // Last line of defense against runaway
                                     // captures: an oversized transcript is
                                     // never auto-pasted into whatever app
