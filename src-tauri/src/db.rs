@@ -84,6 +84,19 @@ pub fn open() -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// Read-only handle on the live database, for tooling that must never
+/// modify it (the eval harness and correction mining). `None` when the app
+/// has not created a database yet.
+pub fn open_read_only() -> Result<Option<Connection>, String> {
+    let path = db_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map(Some)
+        .map_err(|e| format!("Failed to open SQLite DB read-only: {e}"))
+}
+
 fn migrate(conn: &Connection) -> Result<(), String> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))

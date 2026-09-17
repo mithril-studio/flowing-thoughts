@@ -86,10 +86,14 @@ fn run_parakeet(
     model_id: &ModelId,
     audio: &[f32],
     vad_model: Option<&str>,
-) -> Result<String, String> {
+) -> Result<Decoded, String> {
     if let Some(path) = vad_model {
         if !contains_speech(path, audio)? {
-            return Ok(String::new());
+            return Ok(Decoded {
+                text: String::new(),
+                lang_id: 0,
+                vad_rejected: true,
+            });
         }
     }
     let text = with_parakeet(model_id, |model| {
@@ -103,7 +107,13 @@ fn run_parakeet(
         "INFO",
         &format!("Parakeet decoded {} chars (VAD {vad_state})", text.trim().len()),
     );
-    Ok(text.trim().to_string())
+    // Parakeet does not report which language it decoded, so `lang_id` is
+    // a placeholder the caller ignores.
+    Ok(Decoded {
+        text: text.trim().to_string(),
+        lang_id: 0,
+        vad_rejected: false,
+    })
 }
 
 /// Load the model and push one second of silence through it, so the first
@@ -255,13 +265,21 @@ fn contains_speech(vad_model: &str, audio: &[f32]) -> Result<bool, String> {
     Ok(n > 0)
 }
 
+/// One decode pass. `vad_rejected` separates "the VAD gate kept this audio
+/// away from the decoder" from "the decoder ran and produced nothing".
+struct Decoded {
+    text: String,
+    lang_id: i32,
+    vad_rejected: bool,
+}
+
 fn run_inference(
     ctx: &WhisperContext,
     audio: &[f32],
     language: &str,
     prompt: Option<&str>,
     vad_model: Option<&str>,
-) -> Result<(String, i32), String> {
+) -> Result<Decoded, String> {
     // Voice activity detection, when the model is on disk. This runs *before*
     // the decoder: audio with no detected speech never reaches Whisper, so
     // there are no tokens to hallucinate from. Every other guard in this app
@@ -272,7 +290,11 @@ fn run_inference(
     // rather than breaking transcription.
     if let Some(path) = vad_model {
         if !contains_speech(path, audio)? {
-            return Ok((String::new(), 0));
+            return Ok(Decoded {
+                text: String::new(),
+                lang_id: 0,
+                vad_rejected: true,
+            });
         }
     }
 
@@ -338,7 +360,11 @@ fn run_inference(
             ),
         );
     }
-    Ok((text.trim().to_string(), state.full_lang_id_from_state()))
+    Ok(Decoded {
+        text: text.trim().to_string(),
+        lang_id: state.full_lang_id_from_state(),
+        vad_rejected: false,
+    })
 }
 
 fn num_cpus_threads() -> i32 {
@@ -362,6 +388,122 @@ fn whisper_language(model_id: &ModelId, language_mode: &str) -> &'static str {
     }
 }
 
+/// What one local transcription produced, plus the diagnostics the eval
+/// harness needs to tell a model error from a gate that discarded speech.
+#[derive(Debug, Clone)]
+pub struct LocalTranscript {
+    pub text: String,
+    /// Whisper language code of the decode that produced `text`; `None` when
+    /// the VAD gate stopped the audio before any decode, or when the engine
+    /// (Parakeet) does not report one.
+    pub language: Option<String>,
+    /// The VAD gate found no speech, so Whisper never ran.
+    pub vad_rejected: bool,
+    /// Auto-detection landed outside `ALLOWED_LANGS` and the audio was
+    /// re-decoded as Dutch.
+    pub redecoded_as_dutch: bool,
+}
+
+/// Decoder inputs beyond the audio itself.
+#[derive(Debug, Clone)]
+pub struct DecodeOptions {
+    /// App-level language mode: "en" | "nl" | "system".
+    pub language_mode: String,
+    pub prompt: Option<String>,
+    /// Gate audio behind Silero VAD when its model is installed. Dictation
+    /// always passes `true`; only the eval harness turns it off, to measure
+    /// what the gate costs and buys.
+    pub use_vad: bool,
+}
+
+/// Route whisper.cpp/ggml's stderr chatter into whisper-rs's logging hooks —
+/// with no log backend enabled that silences it. For command-line tooling
+/// whose own output must stay readable; the app leaves the default alone.
+pub fn quiet_native_logging() {
+    whisper_rs::install_logging_hooks();
+}
+
+/// Load (or fetch from cache) the model without decoding anything, so callers
+/// that time transcription can keep model load out of the measurement.
+pub fn preload_model(model_id: &ModelId) -> Result<(), String> {
+    match model_id.engine() {
+        Engine::Parakeet => with_parakeet(model_id, |_| Ok(())),
+        Engine::Whisper => get_or_load_context(model_id).map(|_| ()),
+    }
+}
+
+/// The whole local transcription of one WAV, synchronously: resample, VAD
+/// gate, decode, and the out-of-set language retry. `transcribe_local` runs
+/// this on a blocking thread; the eval harness calls it directly.
+pub fn transcribe_wav_blocking(
+    model_id: &ModelId,
+    wav_path: &Path,
+    options: &DecodeOptions,
+) -> Result<LocalTranscript, String> {
+    let language = whisper_language(model_id, &options.language_mode);
+    // Resolved once per dictation, not per decode pass, so the retry below
+    // cannot disagree with the first pass about whether VAD is on.
+    let vad_model = (options.use_vad && model_manager::vad_model_installed())
+        .then(|| model_manager::vad_model_path().ok())
+        .flatten()
+        .and_then(|p| p.to_str().map(str::to_owned));
+    if options.use_vad && vad_model.is_none() {
+        let _ = crate::storage::append_log(
+            "WARN",
+            "VAD model missing — decoding without the silence gate, so Whisper may invent text on near-silent audio",
+        );
+    }
+    let audio = load_wav_as_mono_16k(wav_path)?;
+    let vad = vad_model.as_deref();
+    if model_id.engine() == Engine::Parakeet {
+        let decoded = run_parakeet(model_id, &audio, vad)?;
+        return Ok(LocalTranscript {
+            text: decoded.text,
+            language: None,
+            vad_rejected: decoded.vad_rejected,
+            redecoded_as_dutch: false,
+        });
+    }
+    let ctx = get_or_load_context(model_id)?;
+    let prompt = options.prompt.as_deref();
+    let decoded = run_inference(&ctx, &audio, language, prompt, vad)?;
+    if decoded.vad_rejected {
+        return Ok(LocalTranscript {
+            text: decoded.text,
+            language: None,
+            vad_rejected: true,
+            redecoded_as_dutch: false,
+        });
+    }
+    if language == "auto" {
+        let detected = whisper_rs::get_lang_str(decoded.lang_id).unwrap_or("");
+        if !ALLOWED_LANGS.contains(&detected) {
+            // Detection landed outside the supported set — in practice
+            // almost always Dutch misread as Afrikaans/German. Re-decode
+            // forced to Dutch (English detection is reliable, so an
+            // out-of-set detection was not English speech).
+            let retry = run_inference(&ctx, &audio, "nl", prompt, vad)?;
+            return Ok(LocalTranscript {
+                text: retry.text,
+                language: Some("nl".to_string()),
+                vad_rejected: false,
+                redecoded_as_dutch: true,
+            });
+        }
+    }
+    let language = if language == "auto" {
+        whisper_rs::get_lang_str(decoded.lang_id).unwrap_or("").to_string()
+    } else {
+        language.to_string()
+    };
+    Ok(LocalTranscript {
+        text: decoded.text,
+        language: Some(language),
+        vad_rejected: false,
+        redecoded_as_dutch: false,
+    })
+}
+
 pub async fn transcribe_local(
     model_id: ModelId,
     wav_path: &Path,
@@ -369,44 +511,18 @@ pub async fn transcribe_local(
     prompt: Option<String>,
 ) -> Result<(String, u64), String> {
     let wav_path = wav_path.to_path_buf();
-    let language = whisper_language(&model_id, language_mode);
+    let options = DecodeOptions {
+        language_mode: language_mode.to_string(),
+        prompt,
+        use_vad: true,
+    };
     let started = Instant::now();
-    // Resolved once per dictation, not per decode pass, so the retry below
-    // cannot disagree with the first pass about whether VAD is on.
-    let vad_model = model_manager::vad_model_installed()
-        .then(|| model_manager::vad_model_path().ok())
-        .flatten()
-        .and_then(|p| p.to_str().map(str::to_owned));
-    if vad_model.is_none() {
-        let _ = crate::storage::append_log(
-            "WARN",
-            "VAD model missing — decoding without the silence gate, so Whisper may invent text on near-silent audio",
-        );
-    }
-    let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let audio = load_wav_as_mono_16k(&wav_path)?;
-        let vad = vad_model.as_deref();
-        if model_id.engine() == Engine::Parakeet {
-            return run_parakeet(&model_id, &audio, vad);
-        }
-        let ctx = get_or_load_context(&model_id)?;
-        let (text, lang_id) = run_inference(&ctx, &audio, language, prompt.as_deref(), vad)?;
-        if language == "auto" {
-            let detected = whisper_rs::get_lang_str(lang_id).unwrap_or("");
-            if !ALLOWED_LANGS.contains(&detected) {
-                // Detection landed outside the supported set — in practice
-                // almost always Dutch misread as Afrikaans/German. Re-decode
-                // forced to Dutch (English detection is reliable, so an
-                // out-of-set detection was not English speech).
-                let (text_nl, _) = run_inference(&ctx, &audio, "nl", prompt.as_deref(), vad)?;
-                return Ok(text_nl);
-            }
-        }
-        Ok(text)
+    let result = tokio::task::spawn_blocking(move || {
+        transcribe_wav_blocking(&model_id, &wav_path, &options)
     })
     .await
     .map_err(|e| format!("Local transcription task panicked: {e}"))?;
-    let text = result?;
+    let text = result?.text;
     Ok((text, started.elapsed().as_millis() as u64))
 }
 
@@ -473,10 +589,13 @@ mod tests {
         let prompt = crate::dev_vocab::build_biased_prompt(&[], 800).unwrap();
         let vad_path = crate::model_manager::vad_model_path().unwrap();
 
-        let (without_vad, _) =
-            super::run_inference(&ctx, &audio, "en", Some(&prompt), None).unwrap();
-        let (with_vad, _) =
-            super::run_inference(&ctx, &audio, "en", Some(&prompt), vad_path.to_str()).unwrap();
+        let without_vad = super::run_inference(&ctx, &audio, "en", Some(&prompt), None)
+            .unwrap()
+            .text;
+        let with_vad =
+            super::run_inference(&ctx, &audio, "en", Some(&prompt), vad_path.to_str())
+                .unwrap()
+                .text;
 
         println!("  without VAD: {without_vad:?}");
         println!("  with VAD:    {with_vad:?}");
@@ -502,15 +621,15 @@ mod tests {
         write_near_silence(&wav, 1_700);
         let audio = super::load_wav_as_mono_16k(&wav).unwrap();
         let gated = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap();
-        assert!(gated.is_empty(), "VAD let non-speech through: {gated:?}");
-        let ungated = super::run_parakeet(&id, &audio, None).unwrap();
+        assert!(gated.vad_rejected, "VAD let non-speech through: {:?}", gated.text);
+        let ungated = super::run_parakeet(&id, &audio, None).unwrap().text;
         println!("  parakeet on near-silence without VAD: {ungated:?}");
 
         let sample = std::env::var("FT_SAMPLE_WAV").unwrap_or_default();
         if !sample.is_empty() {
             let audio = super::load_wav_as_mono_16k(std::path::Path::new(&sample)).unwrap();
             let started = std::time::Instant::now();
-            let text = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap();
+            let text = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap().text;
             println!(
                 "  parakeet transcript ({} ms for {:.1}s audio): {text:?}",
                 started.elapsed().as_millis(),
@@ -534,8 +653,9 @@ mod tests {
         let wav = dir.join("near_silence.wav");
         write_near_silence(&wav, 1_700);
         let audio = super::load_wav_as_mono_16k(&wav).unwrap();
-        let (silence_text, _) =
-            super::run_inference(&ctx, &audio, "nl", None, vad_path.to_str()).unwrap();
+        let silence_text = super::run_inference(&ctx, &audio, "nl", None, vad_path.to_str())
+            .unwrap()
+            .text;
         assert!(
             silence_text.trim().is_empty(),
             "turbo invented text on near-silence: {silence_text:?}"
@@ -549,8 +669,9 @@ mod tests {
             for (label, model) in [("turbo", ModelId::LargeV3TurboQ5), ("small", ModelId::SmallQ5)] {
                 let Ok(ctx) = super::get_or_load_context(&model) else { continue };
                 let started = std::time::Instant::now();
-                let (text, lang) =
+                let decoded =
                     super::run_inference(&ctx, &audio, &lang, None, vad_path.to_str()).unwrap();
+                let (text, lang) = (decoded.text, decoded.lang_id);
                 println!(
                     "  {label} transcript ({} ms, lang {}): {text:?}",
                     started.elapsed().as_millis(),
