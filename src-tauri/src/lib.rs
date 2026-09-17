@@ -51,6 +51,7 @@ mod local_transcribe;
 mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_hotkey;
+mod meetings;
 mod model_manager;
 mod pipeline;
 mod storage;
@@ -499,6 +500,10 @@ struct AppSettingsUpdateResult {
     settings: storage::AppSettings,
     warnings: Vec<String>,
 }
+
+/// Id of the menu bar icon, so code outside `run()` (the meeting session) can
+/// look it up with `app.tray_by_id` and set its title.
+pub(crate) const TRAY_ICON_ID: &str = "main";
 
 const MAX_AUTO_DELETE_AUDIO_DAYS: u32 = 365;
 
@@ -1390,7 +1395,7 @@ pub fn run() {
 
             // Create the menu bar (tray) icon. Its presence means dictation
             // is armed; its title gives live feedback while dictating.
-            let tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .icon_as_template(true)
                 .menu(&menu)
@@ -1410,23 +1415,27 @@ pub fn run() {
                 .build(app)?;
 
             // Mirror the session phase in the menu bar: ● while recording,
-            // … while transcribing/typing, nothing when idle.
+            // … while transcribing/typing. When idle the title goes back to
+            // the running meeting's (dot plus duration), or to nothing.
             {
                 use tauri::Listener;
                 let tray_handle = tray.clone();
                 app.listen("session-phase", move |event| {
                     let payload = event.payload();
                     let title = if payload.contains("recording") {
-                        Some("●")
+                        Some("●".to_string())
                     } else if payload.contains("transcribing") || payload.contains("injecting")
                     {
-                        Some("…")
+                        Some("…".to_string())
                     } else {
-                        None
+                        meetings::idle_tray_title()
                     };
                     let _ = tray_handle.set_title(title);
                 });
             }
+
+            // Meetings: launch recovery, then the background worker.
+            meetings::init(app.handle());
 
             let shared_db_conn = db_conn.clone();
 
@@ -2232,7 +2241,27 @@ pub fn run() {
             delete_correction,
             update_history_text,
             save_correction_from_edit,
-            get_app_version
+            get_app_version,
+            meetings::commands::meetings_supported,
+            meetings::commands::check_system_audio_permission,
+            meetings::commands::open_system_audio_settings,
+            meetings::commands::start_meeting,
+            meetings::commands::pause_meeting,
+            meetings::commands::resume_meeting,
+            meetings::commands::stop_meeting,
+            meetings::commands::get_meeting_recording_status,
+            meetings::commands::list_meetings,
+            meetings::commands::get_meeting,
+            meetings::commands::rename_meeting,
+            meetings::commands::delete_meeting,
+            meetings::commands::delete_meeting_audio,
+            meetings::commands::list_meeting_segments,
+            meetings::commands::edit_meeting_segment_text,
+            meetings::commands::set_meeting_segment_hidden,
+            meetings::commands::retranscribe_meeting,
+            meetings::commands::generate_meeting_summary,
+            meetings::commands::get_meeting_summary,
+            meetings::commands::export_meeting_markdown
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2248,6 +2277,7 @@ pub fn run() {
                 // shutdown. All state is persisted eagerly, so skipping
                 // destructors is safe.
                 let _ = storage::append_log("INFO", "Exit requested — shutting down");
+                meetings::shutdown();
                 unsafe { libc::_exit(0) };
             }
         });
