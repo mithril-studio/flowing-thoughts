@@ -8,6 +8,12 @@ import {
   type AppSettingsUpdateResult,
   defaultAppSettings,
 } from "../types/settings";
+import type { MeetingLanguage, PermissionStatus } from "../types/meetings";
+import {
+  checkSystemAudioPermission,
+  meetingsSupported,
+  openSystemAudioSettings,
+} from "../lib/meetingsApi";
 
 interface AppVersion {
   version: string;
@@ -95,6 +101,16 @@ const COACHING_MODEL_SUGGESTIONS = [
   "meta-llama/llama-3.1-8b-instruct",
 ];
 
+const MEETING_LANGUAGES: { value: MeetingLanguage; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "en", label: "English" },
+  { value: "nl", label: "Nederlands" },
+];
+
+const AUTO_DELETE_AUDIO_DAY_CHOICES = [7, 30, 90];
+/** What the auto-delete toggle switches on. */
+const DEFAULT_AUTO_DELETE_AUDIO_DAYS = 30;
+
 export default function Settings({ settings, onSettingsChange }: SettingsProps) {
   const [local, setLocal] = useState<AppSettings>(settings ?? defaultAppSettings);
   const [busy, setBusy] = useState(false);
@@ -127,6 +143,8 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [versionCopied, setVersionCopied] = useState(false);
+  const [meetingsOsSupported, setMeetingsOsSupported] = useState<boolean | null>(null);
+  const [systemAudio, setSystemAudio] = useState<PermissionStatus | null>(null);
 
   useEffect(() => {
     setLocal(settings ?? defaultAppSettings);
@@ -416,6 +434,32 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     };
   }, []);
 
+  // Same silent polling for system audio, only while Meetings is on. macOS
+  // reports a denial as silence, so "unknown" is a normal answer here.
+  const meetingsEnabled = local.meetings.enabled;
+  useEffect(() => {
+    if (!meetingsEnabled) return;
+    let cancelled = false;
+    meetingsSupported()
+      .then((ok) => {
+        if (!cancelled) setMeetingsOsSupported(ok);
+      })
+      .catch(() => {});
+    const refresh = () => {
+      checkSystemAudioPermission()
+        .then((status) => {
+          if (!cancelled) setSystemAudio(status);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [meetingsEnabled]);
+
   // Explicit request — shows the macOS permission dialogs when not granted.
   const requestPermissions = async () => {
     setSetupBusy(true);
@@ -438,6 +482,13 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   };
 
   const selectedLocalModel = local.transcription.local_model;
+
+  // Meetings decode long-form through Whisper, so Parakeet models are left out.
+  const meetingModels = models.filter(
+    (m) => m.installed && !m.hidden && !m.id.startsWith("parakeet"),
+  );
+  const meetingModelListed = meetingModels.some((m) => m.id === local.meetings.model);
+  const systemAudioState = systemAudio?.state ?? "unknown";
 
   return (
     <div className="h-full space-y-4 overflow-y-auto px-4 py-4">
@@ -1148,6 +1199,238 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
         )}
       </Section>
 
+      <Section title="Meetings">
+        <div className="space-y-1">
+          <Toggle
+            label="Meeting recording"
+            checked={local.meetings.enabled}
+            onChange={(checked) =>
+              update({
+                ...local,
+                meetings: { ...local.meetings, enabled: checked },
+              })
+            }
+            disabled={busy}
+          />
+          <p className="pl-1 text-xs text-zinc-500">
+            Adds a Meetings tab that records your microphone and the call as two
+            tracks, then transcribes them on this Mac after you stop. Audio stays
+            on disk until you delete it.
+          </p>
+        </div>
+
+        {local.meetings.enabled && (
+          <div className="space-y-3 pt-1">
+            {meetingsOsSupported === false ? (
+              <p className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
+                Meetings need macOS 14.4 or later to record system audio.
+              </p>
+            ) : (
+              <PermissionRow
+                title="System Audio Recording"
+                description={
+                  systemAudioState === "unknown"
+                    ? "Lets meetings record the other side of the call. macOS only reports this once a meeting has recorded; without it, meetings record your microphone only."
+                    : "Lets meetings record the other side of the call. Without it, meetings record your microphone only."
+                }
+                granted={
+                  systemAudioState === "granted"
+                    ? true
+                    : systemAudioState === "denied"
+                      ? false
+                      : null
+                }
+                pendingLabel={systemAudio === null ? undefined : "Not checked yet"}
+                onOpenSettings={() =>
+                  openSystemAudioSettings().catch((e) => setError(String(e)))
+                }
+              />
+            )}
+
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">Meeting language</p>
+              <div className="grid grid-cols-3 gap-2" role="group" aria-label="Meeting language">
+                {MEETING_LANGUAGES.map(({ value, label }) => (
+                  <Choice
+                    key={value}
+                    label={label}
+                    selected={local.meetings.language === value}
+                    onClick={() =>
+                      update({
+                        ...local,
+                        meetings: { ...local.meetings, language: value },
+                      })
+                    }
+                    disabled={busy}
+                  />
+                ))}
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                Auto picks English or Dutch once per track. You can re-transcribe a
+                meeting in another language later.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="meetings-model"
+                className="block text-xs text-zinc-600 dark:text-zinc-400"
+              >
+                Meeting model
+              </label>
+              <select
+                id="meetings-model"
+                value={local.meetings.model}
+                onChange={(e) =>
+                  update({
+                    ...local,
+                    meetings: { ...local.meetings, model: e.target.value },
+                  })
+                }
+                disabled={busy}
+                className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 disabled:opacity-60"
+              >
+                {!meetingModelListed && (
+                  <option value={local.meetings.model}>
+                    {local.meetings.model || "Same as dictation"} (not downloaded)
+                  </option>
+                )}
+                {meetingModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display_name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-zinc-500">
+                Downloaded Whisper models from Transcription. Meetings are decoded
+                after you stop, so a larger model costs time, not live latency.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Toggle
+                label="Meeting summaries"
+                checked={local.meetings.summary_enabled}
+                onChange={(checked) =>
+                  update({
+                    ...local,
+                    meetings: { ...local.meetings, summary_enabled: checked },
+                  })
+                }
+                disabled={busy}
+              />
+              <p className="pl-1 text-xs text-zinc-500">
+                Optional. A summary sends that meeting's transcript to OpenRouter
+                with your own API key. It never runs by itself: each summary asks
+                first.
+              </p>
+              {local.meetings.summary_enabled && (
+                <div className="space-y-2">
+                  <label
+                    htmlFor="meetings-summary-model"
+                    className="block text-xs text-zinc-600 dark:text-zinc-400"
+                  >
+                    Summary model
+                  </label>
+                  <input
+                    id="meetings-summary-model"
+                    type="text"
+                    value={local.meetings.summary_model}
+                    onChange={(e) =>
+                      setLocal({
+                        ...local,
+                        meetings: { ...local.meetings, summary_model: e.target.value },
+                      })
+                    }
+                    onBlur={() => update(local)}
+                    placeholder="openai/gpt-4o-mini"
+                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500"
+                  />
+                  <div className="flex items-center justify-between">
+                    <label
+                      htmlFor="meetings-openrouter-key"
+                      className="text-xs text-zinc-600 dark:text-zinc-400"
+                    >
+                      OpenRouter API key
+                    </label>
+                    <span className="text-[11px] text-zinc-500">
+                      {openrouterConfigured ? "configured" : "not configured"}
+                    </span>
+                  </div>
+                  <input
+                    id="meetings-openrouter-key"
+                    type="password"
+                    value={openrouterKey}
+                    onChange={(e) => setOpenrouterKey(e.target.value)}
+                    placeholder="sk-or-..."
+                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500"
+                  />
+                  <SecondaryButton onClick={saveOpenrouterKey} disabled={coachBusy}>
+                    {coachBusy ? "Saving..." : "Save OpenRouter API Key"}
+                  </SecondaryButton>
+                  <p className="text-[11px] text-zinc-500">
+                    The same key as Coaching; it is stored once.
+                  </p>
+                  {coachMessage && (
+                    <p className="text-xs text-zinc-700 dark:text-zinc-300">{coachMessage}</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Toggle
+                label="Auto-delete meeting audio"
+                checked={local.meetings.auto_delete_audio_days > 0}
+                onChange={(checked) =>
+                  update({
+                    ...local,
+                    meetings: {
+                      ...local.meetings,
+                      auto_delete_audio_days: checked ? DEFAULT_AUTO_DELETE_AUDIO_DAYS : 0,
+                    },
+                  })
+                }
+                disabled={busy}
+              />
+              {local.meetings.auto_delete_audio_days > 0 ? (
+                <div className="space-y-2">
+                  <div
+                    className="grid grid-cols-3 gap-2"
+                    role="group"
+                    aria-label="Delete audio after"
+                  >
+                    {AUTO_DELETE_AUDIO_DAY_CHOICES.map((days) => (
+                      <Choice
+                        key={days}
+                        label={`${days} days`}
+                        selected={local.meetings.auto_delete_audio_days === days}
+                        onClick={() =>
+                          update({
+                            ...local,
+                            meetings: { ...local.meetings, auto_delete_audio_days: days },
+                          })
+                        }
+                        disabled={busy}
+                      />
+                    ))}
+                  </div>
+                  <p className="pl-1 text-xs text-zinc-500">
+                    Audio is deleted {local.meetings.auto_delete_audio_days} days after a
+                    meeting is transcribed. Transcripts are always kept.
+                  </p>
+                </div>
+              ) : (
+                <p className="pl-1 text-xs text-zinc-500">
+                  Off: audio is kept until you delete it (about 230 MB per hour).
+                  Transcripts are always kept.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </Section>
+
       <Section title="Permissions">
         <PermissionRow
           title="Accessibility"
@@ -1284,11 +1567,14 @@ function PermissionRow({
   title,
   description,
   granted,
+  pendingLabel = "Checking…",
   onOpenSettings,
 }: {
   title: string;
   description: string;
   granted: boolean | null;
+  /** Shown while `granted` is null. System audio can stay unknown for good. */
+  pendingLabel?: string;
   onOpenSettings: () => void;
 }) {
   return (
@@ -1311,7 +1597,7 @@ function PermissionRow({
                   : "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300"
             }`}
           >
-            {granted === null ? "Checking…" : granted ? "✓ Granted" : "Not granted"}
+            {granted === null ? pendingLabel : granted ? "✓ Granted" : "Not granted"}
           </span>
         </div>
         <p className="text-[11px] text-zinc-500">{description}</p>
