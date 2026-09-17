@@ -17,6 +17,12 @@
 //!   threads) happens on the session thread. A command waits a couple of
 //!   seconds for its answer and otherwise returns the status as it is; the
 //!   outcome then arrives as `meeting-state`.
+//! - The system tap starts on a thread of its own (`meeting-tap-start`),
+//!   after the microphone delivers. Creating it blocks for as long as the
+//!   System Audio Recording prompt is on screen (over a minute, seen with the
+//!   bundled app), and pause and stop must not wait for that. The track
+//!   joins the meeting when it gets there; one that arrives after the stop is
+//!   stopped again.
 //! - No system audio means a microphone-only meeting, never an error: the
 //!   system track row is removed and `RecordingStatus::tracks` says so.
 //! - A failure never leaves the session stuck: sources and recorders are
