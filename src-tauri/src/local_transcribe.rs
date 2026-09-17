@@ -518,6 +518,12 @@ pub async fn transcribe_local(
     };
     let started = Instant::now();
     let result = tokio::task::spawn_blocking(move || {
+        // Dictation goes first: this preempts a meeting window that is being
+        // decoded and keeps the worker out until the text is back. Taken here,
+        // on the blocking thread, so it covers both engines and is never held
+        // across an await. The eval harness calls `transcribe_wav_blocking`
+        // directly and stays outside the gate.
+        let _gate = crate::inference_gate::acquire_interactive();
         transcribe_wav_blocking(&model_id, &wav_path, &options)
     })
     .await

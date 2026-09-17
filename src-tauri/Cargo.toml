@@ -9,6 +9,13 @@ edition = "2021"
 name = "flowing_thoughts_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = ["private-tcc"]
+# Best-effort System Audio permission preflight through the private TCC
+# framework (loaded with dlopen). Builds without it rely on the zero-audio
+# watchdog alone. Used by meetings/capture/permission.rs.
+private-tcc = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -35,6 +42,11 @@ futures-util = "0.3"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
+# Meetings (added up front by WP1 so later packages never edit this file).
+# Capture-time resampling to 16 kHz mono, and the lock-free ring between the
+# audio callbacks and the chunk-writer threads.
+rubato = "5"
+rtrb = "0.4"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rdev = "0.5"
@@ -43,3 +55,11 @@ rdev = "0.5"
 core-foundation = "0.9"
 core-foundation-sys = "0.8"
 core-graphics = "0.23"
+# Meetings: Core Audio process taps (system audio). The tap symbols are
+# resolved with dlsym at runtime, never linked, so the app still launches on
+# macOS 12/13. cpal stays at 0.15 — 0.17+ hard-links them.
+objc2 = "0.6"
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-foundation = "0.3"
