@@ -45,6 +45,7 @@ mod db;
 mod dev_vocab;
 pub mod eval;
 mod hotkey;
+mod inference_gate;
 mod local_transcribe;
 #[cfg(target_os = "macos")]
 mod macos_ax;
