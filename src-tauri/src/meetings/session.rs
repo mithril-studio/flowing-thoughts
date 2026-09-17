@@ -67,6 +67,11 @@ const SHUTDOWN_WAIT: Duration = Duration::from_millis(900);
 /// How often the session thread looks at the recorders, the system-audio
 /// monitor and the tray title when no command arrives.
 const TICK: Duration = Duration::from_millis(250);
+/// How long `start` waits for the system tap before it answers. A tap that
+/// works is up in well under a second. One that waits for the user to answer
+/// the System Audio Recording prompt takes as long as they do, and joins the
+/// meeting when it gets there.
+const TAP_GRACE: Duration = Duration::from_millis(1_500);
 
 const RECORDING_MARK: &str = "●";
 const PAUSED_MARK: &str = "❙❙";
@@ -159,7 +164,9 @@ impl SessionEnv for TauriEnv {
 
     fn set_tray_title(&self, title: Option<String>) {
         if let Some(tray) = self.app.tray_by_id(crate::TRAY_ICON_ID) {
-            let _ = tray.set_title(title);
+            // tray-icon ignores `None` on macOS: only an empty title clears
+            // the old one.
+            let _ = tray.set_title(Some(title.unwrap_or_default()));
         }
     }
 }
@@ -275,6 +282,7 @@ fn dictation_is_active(session_phase_payload: &str) -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct SessionConfig {
     pub command_wait: Duration,
+    pub tap_grace: Duration,
     pub tick: Duration,
     pub recorder: RecorderConfig,
     /// Frames per chunk file. `CHUNK_FRAMES` (60 s); tests use less.
@@ -285,6 +293,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             command_wait: COMMAND_WAIT,
+            tap_grace: TAP_GRACE,
             tick: TICK,
             recorder: RecorderConfig::default(),
             chunk_frames: CHUNK_FRAMES,
@@ -314,6 +323,7 @@ enum Control {
 }
 
 /// The rows of the meeting being recorded.
+#[derive(Clone)]
 struct ActiveMeeting {
     id: String,
     origin_host_ns: u64,
@@ -337,6 +347,10 @@ enum Outcome {
     Stopped,
     Failed(String),
 }
+
+/// What starting the system tap came to: the track and its monitor, or why
+/// the meeting is microphone-only.
+type TapStart = Result<(LiveTrack, Option<Box<dyn SystemMonitor>>), String>;
 
 pub(crate) struct Session {
     env: Arc<dyn SessionEnv>,
@@ -600,7 +614,7 @@ impl Session {
     }
 
     fn run(
-        &self,
+        self: &Arc<Self>,
         meeting: ActiveMeeting,
         control: Receiver<Control>,
         started: Sender<Result<(), String>>,
@@ -630,28 +644,23 @@ impl Session {
         }
         self.announce();
 
+        // The tap starts on a thread of its own: creating it blocks for as
+        // long as the System Audio Recording prompt is on screen, and the
+        // meeting and its controls must not wait for that.
         let mut monitor: Option<Box<dyn SystemMonitor>> = None;
-        let tap = self.env.open_system_tap().and_then(|opened| {
-            let track = self.open_track(&meeting, opened.source)?;
-            Ok((track, opened.monitor))
-        });
-        match tap {
-            Ok((track, tap_monitor)) => {
-                tracks.push(track);
-                monitor = tap_monitor;
-                self.live().tracks.push(TrackKind::System);
-                self.observe(&meeting, &mut tracks, monitor.as_deref());
-                self.announce();
-            }
-            Err(e) => {
-                log("WARN", &format!("Meetings: recording the microphone only: {e}"));
-                self.discard_system_track(&meeting);
-            }
+        let mut pending_tap = Some(self.start_tap(&meeting));
+        let tap_deadline = Instant::now() + self.config.tap_grace;
+        while pending_tap.is_some() && Instant::now() < tap_deadline {
+            self.poll_tap(&meeting, &mut pending_tap, &mut tracks, &mut monitor, self.config.tick);
         }
         let _ = started.send(Ok(()));
 
+        // `pending_tap` is dropped with the meeting: a tap that arrives after
+        // that finds nobody listening and is abandoned (`start_tap`).
         loop {
-            match control.recv_timeout(self.config.tick) {
+            let command = control.recv_timeout(self.config.tick);
+            self.poll_tap(&meeting, &mut pending_tap, &mut tracks, &mut monitor, Duration::ZERO);
+            match command {
                 Ok(Control::Pause(reply)) => {
                     let _ = reply.send(self.set_paused(&meeting, &tracks, true));
                 }
@@ -677,6 +686,80 @@ impl Session {
                     return;
                 }
             }
+        }
+    }
+
+    /// Opens and starts the system tap on a thread of its own. The result
+    /// comes back over the channel; when the meeting is over by then, the tap
+    /// is stopped again right there.
+    fn start_tap(self: &Arc<Self>, meeting: &ActiveMeeting) -> Receiver<TapStart> {
+        let (tx, rx) = mpsc::channel();
+        let (session, meeting) = (self.clone(), meeting.clone());
+        let spawned = std::thread::Builder::new().name("meeting-tap-start".to_string()).spawn(move || {
+            let result = session.env.open_system_tap().and_then(|opened| {
+                let track = session.open_track(&meeting, opened.source)?;
+                Ok((track, opened.monitor))
+            });
+            if let Err(mpsc::SendError(result)) = tx.send(result) {
+                session.abandon_tap(&meeting, result);
+            }
+        });
+        if let Err(e) = spawned {
+            // The sender went with the closure: the receiver reports it as a
+            // tap that could not start.
+            log("WARN", &format!("Meetings: failed to start the system audio thread: {e}"));
+        }
+        rx
+    }
+
+    /// Takes the tap's result if it is there (waiting up to `wait` for it):
+    /// the system track joins the meeting, or the meeting is settled as
+    /// microphone-only.
+    fn poll_tap(
+        &self,
+        meeting: &ActiveMeeting,
+        pending: &mut Option<Receiver<TapStart>>,
+        tracks: &mut Vec<LiveTrack>,
+        monitor: &mut Option<Box<dyn SystemMonitor>>,
+        wait: Duration,
+    ) {
+        let Some(rx) = pending.as_ref() else { return };
+        let result = match rx.recv_timeout(wait) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => return,
+            Err(RecvTimeoutError::Disconnected) => Err("the system audio thread ended".to_string()),
+        };
+        *pending = None;
+        match result {
+            Ok((track, tap_monitor)) => {
+                if self.live().phase == RecordingPhase::Paused {
+                    track.recorder.pause();
+                }
+                tracks.push(track);
+                *monitor = tap_monitor;
+                self.live().tracks.push(TrackKind::System);
+                self.observe(meeting, tracks, monitor.as_deref());
+                self.announce();
+            }
+            Err(e) => {
+                log("WARN", &format!("Meetings: recording the microphone only: {e}"));
+                self.discard_system_track(meeting);
+            }
+        }
+    }
+
+    /// The tap came up after its meeting had ended.
+    fn abandon_tap(&self, meeting: &ActiveMeeting, result: TapStart) {
+        let recorded = match result {
+            Ok((mut track, _)) => {
+                let _ = track.source.stop();
+                track.recorder.stop().written_frames > 0
+            }
+            Err(_) => false,
+        };
+        log("INFO", "Meetings: system audio came up after the meeting had ended");
+        if !recorded {
+            self.discard_system_track(meeting);
         }
     }
 
@@ -1280,6 +1363,38 @@ mod tests {
         }
     }
 
+    /// A tap that is stuck the way the real one is while macOS shows the
+    /// System Audio Recording prompt: `start` blocks until the test opens the
+    /// gate.
+    struct GatedSource {
+        inner: SharedSource,
+        gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl AudioSource for GatedSource {
+        fn kind(&self) -> TrackKind {
+            self.inner.kind()
+        }
+        fn device_name(&self) -> Option<String> {
+            self.inner.device_name()
+        }
+        fn format(&self) -> Option<SourceFormat> {
+            self.inner.format()
+        }
+        fn start(&mut self, handler: Box<dyn AudioSourceHandler>) -> Result<SourceFormat, String> {
+            let (open, signal) = &*self.gate;
+            let mut open = open.lock().unwrap();
+            while !*open {
+                open = signal.wait(open).unwrap();
+            }
+            drop(open);
+            self.inner.start(handler)
+        }
+        fn stop(&mut self) -> Result<(), String> {
+            self.inner.stop()
+        }
+    }
+
     #[derive(Default)]
     struct FakeMonitor {
         notice: AtomicBool,
@@ -1300,6 +1415,8 @@ mod tests {
         mic: SharedSource,
         /// `None`: this Mac cannot do process taps.
         tap: Option<SharedSource>,
+        /// Set: the tap's `start` blocks until the gate is opened.
+        tap_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
         monitor: Arc<FakeMonitor>,
         states: Mutex<Vec<RecordingStatus>>,
         updates: Mutex<Vec<(String, MeetingChange)>>,
@@ -1313,6 +1430,7 @@ mod tests {
                 supported: true,
                 mic: SharedSource::new(mic),
                 tap: tap.map(SharedSource::new),
+                tap_gate: None,
                 monitor: Arc::default(),
                 states: Mutex::default(),
                 updates: Mutex::default(),
@@ -1340,6 +1458,12 @@ mod tests {
             self.states.lock().unwrap().last().cloned().expect("a state was announced")
         }
 
+        fn open_tap_gate(&self) {
+            let (open, signal) = &**self.tap_gate.as_ref().expect("the tap is gated");
+            *open.lock().unwrap() = true;
+            signal.notify_all();
+        }
+
         fn changes(&self) -> Vec<MeetingChange> {
             self.updates.lock().unwrap().iter().map(|(_, change)| *change).collect()
         }
@@ -1361,7 +1485,11 @@ mod tests {
         fn open_system_tap(&self) -> Result<OpenedTap, String> {
             self.tap_opens.fetch_add(1, Ordering::Relaxed);
             let tap = self.tap.clone().ok_or_else(|| "process taps are not supported".to_string())?;
-            Ok(OpenedTap { source: Box::new(tap), monitor: Some(Box::new(self.monitor.clone())) })
+            let source: Box<dyn AudioSource> = match &self.tap_gate {
+                Some(gate) => Box::new(GatedSource { inner: tap, gate: gate.clone() }),
+                None => Box::new(tap),
+            };
+            Ok(OpenedTap { source, monitor: Some(Box::new(self.monitor.clone())) })
         }
         fn state_changed(&self, status: &RecordingStatus) {
             self.states.lock().unwrap().push(status.clone());
@@ -1387,6 +1515,7 @@ mod tests {
             let root = TempDir::new("meeting-session");
             let config = SessionConfig {
                 command_wait: Duration::from_secs(5),
+                tap_grace: Duration::from_millis(if env.tap_gate.is_some() { 50 } else { 5_000 }),
                 tick: Duration::from_millis(10),
                 recorder: RecorderConfig {
                     poll_interval: Duration::from_millis(2),
@@ -1545,6 +1674,64 @@ mod tests {
             assert_eq!(meeting.meeting.status, MeetingStatus::Queued);
             assert!(meeting.meeting.job.is_some());
         }
+    }
+
+    fn gated_env() -> Arc<FakeEnv> {
+        let mut env = FakeEnv::working();
+        Arc::get_mut(&mut env).unwrap().tap_gate = Some(Arc::default());
+        env
+    }
+
+    fn wait_until(what: &str, check: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !check() {
+            assert!(Instant::now() < deadline, "never happened: {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_tap_stuck_behind_the_permission_prompt_joins_when_it_gets_there() {
+        let fx = Fixture::new(gated_env());
+        let started = Instant::now();
+        let status = fx.start().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "start does not wait for the prompt");
+        assert_eq!((status.phase, status.tracks.clone()), (RecordingPhase::Recording, vec![TrackKind::Mic]));
+        let meeting_id = status.meeting_id.unwrap();
+
+        // The controls work while the tap is stuck, and it joins paused.
+        let t0 = ORIGIN_NS + 10 * MS;
+        fx.env.mic.deliver(0.3, t0);
+        assert_eq!(fx.session.pause().unwrap().phase, RecordingPhase::Paused);
+        fx.env.open_tap_gate();
+        wait_until("the system track joins", || fx.session.status().tracks.len() == 2);
+        fx.env.tap.as_ref().unwrap().deliver(0.3, t0);
+        assert_eq!(fx.session.resume().unwrap().tracks, vec![TrackKind::Mic, TrackKind::System]);
+        fx.env.tap.as_ref().unwrap().deliver(0.3, t0 + 2_000 * MS);
+        fx.session.stop().unwrap();
+
+        let system = fx.chunks(&meeting_id, TrackKind::System);
+        fx.assert_chunks_match_files(&system);
+        assert_eq!(system.len(), 1, "what arrived during the pause was dropped");
+        assert!(system[0].start_ms >= 2_000);
+        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Queued);
+    }
+
+    #[test]
+    fn a_tap_that_comes_up_after_the_meeting_is_stopped_again() {
+        let fx = Fixture::new(gated_env());
+        let meeting_id = fx.start().unwrap().meeting_id.unwrap();
+        fx.env.mic.deliver(0.3, ORIGIN_NS + 10 * MS);
+        let stopping = Instant::now();
+        assert_eq!(fx.session.stop().unwrap().phase, RecordingPhase::Idle);
+        assert!(stopping.elapsed() < Duration::from_secs(2), "stop does not wait for the prompt");
+        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Queued);
+
+        fx.env.open_tap_gate();
+        let tap = fx.env.tap.as_ref().unwrap();
+        wait_until("the late tap is stopped", || tap.stops() == 1);
+        wait_until("the unused system track is removed", || fx.meeting(&meeting_id).tracks.len() == 1);
+        assert_eq!(fx.session.status().phase, RecordingPhase::Idle);
     }
 
     #[test]

@@ -59,8 +59,12 @@ pub fn init(app: &tauri::AppHandle) {
 /// What the menu bar title falls back to when dictation is idle: the
 /// recording dot plus duration during a meeting, otherwise nothing. `lib.rs`
 /// calls this so a finished dictation does not wipe the meeting's title.
+///
+/// "Nothing" is the empty title, never `None`: tray-icon's `set_title(None)`
+/// does nothing on macOS, which would leave dictation's own "●" or "…" in the
+/// menu bar for good.
 pub fn idle_tray_title() -> Option<String> {
-    session::tray_title()
+    Some(session::tray_title().unwrap_or_default())
 }
 
 /// Called right before the process exits through `_exit(0)`. Nothing may
