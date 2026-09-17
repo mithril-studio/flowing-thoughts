@@ -1657,6 +1657,7 @@ pub fn run() {
                                     transcription_mode,
                                     local_model,
                                     developer_dictionary,
+                                    keep_audio_for_eval,
                                 ) = persisted_for_task
                                     .lock()
                                     .ok()
@@ -1678,6 +1679,7 @@ pub fn run() {
                                             state.settings.transcription.provider.clone(),
                                             state.settings.transcription.local_model.clone(),
                                             state.settings.extras.developer_dictionary,
+                                            state.settings.extras.keep_audio_for_eval,
                                         )
                                     })
                                     .unwrap_or((
@@ -1688,6 +1690,7 @@ pub fn run() {
                                         "local".to_string(),
                                         "whisper-small-q5".to_string(),
                                         true,
+                                        false,
                                     ));
 
                                 let dictation_id = uuid::Uuid::new_v4().to_string();
@@ -1806,6 +1809,26 @@ pub fn run() {
                                         },
                                     );
                                     let _ = db::clear_wav_path(&conn, &dictation_id);
+                                }
+                                // Opt-in only: copy the capture into the local eval
+                                // dataset, unverified, before it is deleted.
+                                if keep_audio_for_eval {
+                                    let kept = eval::keep::keep_dictation(&eval::keep::KeptDictation {
+                                        wav_path: &wav_path_for_task,
+                                        raw_transcript: transcript_result.as_deref().ok(),
+                                        model: &primary_label,
+                                        language_mode: &language_mode,
+                                    });
+                                    let _ = match kept {
+                                        Ok(_) => storage::append_log(
+                                            "INFO",
+                                            &format!("Session {session_id} audio kept for evaluation"),
+                                        ),
+                                        Err(e) => storage::append_log(
+                                            "WARN",
+                                            &format!("Session {session_id} could not be kept for evaluation: {e}"),
+                                        ),
+                                    };
                                 }
                                 let _ = std::fs::remove_file(&wav_path_for_task);
 

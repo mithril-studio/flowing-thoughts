@@ -313,6 +313,7 @@ fn cmd_run(rest: &[String]) -> Result<(), String> {
         eprintln!("WARNING: VAD model not installed — results will not match the app with VAD on.");
     }
 
+    crate::local_transcribe::quiet_native_logging();
     let mut runs = Vec::new();
     for (index, config) in configs.iter().enumerate() {
         eprintln!("[{}/{}] {} — {} clips", index + 1, configs.len(), config.label(), clips.len());

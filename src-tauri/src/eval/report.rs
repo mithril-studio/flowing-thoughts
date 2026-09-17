@@ -77,13 +77,15 @@ pub fn table(header: &[&str], rows: &[Vec<String>]) -> String {
 }
 
 fn tally_row(name: &str, t: &Tally) -> Vec<String> {
+    // Error rates only mean something where there was speech to get wrong.
+    let rate = |value: f64| if t.speech_clips > 0 { pct(value) } else { "–".to_string() };
     vec![
         name.to_string(),
         (t.speech_clips + t.non_speech_clips).to_string(),
-        pct(t.raw.wer()),
-        pct(t.final_stage.wer()),
-        pct(t.final_stage.lenient_wer()),
-        pct(t.final_stage.cer()),
+        rate(t.raw.wer()),
+        rate(t.final_stage.wer()),
+        rate(t.final_stage.lenient_wer()),
+        rate(t.final_stage.cer()),
         hits(t.final_stage.names),
         hits(t.final_stage.numbers),
         hits(t.final_stage.terms),

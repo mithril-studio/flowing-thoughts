@@ -316,6 +316,13 @@ pub struct DecodeOptions {
     pub use_vad: bool,
 }
 
+/// Route whisper.cpp/ggml's stderr chatter into whisper-rs's logging hooks —
+/// with no log backend enabled that silences it. For command-line tooling
+/// whose own output must stay readable; the app leaves the default alone.
+pub fn quiet_native_logging() {
+    whisper_rs::install_logging_hooks();
+}
+
 /// Load (or fetch from cache) the model without decoding anything, so callers
 /// that time transcription can keep model load out of the measurement.
 pub fn preload_model(model_id: &ModelId) -> Result<(), String> {

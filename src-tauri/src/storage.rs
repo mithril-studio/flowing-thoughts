@@ -103,6 +103,11 @@ pub struct ExtrasSettings {
     /// repair casing/split-word mishears (API, GitHub, TypeScript, …).
     #[serde(default = "default_true")]
     pub developer_dictionary: bool,
+    /// Opt-in: keep each dictation's audio and raw transcript in the local
+    /// evaluation dataset (see docs/DUTCH_EVAL.md). Off unless the user turns
+    /// it on; nothing leaves the machine either way.
+    #[serde(default)]
+    pub keep_audio_for_eval: bool,
 }
 
 fn default_true() -> bool {
@@ -154,6 +159,7 @@ impl Default for ExtrasSettings {
             dangerously_skip_permissions: false,
             auto_learn_corrections: true,
             developer_dictionary: true,
+            keep_audio_for_eval: false,
         }
     }
 }

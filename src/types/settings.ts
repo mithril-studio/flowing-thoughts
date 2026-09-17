@@ -25,6 +25,7 @@ export interface AppSettings {
     dangerously_skip_permissions: boolean;
     auto_learn_corrections: boolean;
     developer_dictionary: boolean;
+    keep_audio_for_eval: boolean;
   };
   transcription: {
     provider: "api" | "local";
@@ -69,6 +70,7 @@ export const defaultAppSettings: AppSettings = {
     dangerously_skip_permissions: false,
     auto_learn_corrections: true,
     developer_dictionary: true,
+    keep_audio_for_eval: false,
   },
   transcription: {
     provider: "local",
