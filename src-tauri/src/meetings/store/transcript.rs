@@ -97,6 +97,7 @@ pub fn get_run(conn: &Connection, run_id: &str) -> Result<Option<TranscriptRun>,
 }
 
 /// The run's decode parameters, as stored by `insert_run`.
+#[cfg(test)] // only the tests read the recorded parameters back
 pub fn get_run_params(conn: &Connection, run_id: &str) -> Result<Option<String>, String> {
     query_opt(
         conn,
@@ -155,6 +156,7 @@ pub struct WindowCounts {
 
 impl WindowCounts {
     /// Nothing left to decode. A run without windows (no speech) is settled.
+    #[cfg(test)] // the worker reads the counts itself
     pub fn is_settled(&self) -> bool {
         self.done + self.failed >= self.total
     }
@@ -235,6 +237,7 @@ pub fn list_windows(conn: &Connection, run_id: &str) -> Result<Vec<WindowRow>, S
     )
 }
 
+#[cfg(test)] // the worker takes them one at a time (`next_pending_window`)
 pub fn list_pending_windows(conn: &Connection, run_id: &str) -> Result<Vec<WindowRow>, String> {
     query_all(
         conn,
@@ -478,6 +481,7 @@ fn require_segment(conn: &Connection, segment_id: &str) -> Result<Segment, Strin
 
 /// Segments of the run the pipeline did not flag, hidden by the user or not.
 /// `run_id: None` means the active run.
+#[cfg(test)] // only the tests count
 pub fn count_segments(
     conn: &Connection,
     meeting_id: &str,
@@ -496,22 +500,6 @@ pub fn count_segments(
         |row| u32_col(row, 0),
     )?;
     Ok(count.unwrap_or(0))
-}
-
-/// The one mutable column of a segment: why the pipeline hides it by default.
-/// `None` lifts the flag.
-pub fn set_suppressed_reason(
-    conn: &Connection,
-    segment_id: &str,
-    reason: Option<SuppressedReason>,
-) -> Result<(), String> {
-    let changed = execute(
-        conn,
-        "set suppressed reason",
-        "UPDATE transcript_segments SET suppressed_reason = ?2 WHERE id = ?1",
-        params![segment_id, reason.map(SuppressedReason::as_str)],
-    )?;
-    expect_found(changed, "Segment", segment_id)
 }
 
 /// Flags many segments at once (echo detection's result), in one transaction.
@@ -606,13 +594,3 @@ pub fn set_segment_hidden(
     })
 }
 
-/// Drops the whole edit layer of a segment: decoded text, pipeline's flag.
-pub fn clear_segment_edit(conn: &Connection, segment_id: &str) -> Result<Segment, String> {
-    execute(
-        conn,
-        "clear segment edit",
-        "DELETE FROM segment_edits WHERE segment_id = ?1",
-        params![segment_id],
-    )?;
-    require_segment(conn, segment_id)
-}

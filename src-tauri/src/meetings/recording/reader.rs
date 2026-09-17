@@ -14,8 +14,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::recovery::frames_on_disk;
-use super::{sidecar, track_dir, BYTES_PER_FRAME};
-use crate::meetings::types::{ChunkRecord, ChunkStatus, TrackAudio, TrackKind, TARGET_SAMPLE_RATE};
+use super::BYTES_PER_FRAME;
+use crate::meetings::types::{ChunkRecord, ChunkStatus, TrackAudio, TARGET_SAMPLE_RATE};
 
 const FRAMES_PER_MS: u64 = TARGET_SAMPLE_RATE as u64 / 1_000;
 
@@ -31,6 +31,8 @@ pub struct AudioSpan {
     pub samples: Vec<f32>,
 }
 
+// Only the tests look at a span this way.
+#[cfg(test)]
 impl AudioSpan {
     pub fn start_ms(&self) -> u64 {
         self.start_frame / FRAMES_PER_MS
@@ -57,7 +59,15 @@ impl ChunkTrackAudio {
 
     /// The same from the track's `track.json`, without the database. Run
     /// `recovery::recover_meeting_dir` first if the track may have open chunks.
-    pub fn from_sidecar(root: &Path, meeting_id: &str, kind: TrackKind) -> Result<Self, String> {
+    /// Nothing in the app reads a track that way yet: the tests use it to
+    /// prove that the sidecar alone is enough to get the audio back.
+    #[cfg(test)]
+    pub fn from_sidecar(
+        root: &Path,
+        meeting_id: &str,
+        kind: crate::meetings::types::TrackKind,
+    ) -> Result<Self, String> {
+        use super::{sidecar, track_dir};
         let dir = track_dir(root, meeting_id, kind)?;
         let sidecar = sidecar::read(&dir)?
             .ok_or_else(|| format!("No {} in {}", sidecar::SIDECAR_FILE, dir.display()))?;
@@ -166,8 +176,10 @@ impl TrackAudio for ChunkTrackAudio {
 mod tests {
     use super::super::chunk_writer::test_support::FakeLedger;
     use super::super::test_support::TempDir;
-    use super::super::{ChunkWriter, ChunkWriterConfig};
+    use super::super::chunk_writer::ChunkWriter;
+    use super::super::ChunkWriterConfig;
     use super::*;
+    use crate::meetings::types::TrackKind;
     use crate::meetings::types::SampleSink;
 
     const ORIGIN: u64 = 9_000_000_000;

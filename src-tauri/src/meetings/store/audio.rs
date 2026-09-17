@@ -78,6 +78,18 @@ pub fn add_track_overflow(conn: &Connection, track_id: &str, frames: u64) -> Res
     expect_found(changed, "Track", track_id)
 }
 
+/// Removes a track that never recorded: the system track of a meeting that
+/// turned out microphone-only. Its "Them" speaker goes with it (cascade).
+pub fn delete_track(conn: &Connection, track_id: &str) -> Result<(), String> {
+    let changed = execute(
+        conn,
+        "delete track",
+        "DELETE FROM meeting_tracks WHERE id = ?1",
+        params![track_id],
+    )?;
+    expect_found(changed, "Track", track_id)
+}
+
 /// Mic first, then system. `duration_ms` is the end of the track's last chunk
 /// on the meeting timeline.
 pub fn list_tracks(conn: &Connection, meeting_id: &str) -> Result<Vec<MeetingTrack>, String> {
@@ -196,6 +208,21 @@ pub fn mark_chunks_deleted(conn: &Connection, meeting_id: &str) -> Result<usize,
             AND track_id IN (SELECT id FROM meeting_tracks WHERE meeting_id = ?1)",
         params![meeting_id, now()],
     )
+}
+
+/// Whether any audio of the meeting is on record: a chunk with frames in it
+/// that was not deleted. A meeting stopped before its first buffer has none.
+pub fn meeting_has_frames(conn: &Connection, meeting_id: &str) -> Result<bool, String> {
+    query_opt(
+        conn,
+        "look for recorded audio",
+        "SELECT EXISTS (SELECT 1 FROM meeting_audio_chunks c
+                          JOIN meeting_tracks t ON t.id = c.track_id
+                         WHERE t.meeting_id = ?1 AND c.status != 'deleted' AND c.n_frames > 0)",
+        params![meeting_id],
+        |row| row.get(0),
+    )
+    .map(|found| found.unwrap_or(false))
 }
 
 /// A track's chunks in recording order.

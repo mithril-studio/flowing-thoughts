@@ -236,22 +236,6 @@ pub fn set_echo_risk(conn: &Connection, meeting_id: &str, echo_risk: bool) -> Re
     expect_found(changed, "Meeting", meeting_id)
 }
 
-/// Mach host time of timeline position 0, for a session that only learns it
-/// with the first audio callback.
-pub fn set_origin_host_ns(
-    conn: &Connection,
-    meeting_id: &str,
-    origin_host_ns: u64,
-) -> Result<(), String> {
-    let changed = execute(
-        conn,
-        "set meeting origin",
-        "UPDATE meetings SET origin_host_ns = ?2, updated_at = ?3 WHERE id = ?1",
-        params![meeting_id, origin_host_ns as i64, now()],
-    )?;
-    expect_found(changed, "Meeting", meeting_id)
-}
-
 /// The audio is gone, the transcript stays: every chunk becomes `deleted`
 /// (the rows keep the timeline) and `audio_deleted_at` is set, in one
 /// transaction. Deleting the files is the caller's job.

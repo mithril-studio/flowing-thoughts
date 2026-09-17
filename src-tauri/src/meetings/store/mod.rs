@@ -29,10 +29,6 @@
 //! - Multi-statement writes run inside `transaction`, which nests, so a caller
 //!   can wrap several store calls into one unit of its own.
 
-// Scaffold: most of this is first used by WP6, WP7 and WP10, and a re-export
-// nobody uses yet counts as an unused import. Remove when they land.
-#![allow(dead_code, unused_imports)]
-
 mod audio;
 mod jobs;
 mod meetings;

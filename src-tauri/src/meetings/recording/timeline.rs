@@ -102,6 +102,7 @@ pub struct Timeline {
 }
 
 impl Timeline {
+    #[cfg(test)]
     pub fn new(origin_host_ns: u64) -> Self {
         Self::with_gap_threshold_ms(origin_host_ns, GAP_THRESHOLD_MS)
     }
@@ -114,10 +115,6 @@ impl Timeline {
             last_end_host_ns: None,
             loss_pending: false,
         }
-    }
-
-    pub fn origin_host_ns(&self) -> u64 {
-        self.origin_host_ns
     }
 
     pub fn to_timeline_ms(&self, host_ns: u64) -> u64 {

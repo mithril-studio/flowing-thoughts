@@ -23,9 +23,6 @@
 //! Whisper only: Parakeet has no timestamps, and `WhisperDecoder::load`
 //! refuses it.
 
-// Scaffold: remove once WP6 calls into this file.
-#![allow(dead_code)]
-
 use crate::local_transcribe::{
     self, DecodeParams, TemperatureFallback, TranscriptSegment, VadTuning,
 };

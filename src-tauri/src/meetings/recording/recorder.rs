@@ -117,6 +117,7 @@ pub struct RecorderHandler {
 
 impl RecorderHandler {
     /// Interleaved samples the ring can hold: the bound on buffered audio.
+    #[cfg(test)]
     pub fn ring_capacity(&self) -> usize {
         self.samples.buffer().capacity()
     }

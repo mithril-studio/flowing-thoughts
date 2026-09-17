@@ -12,9 +12,6 @@
 //! Changing anything here changes a contract between packages: keep
 //! additions backwards compatible and update `src/types/meetings.ts` with it.
 
-// Scaffold: most of this is first used by WP2–WP10. Remove when they land.
-#![allow(dead_code)]
-
 /// Sample rate of everything downstream of the recorder: chunk files,
 /// `SampleSink`, `TrackAudio` and the decoder.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
@@ -31,6 +28,8 @@ macro_rules! string_enum {
         }
 
         impl $name {
+            /// Every variant, for the tests that prove the strings round-trip.
+            #[cfg(test)]
             pub const ALL: &'static [$name] = &[$($name::$variant),+];
 
             pub fn as_str(self) -> &'static str {
@@ -574,6 +573,18 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", status.as_str()));
             assert_eq!(serde_json::from_str::<MeetingStatus>(&json).unwrap(), *status);
         }
+        macro_rules! every_variant_parses_back {
+            ($($name:ident),+) => {$(
+                for variant in $name::ALL {
+                    assert_eq!($name::parse(variant.as_str()), Some(*variant));
+                }
+            )+};
+        }
+        every_variant_parses_back!(
+            TrackKind, MeetingStatus, ChunkStatus, RunStatus, WindowStatus, JobKind, JobStatus,
+            SuppressedReason, SpeakerSource, ParticipantSource, SummaryStatus, SummaryItemKind,
+            MeetingLanguage, RecordingPhase, PermissionState, MeetingChange
+        );
         assert_eq!(SuppressedReason::PromptEcho.as_str(), "prompt_echo");
         assert_eq!(SuppressedReason::parse("outside_vad"), Some(SuppressedReason::OutsideVad));
         assert_eq!(TrackKind::parse("speaker"), None);

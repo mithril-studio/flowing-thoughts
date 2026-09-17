@@ -45,10 +45,6 @@
 //! | `permission.rs` | preflight, `SilenceDetector`, the System Settings link |
 //! | `hal.rs`, `clock.rs` | Core Audio property helpers, the mach host clock |
 
-// Nothing calls `open_mic` / `open_system_tap` until the session (WP7) lands.
-// Remove once it does.
-#![allow(dead_code)]
-
 pub mod clock;
 pub mod device_watch;
 #[cfg(target_os = "macos")]
@@ -64,15 +60,9 @@ use std::time::Duration;
 
 use super::types::{AudioFrames, AudioSourceHandler, Discontinuity};
 
-#[allow(unused_imports)]
 pub use clock::host_now_ns;
-#[allow(unused_imports)]
 pub use device_watch::output_is_builtin_speakers;
-#[allow(unused_imports)]
 pub use mic::MicSource;
-#[allow(unused_imports)]
-pub use permission::SystemAudioNotice;
-#[allow(unused_imports)]
 pub use system_tap::{SystemAudioMonitor, SystemTapSource};
 
 /// The runtime gate for the whole feature: macOS 14.4+, the
@@ -98,6 +88,15 @@ pub fn open_mic() -> MicSource {
 /// then mic-only.
 pub fn open_system_tap() -> Result<SystemTapSource, String> {
     SystemTapSource::new()
+}
+
+/// Destroys aggregate devices a crashed run of the app left behind. For the
+/// session (WP7) at launch. Talks to the HAL, which may block: call it from a
+/// thread that may.
+pub fn cleanup_leaked_devices() {
+    if is_supported() {
+        system_tap::destroy_leaked_aggregates();
+    }
 }
 
 /// `"14.4.1"` to `(14, 4, 1)`. Missing parts are 0.
@@ -490,7 +489,8 @@ mod tests {
     #[ignore = "needs a microphone, audio output, both permissions, and plays a sound"]
     fn both_sources_record_through_the_recorder_on_one_timeline() {
         let _hardware = super::test_support::hardware_lock();
-        use crate::meetings::recording::{start_track, RecorderConfig};
+        use crate::meetings::recording::recorder::start_track;
+        use crate::meetings::recording::RecorderConfig;
         use crate::meetings::types::{SampleSink, TARGET_SAMPLE_RATE};
         use std::sync::Mutex;
 

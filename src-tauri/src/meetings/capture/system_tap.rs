@@ -90,27 +90,31 @@ impl SystemAudioMonitor {
         self.0.echo_risk.load(Ordering::Relaxed)
     }
 
-    /// Audio callbacks so far.
+    /// Audio callbacks so far. The three counters below are what the hardware
+    /// tests assert on; the session only needs the notice and the echo risk.
+    #[cfg(test)]
     pub fn callbacks(&self) -> u64 {
         self.0.callbacks.load(Ordering::Relaxed)
     }
 
     /// Whether anything but digital silence has arrived yet.
+    #[cfg(test)]
     pub fn heard_audio(&self) -> bool {
         self.0.nonzero_callbacks.load(Ordering::Relaxed) > 0
     }
 
     /// Rebuilds after the initial build (device changes, retries).
+    #[cfg(test)]
     pub fn rebuilds(&self) -> u64 {
         self.0.rebuilds.load(Ordering::Relaxed)
     }
 }
 
 #[cfg(target_os = "macos")]
-pub use imp::{check_support, SystemTapSource};
+pub use imp::{check_support, destroy_leaked_aggregates, SystemTapSource};
 
 #[cfg(not(target_os = "macos"))]
-pub use stub::{check_support, SystemTapSource};
+pub use stub::{check_support, destroy_leaked_aggregates, SystemTapSource};
 
 #[cfg(not(target_os = "macos"))]
 mod stub {
@@ -123,6 +127,8 @@ mod stub {
     pub fn check_support() -> Result<(), String> {
         Err("system audio capture needs macOS".to_string())
     }
+
+    pub fn destroy_leaked_aggregates() {}
 
     pub struct SystemTapSource(Arc<Shared>);
 
@@ -599,7 +605,7 @@ mod imp {
     /// Destroys aggregates an earlier start of this process, or a process
     /// that is gone, left behind. (coreaudiod reclaims a dead process's
     /// private aggregates by itself; this covers what it does not.)
-    fn destroy_leaked_aggregates() {
+    pub fn destroy_leaked_aggregates() {
         let own_pid = std::process::id();
         // SAFETY: signal 0 only checks that the process exists.
         let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };

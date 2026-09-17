@@ -5,6 +5,12 @@
 //! that person (or just a name) in one meeting. An assignment links a speaker
 //! to a participant; only a confirmed one changes the labels that are shown.
 
+// v1 only reads participants (the export). Writing them, people and speaker
+// assignments are for per-person labels, which the plan schedules right after
+// v1 and the v3 schema and its queries (`ASSIGNMENT_JOINS`) already carry.
+// Kept, and covered by `store/tests.rs`, rather than rebuilt then.
+#![allow(dead_code)]
+
 use rusqlite::{params, Connection, Row};
 
 use super::super::types::ParticipantSource;

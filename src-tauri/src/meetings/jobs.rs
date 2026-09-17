@@ -32,7 +32,6 @@ use crate::model_manager::{self, Engine, ModelId};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IfBusy {
     /// The session asking twice (stop, then launch recovery) gets that job.
-    #[allow(dead_code)] // scaffold: first used through `enqueue_transcription` (WP7)
     ReturnExisting,
     /// A second "Re-transcribe as…" is refused.
     Refuse,
@@ -51,7 +50,6 @@ enum IfBusy {
 ///
 /// Wakes the worker. Inside a caller's transaction the worker may look before
 /// the commit: call `worker::wake()` again afterwards.
-#[allow(dead_code)] // scaffold: first used by session.rs (WP7)
 pub fn enqueue_transcription(
     conn: &Connection,
     meeting_id: &str,
