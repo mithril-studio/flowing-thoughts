@@ -1,0 +1,334 @@
+# FlowingThoughts — Dutch evaluation prompt script
+#
+# Read each line aloud exactly as written; the line is the reference transcript.
+# Format: <id> | <text> [| names: A; B] [| numbers: 1; 2] [| terms: X; Y]
+# Numbers in the `numbers` field are always digits; `/` separates accepted alternates.
+# Never renumber or reuse an id: the dev/test split is derived from it. Append new prompts at the end of a category.
+
+## category: short_reply
+short-001 | Ja, dat klopt.
+short-002 | Nee, dank je.
+short-003 | Prima, doen we.
+short-004 | Geen idee.
+short-005 | Tot straks!
+short-006 | Morgen om drie uur. | numbers: 3
+short-007 | Goedemorgen!
+short-008 | Dank je wel!
+short-009 | Helemaal mee eens.
+short-010 | Nee, nog niet.
+short-011 | Komt goed.
+short-012 | Hoe laat precies?
+short-013 | Ik bel je zo.
+short-014 | Klinkt goed.
+short-015 | Waar ben je?
+short-016 | Is goed, tot morgen.
+short-017 | Sorry, te laat gezien.
+short-018 | Geen probleem.
+short-019 | Graag gedaan.
+short-020 | Misschien volgende week.
+short-021 | Oké, top.
+short-022 | Doe maar.
+short-023 | Ben onderweg.
+short-024 | Rond half acht.
+short-025 | Twee stuks, alsjeblieft. | numbers: 2
+short-026 | Succes vandaag!
+short-027 | Weet ik niet zeker.
+short-028 | Wat bedoel je?
+short-029 | Liever niet.
+short-030 | Zeker weten.
+short-031 | Fijn weekend!
+short-032 | Welterusten.
+short-033 | Eet smakelijk!
+short-034 | Gefeliciteerd!
+short-035 | Beterschap.
+short-036 | Nee, dat hoeft niet.
+short-037 | Lukt het een beetje?
+short-038 | Over tien minuten. | numbers: 10
+short-039 | Kan dat ook donderdag?
+short-040 | Ja hoor.
+
+## category: everyday
+day-001 | Kun je morgen de boodschappen doen, want ik ben pas laat thuis?
+day-002 | Ik heb eigenlijk geen zin om vanavond nog te koken.
+day-003 | Zou u mij de offerte uiterlijk vrijdag kunnen toesturen?
+day-004 | Het is natuurlijk jammer dat de vergadering op het laatste moment is afgezegd.
+day-005 | Vergeet je niet om 's ochtends de kliko aan de straat te zetten?
+day-006 | We gaan sowieso met de trein, want parkeren is daar onbetaalbaar.
+day-007 | Heb jij m'n sleutels ergens gezien? Ik kan ze nergens vinden.
+day-008 | Ik weet niet of 't überhaupt zin heeft om daar nog over te beginnen.
+day-009 | Zo'n kans krijg je waarschijnlijk niet snel opnieuw.
+day-010 | Bedankt voor je uitgebreide feedback, ik ga er vanmiddag mee aan de slag.
+day-011 | Wil je nog even een briefje bij de buren in de bus doen?
+day-012 | De kinderen moeten vanmiddag naar zwemles, dus ik haal ze vroeg op van school.
+day-013 | Volgens mij hebben we nog genoeg melk, maar het brood is bijna op.
+day-014 | Ik vond het een gezellige avond, dat moeten we vaker doen.
+day-015 | Kunt u mij vertellen waar ik het formulier kan inleveren?
+day-016 | Het regent al de hele dag, dus ik pak toch maar de auto.
+day-017 | Ik heb het verslag gelezen en ik vind het duidelijk en goed onderbouwd.
+day-018 | Mogelijk loopt de levering een paar dagen vertraging op, onze excuses voor het ongemak.
+day-019 | Neem jij nog een flesje wijn mee voor bij het eten?
+day-020 | Eerlijk gezegd twijfel ik of dit de juiste keuze is.
+day-021 | Ik lig in bed met griep, dus ik meld me vandaag ziek.
+day-022 | Hartelijk dank voor uw snelle reactie, ik kom hier zo spoedig mogelijk op terug.
+day-023 | Zullen we dit weekend naar het strand gaan als het mooi weer blijft?
+day-024 | De huisarts had gelukkig vanmiddag nog een plekje vrij.
+day-025 | Ik moet nog een cadeautje kopen voor de verjaardag van mijn schoonmoeder.
+day-026 | Het lijkt me verstandig om eerst de begroting rond te krijgen voordat we iets beloven.
+day-027 | Wat vervelend dat je vlucht geannuleerd is, kun je nog omboeken?
+day-028 | Mijn fiets heeft een lekke band, dus ik kom lopend.
+day-029 | Ik stuur je vanavond de foto's van de vakantie door.
+day-030 | Kunnen we de afspraak een uurtje verzetten, want ik sta in de file?
+day-031 | De loodgieter komt tussen de middag om de lekkage in de badkamer te bekijken.
+day-032 | Ik ben benieuwd wat jullie van het voorstel vinden.
+day-033 | Let op dat je de oven voorverwarmt voordat je de taart erin zet.
+day-034 | Ik heb vannacht heerlijk geslapen en voel me een stuk fitter.
+day-035 | Graag ontvang ik een schriftelijke bevestiging van mijn inschrijving.
+day-036 | Het kleine meisje van de buren heeft gisteren haar zwemdiploma gehaald.
+day-037 | We hebben achteraf gezien veel te weinig tijd ingepland voor de verhuizing.
+day-038 | Mocht u nog vragen hebben, dan hoor ik dat uiteraard graag.
+day-039 | Kun je onderweg nog uien, knoflook en een bakje champignons meenemen?
+day-040 | Ik begrijp je punt, maar ik ben het er niet helemaal mee eens.
+day-041 | De trein naar het vliegveld rijdt vandaag niet vanwege werkzaamheden aan het spoor.
+day-042 | Misschien kunnen we binnenkort weer eens samen lunchen.
+day-043 | Het ligt waarschijnlijk aan mij, maar ik snap de handleiding echt niet.
+day-044 | Opa wordt volgende maand negentig en we organiseren een groot feest. | numbers: 90
+day-045 | Ik heb het pakketje bij de buren afgegeven omdat je niet thuis was.
+day-046 | Wilt u uw gegevens controleren en het document ondertekend terugsturen?
+day-047 | Goed gedaan, je presentatie was helder en je hield het publiek moeiteloos vast.
+day-048 | De verwarming doet het niet en het is ijskoud in huis.
+day-049 | Ik twijfel nog tussen de blauwe en de grijze bank.
+day-050 | Zeg het gerust als het je te veel wordt, dan nemen wij het over.
+day-051 | Vanwege de drukte verwachten we dat de wachttijd vandaag iets langer is dan gebruikelijk.
+day-052 | Ik heb de hond al uitgelaten, dus je hoeft je niet te haasten.
+day-053 | Kun je me eraan herinneren dat ik de tandarts nog moet bellen?
+day-054 | Het restaurant op de hoek is tegenwoordig elke avond volgeboekt.
+day-055 | Achteraf was dat misschien niet het slimste idee van mij.
+day-056 | Ik zou het op prijs stellen als u mij hierover telefonisch wilt benaderen.
+day-057 | We moeten nog beslissen of we met kerst naar mijn ouders of naar de jouwe gaan.
+day-058 | Hij heeft beloofd dat hij het schuurtje voor de winter opnieuw schildert.
+day-059 | Onze dochter begint na de zomer op de middelbare school en ze vindt het best spannend.
+day-060 | Als je 's avonds laat nog koffie drinkt, lig je natuurlijk de halve nacht wakker.
+
+## category: names_places
+name-001 | Ik heb net met Sanne van der Meer gebeld over de offerte. | names: Sanne van der Meer
+name-002 | Kun je Pieter de Vries uitnodigen voor het overleg in Utrecht? | names: Pieter de Vries; Utrecht
+name-003 | Mevrouw Van den Berg van de Rabobank belt je morgen terug over de hypotheek. | names: Van den Berg; Rabobank
+name-004 | We rijden zaterdag via Gorinchem naar 's-Hertogenbosch. | names: Gorinchem; 's-Hertogenbosch
+name-005 | Joris ten Have woont sinds kort in Leeuwarden. | names: Joris ten Have; Leeuwarden
+name-006 | De bestelling van Bol is afgeleverd bij het afhaalpunt van Albert Heijn. | names: Bol; Albert Heijn
+name-007 | Volgens de NS rijden er dit weekend geen treinen tussen Zwolle en Amersfoort. | names: NS; Zwolle; Amersfoort
+name-008 | Fatima El Amrani geeft donderdag een presentatie in Den Haag. | names: Fatima El Amrani; Den Haag
+name-009 | Ik heb een brief van de Belastingdienst gekregen over de voorlopige aanslag. | names: Belastingdienst
+name-010 | Thijs Hoekstra en Marloes Bakker komen zondag bij ons eten. | names: Thijs Hoekstra; Marloes Bakker
+name-011 | Rijkswaterstaat sluit de brug bij Zaltbommel een heel weekend af. | names: Rijkswaterstaat; Zaltbommel
+name-012 | We hebben een hotel geboekt in Gent en gaan daarna een dag naar Antwerpen. | names: Gent; Antwerpen
+name-013 | De storing bij KPN is volgens de helpdesk aan het eind van de middag verholpen. | names: KPN
+name-014 | Vraag anders even aan Jeroen Kuijpers of hij het contract wil nalopen. | names: Jeroen Kuijpers
+name-015 | Op tweede paasdag wandelen we met Lotte en Daan over de boulevard van Scheveningen. | names: Lotte; Daan; Scheveningen
+name-016 | Anouk van Dijk begint volgende maand als projectleider bij de gemeente Eindhoven. | names: Anouk van Dijk; Eindhoven
+name-017 | Ik heb Willem-Jan Schouten aan de lijn gehad over de verbouwing in Haarlem. | names: Willem-Jan Schouten; Haarlem
+name-018 | De klant uit Groningen, meneer Dijkstra, wil de demo liever bij ons op kantoor in Amsterdam. | names: Groningen; Dijkstra; Amsterdam
+name-019 | Stuur de factuur maar naar Ingrid Janssens in Leuven. | names: Ingrid Janssens; Leuven
+name-020 | Mijn zus is voor haar nieuwe baan van Nijmegen naar Maastricht verhuisd. | names: Nijmegen; Maastricht
+name-021 | Bas van Leeuwen heeft zijn auto bij de garage in Apeldoorn laten staan. | names: Bas van Leeuwen; Apeldoorn
+name-022 | Het ziekenhuis in Enschede heeft de afspraak met dokter Yilmaz verzet. | names: Enschede; Yilmaz
+name-023 | Kun je bij Kruidvat tandpasta halen en bij Jumbo wat fruit? | names: Kruidvat; Jumbo
+name-024 | Charlotte Dubois uit Brussel sluit aan via Teams. | names: Charlotte Dubois; Brussel; Teams
+name-025 | We hebben de kaartjes voor het concert in de Ziggo Dome via Ticketmaster gekocht. | names: Ziggo Dome; Ticketmaster
+name-026 | Ruben Oosterhuis fietst elke dag van Delft naar Rotterdam. | names: Ruben Oosterhuis; Delft; Rotterdam
+name-027 | De nieuwe collega, Priya Ramdin, komt over van ASML in Veldhoven. | names: Priya Ramdin; ASML; Veldhoven
+name-028 | Ik heb met Schiphol gebeld, want de koffer van Maarten is nog steeds zoek. | names: Schiphol; Maarten
+name-029 | Emma Verbruggen en Koen Smits trouwen in september op Texel. | names: Emma Verbruggen; Koen Smits; Texel
+name-030 | De gemeente Breda heeft de vergunning voor het terras van café De Gouden Leeuw verleend. | names: Breda; De Gouden Leeuw
+name-031 | Michael O'Connor van het kantoor in Dublin landt vanavond op Eindhoven Airport. | names: Michael O'Connor; Dublin; Eindhoven Airport
+name-032 | Je kunt met DigiD inloggen bij het UWV om je gegevens te bekijken. | names: DigiD; UWV
+name-033 | Hanneke Visser heeft jarenlang bij Philips in Drachten gewerkt. | names: Hanneke Visser; Philips; Drachten
+name-034 | De veerboot van Harlingen naar Vlieland vaart vandaag niet vanwege de storm. | names: Harlingen; Vlieland
+name-035 | Sven Lindqvist van Spotify komt volgende week over uit Stockholm. | names: Sven Lindqvist; Spotify; Stockholm
+name-036 | Ik heb Yara gevraagd of zij de sleutels bij Gijs de Groot in Alkmaar wil ophalen. | names: Yara; Gijs de Groot; Alkmaar
+name-037 | PostNL heeft het pakket per ongeluk in Middelburg bezorgd in plaats van in Vlissingen. | names: PostNL; Middelburg; Vlissingen
+name-038 | Zullen we afspreken bij station Arnhem Centraal en dan doorrijden naar de Veluwe? | names: Arnhem Centraal; Veluwe
+name-039 | Professor Annelies Hoogendoorn van de Universiteit Leiden opent het congres. | names: Annelies Hoogendoorn; Universiteit Leiden
+name-040 | Onze vlucht met Transavia naar Lissabon heeft flinke vertraging. | names: Transavia; Lissabon
+
+## category: compounds
+comp-001 | Ik moet voor het einde van het jaar mijn zorgverzekering vergelijken. | terms: zorgverzekering
+comp-002 | Als zelfstandige heb je eigenlijk een arbeidsongeschiktheidsverzekering nodig. | terms: arbeidsongeschiktheidsverzekering
+comp-003 | De schade aan de auto van de buren valt onder onze aansprakelijkheidsverzekering. | terms: aansprakelijkheidsverzekering
+comp-004 | Heb jij je belastingaangifte al ingediend, of heb je uitstel aangevraagd? | terms: belastingaangifte
+comp-005 | De grote vergaderruimte naast de receptie is de hele middag bezet. | terms: vergaderruimte
+comp-006 | We moeten de projectplanning aanpassen omdat de oplevering is uitgesteld. | terms: projectplanning
+comp-007 | De resultaten van het klanttevredenheidsonderzoek vielen dit jaar gelukkig mee. | terms: klanttevredenheidsonderzoek
+comp-008 | Na de ziekenhuisopname van mijn vader hebben we thuiszorg geregeld. | terms: ziekenhuisopname; thuiszorg
+comp-009 | De gemeente wil de verkeersveiligheid rond de basisschool verbeteren met een zebrapad en verkeersdrempels. | terms: verkeersveiligheid; basisschool; zebrapad; verkeersdrempels
+comp-010 | Zonder duidelijke langetermijnvisie blijft het bij losse kortetermijnoplossingen. | terms: langetermijnvisie; kortetermijnoplossingen
+comp-011 | We zoeken een ervaren softwareontwikkelaar die verstand heeft van spraakherkenning. | terms: softwareontwikkelaar; spraakherkenning
+comp-012 | De gebruikersinterface is overzichtelijk, maar de inlogprocedure kan eenvoudiger. | terms: gebruikersinterface; inlogprocedure
+comp-013 | Vanaf volgende maand is tweestapsverificatie verplicht voor alle medewerkers. | terms: tweestapsverificatie
+comp-014 | De huurprijsverhoging is dit jaar gekoppeld aan de inflatie. | terms: huurprijsverhoging
+comp-015 | Ik heb de opzegtermijn van mijn telefoonabonnement niet goed gelezen. | terms: opzegtermijn; telefoonabonnement
+comp-016 | De kinderopvangtoeslag wordt volgend jaar opnieuw berekend. | terms: kinderopvangtoeslag
+comp-017 | Tijdens het functioneringsgesprek hebben we mijn ontwikkelingsmogelijkheden besproken. | terms: functioneringsgesprek; ontwikkelingsmogelijkheden
+comp-018 | De verzekeringsmaatschappij wil eerst een schaderapport van de expert zien. | terms: verzekeringsmaatschappij; schaderapport
+comp-019 | Door het personeelstekort in de gezondheidszorg lopen de wachtlijsten op. | terms: personeelstekort; gezondheidszorg; wachtlijsten
+comp-020 | We hebben een hypotheekadviseur ingeschakeld voor de aankoop van onze koopwoning. | terms: hypotheekadviseur; koopwoning
+comp-021 | De vuilnisophaaldienst komt deze week een dag later vanwege de feestdag. | terms: vuilnisophaaldienst; feestdag
+comp-022 | Het bestemmingsplan staat geen hoogbouw toe in het stationsgebied. | terms: bestemmingsplan; hoogbouw; stationsgebied
+comp-023 | De energieleverancier heeft het voorschotbedrag zonder overleg verhoogd. | terms: energieleverancier; voorschotbedrag
+comp-024 | Onze afdeling krijgt een nieuwe kwaliteitsmanager en een extra beleidsmedewerker. | terms: kwaliteitsmanager; beleidsmedewerker
+comp-025 | De rijbewijskeuring van mijn oma is gelukkig probleemloos verlopen. | terms: rijbewijskeuring
+comp-026 | Volgens de arbeidsovereenkomst heb ik recht op vijfentwintig vakantiedagen. | terms: arbeidsovereenkomst; vakantiedagen | numbers: 25
+comp-027 | De geheimhoudingsverklaring moet voor het kennismakingsgesprek getekend zijn. | terms: geheimhoudingsverklaring; kennismakingsgesprek
+comp-028 | We hebben zonnepanelen laten leggen en de warmtepomp wordt in het voorjaar geïnstalleerd. | terms: zonnepanelen; warmtepomp
+comp-029 | De toezichthouder doet onderzoek naar het datalek en de gebrekkige wachtwoordbeveiliging bij de webwinkel. | terms: toezichthouder; datalek; wachtwoordbeveiliging; webwinkel
+comp-030 | Het meerjarenonderhoudsplan van de vereniging van eigenaren wordt tijdens de ledenvergadering besproken. | terms: meerjarenonderhoudsplan; ledenvergadering
+
+## category: numbers
+num-001 | De afspraak is op 12 maart 2026 om drie uur. | numbers: 12; 2026; 3
+num-002 | Ik ben om kwart voor negen op kantoor en heb tot 11 uur vergaderingen. | numbers: 11
+num-003 | De factuur bedraagt 1.250 euro exclusief btw. | numbers: 1250
+num-004 | We hebben dit kwartaal 18 procent meer omzet gedraaid dan vorig jaar. | numbers: 18
+num-005 | Mijn telefoonnummer is 06 12 34 56 78. | numbers: 0612345678/06 12 34 56 78
+num-006 | Ze wonen op de Dorpsstraat 47, postcode 3512 AB in Utrecht. | numbers: 47; 3512
+num-007 | Het kaartje kostte 12,50 euro. | numbers: 12,50/12 euro 50
+num-008 | Dinsdag 3 november ben ik de hele dag vrij. | numbers: 3
+num-009 | Er staan vier stoelen in de gang en nog 12 in de kelder. | numbers: 4; 12
+num-010 | De trein vertrekt om tien over twee van spoor 7. | numbers: 7
+num-011 | In 1998 zijn mijn ouders naar dit huis verhuisd. | numbers: 1998
+num-012 | Het pakket weegt 2,5 kilo en is 40 centimeter breed. | numbers: 2,5; 40
+num-013 | We zitten op de derde verdieping, in kamer 314. | numbers: 3e/derde; 314
+num-014 | Het salaris wordt op de 25e van de maand gestort. | numbers: 25e/25ste/vijfentwintigste
+num-015 | De huur gaat per 1 juli omhoog met 4,1 procent. | numbers: 1; 4,1
+num-016 | Ik heb 300 gram gehakt, zes eieren en 2 liter melk nodig. | numbers: 300; 6; 2
+num-017 | De vergadering duurt van half vier tot vijf uur. | numbers: 5
+num-018 | Er hebben zich 1.480 mensen aangemeld voor de nieuwsbrief. | numbers: 1480
+num-019 | De korting van 15 procent geldt tot en met 31 december. | numbers: 15; 31
+num-020 | Ons budget voor de verbouwing is 45.000 euro. | numbers: 45000
+num-021 | Ik ben geboren op 9 februari 1991. | numbers: 9; 1991
+num-022 | De maximumsnelheid is hier overdag 100 kilometer per uur. | numbers: 100
+num-023 | Bel me maar na zeven uur 's avonds. | numbers: 7
+num-024 | De bezorger komt tussen 2 en 4 uur 's middags. | numbers: 2; 4
+num-025 | We hebben 23 sollicitaties binnengekregen, waarvan we er vijf uitnodigen. | numbers: 23; 5
+num-026 | De parkeerkosten waren 7,80 euro voor twee uur. | numbers: 7,80/7 euro 80; 2
+num-027 | Het appartement is 85 vierkante meter en ligt op de vierde verdieping. | numbers: 85; 4e/vierde
+num-028 | De reservering staat op donderdag 18 juni om kwart over zeven voor 6 personen. | numbers: 18; 6
+num-029 | Het abonnement kost 9,99 euro per maand. | numbers: 9,99/9 euro 99
+num-030 | De temperatuur loopt morgen op tot 31 graden. | numbers: 31
+num-031 | Mijn vlucht vertrekt op 22 augustus om vijf voor half elf 's ochtends. | numbers: 22
+num-032 | Het bedrijf is opgericht in 2014 en heeft nu 60 medewerkers. | numbers: 2014; 60
+num-033 | De verzendkosten zijn 4,95 euro bij bestellingen onder de 20 euro. | numbers: 4,95/4 euro 95; 20
+num-034 | We moeten nog ongeveer 350 kilometer rijden. | numbers: 350
+num-035 | De nieuwe versie is door ruim 2.000 gebruikers gedownload. | numbers: 2000
+num-036 | Het wachtwoord moet minstens twaalf tekens bevatten. | numbers: 12
+num-037 | Op 27 april is het Koningsdag en zijn we gesloten. | numbers: 27
+num-038 | De rente staat voor tien jaar vast op 3,6 procent. | numbers: 10; 3,6
+num-039 | Ik heb de afspraak verzet naar maandag 5 oktober om half tien. | numbers: 5
+num-040 | Het bestand is 250 megabyte groot. | numbers: 250
+num-041 | Van de 80 deelnemers gaven er 64 een positieve beoordeling. | numbers: 80; 64
+num-042 | De code van de fietsenstalling is 4815. | numbers: 4815/48 15
+num-043 | We verwachten tussen de 150 en 200 gasten op de bruiloft. | numbers: 150; 200
+num-044 | De aanbetaling van 500 euro moet binnen 14 dagen voldaan zijn. | numbers: 500; 14
+num-045 | Ze is vorige week 40 geworden en geeft zaterdag een feest. | numbers: 40
+num-046 | De marathon van 42 kilometer liep hij in iets meer dan drie uur. | numbers: 42; 3
+num-047 | Het klantnummer is 770321. | numbers: 770321
+num-048 | De vergaderzaal is geschikt voor maximaal 16 personen. | numbers: 16
+num-049 | In 2030 willen we de uitstoot met 55 procent hebben teruggebracht. | numbers: 2030; 55
+num-050 | Het gezin bestaat uit twee volwassenen en drie kinderen. | numbers: 2; 3
+
+## category: mixed_tech
+tech-001 | Ik heb de hotfix net gedeployd naar staging, kun je even meekijken? | terms: hotfix; gedeployd; staging
+tech-002 | De pull request is gemerged, dus je kunt je branch rebasen op main. | terms: pull request; gemerged; branch; rebasen; main
+tech-003 | Maak een nieuwe worktree aan voor deze feature en commit daar je wijzigingen. | terms: worktree; feature; commit
+tech-004 | De API key staat in de environment variables van Vercel, niet in de repository. | terms: API key; environment variables; Vercel; repository
+tech-005 | Kun je de migration draaien op de database van Supabase voordat we de release doen? | terms: migration; database; Supabase; release
+tech-006 | De build faalt in de CI omdat de TypeScript compiler een type error geeft. | terms: build; CI; TypeScript; compiler; type error
+tech-007 | Ik wil de frontend in React houden en de backend in Rust herschrijven. | terms: frontend; React; backend; Rust
+tech-008 | Zet die nieuwe functie achter een feature flag, dan kunnen we altijd een rollback doen. | terms: feature flag; rollback
+tech-009 | De webhook van GitHub komt niet aan op het endpoint in production. | terms: webhook; GitHub; endpoint; production
+tech-010 | We lopen tegen de rate limit aan, dus ik heb een cache toegevoegd. | terms: rate limit; cache
+tech-011 | Vraag Claude om de functie te refactoren zonder het gedrag te veranderen. | terms: Claude; refactoren
+tech-012 | De prompt is te lang en past niet meer in het context window. | terms: prompt; context window
+tech-013 | Ik heb gisteren alles gepusht, maar de pipeline is blijven hangen. | terms: gepusht; pipeline
+tech-014 | Wil jij mijn code reviewen voordat ik ga mergen? | terms: code; reviewen; mergen
+tech-015 | De Docker container start lokaal prima, maar crasht op Kubernetes. | terms: Docker; container; Kubernetes
+tech-016 | Schrijf een SQL query die alle gebruikers zonder actieve sessie ophaalt. | terms: SQL query
+tech-017 | De configuratie staat in een YAML-bestand en de response komt terug als JSON. | terms: YAML; response; JSON
+tech-018 | Ik draai de app op localhost en zie de foutmelding alleen in de terminal. | terms: app; localhost; terminal
+tech-019 | De MCP server geeft een timeout als de agent te veel tools tegelijk aanroept. | terms: MCP server; timeout; agent; tools
+tech-020 | We gebruiken embeddings om vergelijkbare documenten terug te vinden. | terms: embeddings
+tech-021 | Fine-tuning is hier overkill, een betere prompt lost het waarschijnlijk al op. | terms: Fine-tuning; overkill; prompt
+tech-022 | Dat LLM verbruikt te veel tokens per request, dus de kosten lopen op. | terms: LLM; tokens; request
+tech-023 | Er zit een bug in de logging waardoor het dashboard geen errors laat zien. | terms: bug; logging; dashboard; errors
+tech-024 | Ik heb de desktop-app gebouwd met Tauri, zodat de bundle lekker klein blijft. | terms: desktop-app; Tauri; bundle
+tech-025 | Vergeet niet te committen voordat je van branch wisselt. | terms: committen; branch
+tech-026 | De unit tests slagen, maar de end-to-end test faalt op de login flow. | terms: unit tests; end-to-end test; login flow
+tech-027 | Kun je een issue aanmaken op GitHub en die aan mij toewijzen? | terms: issue; GitHub
+tech-028 | Ik heb de dependency geüpdatet en nu klaagt de linter over ongebruikte imports. | terms: dependency; geüpdatet; linter; imports
+tech-029 | Laat de agent eerst een plan maken en pas daarna code schrijven. | terms: agent; code
+tech-030 | De stagingomgeving loopt achter op production, dus deploy eerst de laatste commits. | terms: stagingomgeving; production; deploy; commits
+tech-031 | We hebben een memory leak in de backend, het geheugengebruik blijft maar stijgen. | terms: memory leak; backend
+tech-032 | Zet de secrets nooit in de code, maar gebruik een environment variable. | terms: secrets; code; environment variable
+tech-033 | Ik krijg een merge conflict in het lockfile na het rebasen. | terms: merge conflict; lockfile; rebasen
+tech-034 | De latency van het endpoint is gehalveerd sinds we de query hebben geoptimaliseerd. | terms: latency; endpoint; query
+tech-035 | Kun je de README bijwerken met de stappen om het project lokaal te builden? | terms: README; builden
+tech-036 | Het model hallucineert minder als je voorbeelden in de system prompt zet. | terms: system prompt
+tech-037 | Ik heb een script geschreven dat de logs doorzoekt op errors van de afgelopen nacht. | terms: script; logs; errors
+tech-038 | De deploy naar production staat gepland voor na de stand-up. | terms: deploy; production; stand-up
+tech-039 | Draai de tests in watch mode terwijl je aan het refactoren bent. | terms: tests; watch mode; refactoren
+tech-040 | We moeten de API versioneren, anders breken we de clients van onze klanten. | terms: API; clients
+tech-041 | De cron job die de back-ups maakt, is vannacht niet gestart. | terms: cron job; back-ups
+tech-042 | Open een draft pull request, dan kan ik alvast feedback geven. | terms: draft pull request; feedback
+tech-043 | De response bevat ongeldige JSON, waardoor de parser een exception gooit. | terms: response; JSON; parser; exception
+tech-044 | Ik heb de component opgesplitst zodat de state niet meer overal doorgegeven wordt. | terms: component; state
+tech-045 | Check even of de feature flag in production echt uit staat. | terms: feature flag; production
+tech-046 | De authenticatie loopt via OAuth en het token verloopt na een uur. | terms: OAuth; token
+tech-047 | Ik wil dat je deze bug reproduceert met een falende test voordat je hem fixt. | terms: bug; test; fixt
+tech-048 | De repository is te groot geworden, dus we splitsen hem op in losse packages. | terms: repository; packages
+tech-049 | Gebruik een subagent voor het doorzoeken van de codebase, dat scheelt context. | terms: subagent; codebase; context
+tech-050 | De rollback is gelukt en de foutpercentages op het dashboard zijn weer normaal. | terms: rollback; dashboard
+tech-051 | Kun je de TypeScript types genereren uit het schema van de database? | terms: TypeScript; types; schema; database
+tech-052 | Ik heb de pipeline aangepast zodat de Docker image alleen bij een release gebouwd wordt. | terms: pipeline; Docker image; release
+tech-053 | De frontend doet te veel requests, kunnen we die batchen? | terms: frontend; requests; batchen
+tech-054 | Voeg logging toe rond de webhook, want ik zie niet waarom hij faalt. | terms: logging; webhook
+tech-055 | We hosten het model zelf, dus er gaat geen data naar een externe API. | terms: hosten; data; API
+tech-056 | De laatste commit heeft de build gebroken, ik draai hem terug met een revert. | terms: commit; build; revert
+tech-057 | Kun je de changelog schrijven voor deze release en de versie ophogen? | terms: changelog; release
+tech-058 | Het script leest de API key uit een configuratiebestand dat niet in Git staat. | terms: script; API key; Git
+tech-059 | Ik heb het cluster opgeschaald omdat de pods in Kubernetes steeds opnieuw opstartten. | terms: cluster; pods; Kubernetes
+tech-060 | Schrijf eerst een falende test, implementeer dan de fix en open daarna een pull request. | terms: test; fix; pull request
+
+## category: long_form
+long-001 | Beste Marieke, bedankt voor je bericht van gisteren. Ik heb de offerte doorgenomen en ik heb nog twee vragen over de planning en de kosten. Zou je me morgen tussen 10 en 12 uur kunnen bellen? Dan kunnen we het daarna snel afronden. | names: Marieke | numbers: 2; 10; 12
+long-002 | Korte update over de release. De hotfix staat sinds vanochtend op staging en alle tests zijn groen. Als Daan de pull request vanmiddag goedkeurt, deployen we morgen om tien uur naar production. Laat het even weten als je nog een blocker ziet. | names: Daan | numbers: 10 | terms: release; hotfix; staging; tests; pull request; deployen; production; blocker
+long-003 | Ik wil dat je de module voor het inloggen gaat refactoren. Maak eerst een nieuwe branch aan en schrijf tests voor het huidige gedrag. Splits daarna de grote functie op in kleinere stukken, zonder de publieke API te veranderen. Open tot slot een pull request met een korte samenvatting. | terms: refactoren; branch; tests; API; pull request
+long-004 | Samenvatting van het overleg van vanochtend. We hebben besloten om de lancering twee weken uit te stellen, omdat het klanttevredenheidsonderzoek nog niet is afgerond. Sophie de Jong werkt de projectplanning bij en deelt die uiterlijk vrijdag. De volgende vergadering is op 14 oktober. | names: Sophie de Jong | numbers: 2; 14 | terms: klanttevredenheidsonderzoek; projectplanning
+long-005 | Hé, ik spreek even iets in omdat typen nu niet lukt. Ik sta nog in de file bij Utrecht en ben waarschijnlijk pas rond zeven uur thuis. Begin gerust alvast met eten, dan warm ik het straks wel op. Tot zo! | names: Utrecht | numbers: 7
+long-006 | Geachte heer Van Dam, naar aanleiding van ons telefoongesprek stuur ik u hierbij de gevraagde gegevens. De totale kosten komen uit op 3.400 euro, exclusief btw. Mocht u akkoord gaan, dan plannen wij de werkzaamheden in de week van 9 november. Ik hoor graag van u. | names: Van Dam | numbers: 3400; 9
+long-007 | Kijk eens naar de bug in het dashboard waarbij de grafiek leeg blijft. Volgens mij geeft het endpoint een lege lijst terug als de cache verlopen is. Reproduceer het probleem eerst met een test, los het daarna op en controleer of de logging duidelijk genoeg is. | terms: bug; dashboard; endpoint; cache; test; logging
+long-008 | Notitie voor mezelf. Morgen de tandarts bellen voor een nieuwe afspraak, de belastingaangifte afmaken en het cadeau voor Lotte ophalen. Verder moet ik niet vergeten om de zorgverzekering voor volgend jaar te vergelijken, want de premie gaat flink omhoog. | names: Lotte | terms: belastingaangifte; zorgverzekering
+long-009 | Goedemorgen allemaal. Ik werk vandaag thuis en ben tussen twaalf en één uur niet bereikbaar. De migration van de database heb ik gisteravond op staging getest en dat ging goed. Vanmiddag pak ik de review van Femke op en daarna kijk ik naar de rate limit van de API. | names: Femke | numbers: 12; 1 | terms: migration; database; staging; review; rate limit; API
+long-010 | Ik wilde je nog even laten weten dat ik je presentatie van gisteren erg sterk vond. Je legde het ingewikkelde onderwerp helder uit en je nam rustig de tijd voor vragen. Mijn enige tip voor de volgende keer is om iets minder tekst op je dia's te zetten.
+long-011 | Voeg een nieuwe pagina met instellingen toe aan de frontend. Gebruik de bestaande componenten in React en sla de voorkeuren op via het endpoint dat al in de backend bestaat. Schrijf er tests bij en zorg dat de build zonder waarschuwingen slaagt voordat je gaat committen. | terms: frontend; React; endpoint; backend; tests; build; committen
+long-012 | Hoi Inge, wat leuk dat jullie in de herfstvakantie willen langskomen. Wij zijn van 17 tot en met 25 oktober thuis, dus kies gerust een paar dagen uit. De logeerkamer is vrij en de kinderen kijken er nu al naar uit. Laat je even weten hoe laat jullie ongeveer aankomen? | names: Inge | numbers: 17; 25 | terms: herfstvakantie; logeerkamer
+long-013 | Vanochtend heb ik met Ruben en Nadia de incident review gedaan. De storing van dinsdag duurde 42 minuten en werd veroorzaakt door een verlopen certificaat op production. We zetten monitoring op met een alert in Slack, en Nadia schrijft deze week het rapport voor de klant. | names: Ruben; Nadia | numbers: 42 | terms: incident review; production; monitoring; alert; Slack
+long-014 | Even hardop nadenken over de prijs. Als ik 95 euro per uur reken en het project ongeveer 60 uur kost, kom ik uit op 5.700 euro. Dat past binnen hun budget, maar ik wil een buffer van tien procent opnemen voor onvoorzien werk. | numbers: 95; 60; 5700; 10
+long-015 | Je bent een assistent die gesprekken samenvat. Lees het transcript hieronder en geef de drie belangrijkste besluiten terug als JSON. Verzin niets wat niet in de tekst staat, en als iets onduidelijk is, zeg dat dan eerlijk in plaats van te gokken. | numbers: 3 | terms: transcript; JSON
+long-016 | Beste klantenservice, op 2 september heb ik bij jullie een koptelefoon besteld met ordernummer 48213. Volgens de bevestiging zou die binnen drie werkdagen geleverd worden, maar ik heb nog steeds niets ontvangen. Kunnen jullie nagaan waar het pakket is gebleven? Alvast bedankt voor de moeite. | numbers: 2; 48213; 3
+long-017 | Hoi Tim, ik heb je pull request bekeken en het ziet er goed uit. Ik heb twee kleine opmerkingen geplaatst over de naamgeving en over een query die volgens mij trager wordt bij veel data. Als je die aanpast, mag hij wat mij betreft gemerged worden. | names: Tim | numbers: 2 | terms: pull request; query; data; gemerged
+long-018 | Gisteren is de aannemer langs geweest voor de badkamer. Hij schat dat de verbouwing drie weken duurt en ongeveer 12.000 euro gaat kosten, inclusief tegelwerk. Ik heb gevraagd of hij de offerte voor het einde van de maand kan sturen, zodat we nog kunnen vergelijken. | numbers: 3; 12000
+long-019 | Start een nieuwe worktree voor de evaluatie van het spraakmodel. Schrijf een script in Rust dat alle opnames uit de map inleest, ze door de pipeline haalt en de foutpercentages per categorie wegschrijft naar een JSON-bestand. Commit het resultaat, maar push nog niets naar GitHub. | terms: worktree; script; Rust; pipeline; JSON; Commit; push; GitHub
+long-020 | Planning voor volgende week. Maandag werk ik in Amsterdam bij de klant, dinsdag en woensdag zit ik thuis aan het prototype en donderdag presenteer ik de resultaten aan Eva van Rijn. Vrijdag houd ik vrij om de administratie bij te werken en de facturen te versturen. | names: Amsterdam; Eva van Rijn | terms: prototype
+
+## category: non_speech
+ns-001 | [Geen spraak] Blijf 5 seconden helemaal stil.
+ns-002 | [Geen spraak] Adem 5 seconden rustig en normaal, dicht bij de microfoon.
+ns-003 | [Geen spraak] Zucht één keer diep en hoorbaar.
+ns-004 | [Geen spraak] Hoest twee keer kort.
+ns-005 | [Geen spraak] Schraap één of twee keer je keel.
+ns-006 | [Geen spraak] Typ 5 seconden op je toetsenbord zonder iets te zeggen.
+ns-007 | [Geen spraak] Klik een paar keer achter elkaar met je muis.
+ns-008 | [Geen spraak] Doe een deur open en dicht en laat verder alleen het geluid van de kamer horen.
+ns-009 | [Geen spraak] Laat 5 seconden zacht instrumentale muziek op de achtergrond spelen, zonder zelf iets te zeggen.
+ns-010 | [Geen spraak] Tik 5 seconden met je vingers op het bureau.
+ns-011 | [Geen spraak] Ritsel 5 seconden met een paar vellen papier.
+ns-012 | [Geen spraak] Neem 5 seconden het geluid op van een ventilator, de airco of de straat bij een open raam.

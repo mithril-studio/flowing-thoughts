@@ -25,3 +25,7 @@ dist-ssr
 
 # Conductor workspace context (never commit — may contain screenshots/logs)
 .context/
+
+# Evaluation dataset — personal voice recordings and transcripts. Never commit.
+# (Default location is the app data dir; this covers --data-dir inside the repo.)
+eval-data/

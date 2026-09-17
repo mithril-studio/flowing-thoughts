@@ -252,4 +252,42 @@ describe("Settings", () => {
     });
     expect(await screen.findByRole("button", { name: "Download" })).toBeInTheDocument();
   });
+
+  it("keeps dictation audio for evaluation only after an explicit opt-in", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          groq_api_key_configured: false,
+          openai_api_key_configured: false,
+          active_provider: "groq",
+        });
+      }
+      if (command === "list_installed_models") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_accessibility_help_info") {
+        return Promise.resolve({ executable_path: "", is_dev_build: true, note: "" });
+      }
+      return Promise.resolve({ settings: defaultAppSettings, warnings: [] });
+    });
+
+    expect(defaultAppSettings.extras.keep_audio_for_eval).toBe(false);
+    render(<Settings settings={defaultAppSettings} onSettingsChange={vi.fn()} />);
+
+    const toggle = screen.getByRole("switch", { name: "Keep my dictations for evaluation" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "update_app_settings",
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            extras: expect.objectContaining({ keep_audio_for_eval: true }),
+          }),
+        })
+      );
+    });
+  });
 });

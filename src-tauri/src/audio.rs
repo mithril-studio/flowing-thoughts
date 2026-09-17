@@ -44,6 +44,15 @@ fn store_amplitude(slot: &AtomicU32, value: f32) {
     slot.store(value.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
+/// Name of the microphone `start_recording` will use — capture metadata for
+/// the evaluation dataset.
+pub fn default_input_device_name() -> String {
+    cpal::default_host()
+        .default_input_device()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 pub fn start_recording() -> Result<ActiveRecording, String> {
     let host = cpal::default_host();
     let device = host
