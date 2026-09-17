@@ -81,6 +81,18 @@ Hotkey (CGEventTap, global)
 ### `src-tauri/src/text_inject.rs`
 - Clipboard-paste injection with clipboard preservation
 
+### `src-tauri/src/pipeline.rs`
+- The pure stages of a dictation: capture gate (tap/silence), vocabulary
+  prompt, transcript filters (marker/credit sanitizer, prompt-echo, five-word
+  floor) and finalisation (developer dictionary, learned corrections)
+- Called by the live session in `lib.rs` *and* by the eval harness, so
+  measured results describe what dictation really does
+
+### `src-tauri/src/eval/` + `examples/ft_eval.rs`
+- Offline transcription-quality evaluation: dataset manifest, Dutch scoring
+  (WER/CER/entities), harness, recorder, opt-in "keep my dictations"
+- Measurement only — see `docs/DUTCH_EVAL.md`. Run with `npm run eval -- help`
+
 ## Reliability Rules
 
 - Every in-flight task is scoped to `session_id`; late results for old

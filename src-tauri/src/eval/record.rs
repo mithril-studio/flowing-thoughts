@@ -126,7 +126,17 @@ pub fn run_recorder(data_dir: &Path, prompts: &[Prompt], options: &RecordOptions
             say("● recording — Enter to stop");
             let _ = read_line(&mut stdin)?;
             take += 1;
-            let capture = audio::stop_and_finalize(recording, take)?;
+            // A failed take (no samples yet from a Bluetooth mic, microphone
+            // permission missing) must not end the session.
+            let capture = match audio::stop_and_finalize(recording, take) {
+                Ok(capture) => capture,
+                Err(e) => {
+                    say(&format!(
+                        "  Take failed: {e}. Check that your terminal has microphone access (System Settings → Privacy & Security → Microphone), then try again.\n"
+                    ));
+                    continue;
+                }
+            };
             let stats = manifest::wav_stats(&capture.wav_path)?;
 
             loop {
@@ -169,39 +179,8 @@ pub fn run_recorder(data_dir: &Path, prompts: &[Prompt], options: &RecordOptions
                         );
                         let audio_rel = format!("{AUDIO_DIR}/{id}.wav");
                         move_file(&capture.wav_path, &data_dir.join(&audio_rel))?;
-                        // An edited reference no longer contains the prompt's
-                        // entities for certain; keep only those it still has.
-                        let entities = retain_present(&prompt.entities, &reference);
-                        let clip = Clip {
-                            id,
-                            audio: audio_rel,
-                            reference: reference.clone(),
-                            verified: true,
-                            expected: if prompt.is_non_speech() {
-                                Expected::NonSpeech
-                            } else {
-                                Expected::Speech
-                            },
-                            split: manifest::assign_split(&prompt.id),
-                            categories: vec![prompt.category.clone()],
-                            language: language_of(prompt),
-                            language_mode: None,
-                            source: "prompt_script".to_string(),
-                            prompt_id: Some(prompt.id.clone()),
-                            speaker: options.speaker.clone(),
-                            device: device.clone(),
-                            sample_rate: stats.sample_rate,
-                            channels: stats.channels,
-                            duration_ms: stats.duration_ms,
-                            peak_amplitude: stats.peak_amplitude,
-                            condition: options.condition.clone(),
-                            noise: options.noise.clone(),
-                            entities,
-                            raw_transcript: None,
-                            raw_model: None,
-                            recorded_at: chrono::Utc::now().to_rfc3339(),
-                            notes: String::new(),
-                        };
+                        let clip =
+                            build_clip(prompt, &reference, options, &device, id, audio_rel, stats);
                         manifest::append(data_dir, &clip)?;
                         kept += 1;
                         continue 'prompts;
@@ -216,6 +195,52 @@ pub fn run_recorder(data_dir: &Path, prompts: &[Prompt], options: &RecordOptions
         existing.len() + kept
     ));
     Ok(())
+}
+
+/// Manifest entry for a kept take of `prompt`.
+fn build_clip(
+    prompt: &Prompt,
+    reference: &str,
+    options: &RecordOptions,
+    device: &str,
+    id: String,
+    audio: String,
+    stats: manifest::WavStats,
+) -> Clip {
+    Clip {
+        id,
+        audio,
+        reference: reference.to_string(),
+        verified: true,
+        expected: if prompt.is_non_speech() {
+            Expected::NonSpeech
+        } else {
+            Expected::Speech
+        },
+        // Keyed on the prompt, not the take: every condition variant of one
+        // sentence shares a split.
+        split: manifest::assign_split(&prompt.id),
+        categories: vec![prompt.category.clone()],
+        language: language_of(prompt),
+        language_mode: None,
+        source: "prompt_script".to_string(),
+        prompt_id: Some(prompt.id.clone()),
+        speaker: options.speaker.clone(),
+        device: device.to_string(),
+        sample_rate: stats.sample_rate,
+        channels: stats.channels,
+        duration_ms: stats.duration_ms,
+        peak_amplitude: stats.peak_amplitude,
+        condition: options.condition.clone(),
+        noise: options.noise.clone(),
+        // An edited reference no longer contains the prompt's entities for
+        // certain; keep only those it still has.
+        entities: retain_present(&prompt.entities, reference),
+        raw_transcript: None,
+        raw_model: None,
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+        notes: String::new(),
+    }
 }
 
 fn language_of(prompt: &Prompt) -> String {
@@ -365,5 +390,30 @@ mod tests {
         let kept = retain_present(&entities, "Annelies komt om vijftien uur.");
         assert_eq!(kept.names, ["Annelies"]);
         assert_eq!(kept.numbers, ["15"]);
+    }
+
+    #[test]
+    fn takes_of_one_prompt_share_a_split_and_non_speech_has_no_reference() {
+        let prompts = prompts::parse(
+            "## category: numbers\nnum-001 | Het kost 25 euro. | numbers: 25\n## category: non_speech\nns-001 | [Geen spraak] Blijf stil.\n",
+        )
+        .unwrap();
+        let stats = manifest::WavStats {
+            sample_rate: 48_000,
+            channels: 1,
+            duration_ms: 2_000,
+            peak_amplitude: 0.4,
+        };
+        let mut quiet = options(None);
+        quiet.condition = "quiet".into();
+        let normal = build_clip(&prompts[0], &prompts[0].text, &options(None), "mic", "a".into(), "audio/a.wav".into(), stats);
+        let variant = build_clip(&prompts[0], &prompts[0].text, &quiet, "mic", "b".into(), "audio/b.wav".into(), stats);
+        assert_eq!(normal.split, variant.split);
+        assert_eq!(normal.entities.numbers, ["25"]);
+        assert!(normal.verified);
+
+        let silence = build_clip(&prompts[1], "", &options(None), "mic", "c".into(), "audio/c.wav".into(), stats);
+        assert_eq!(silence.expected, Expected::NonSpeech);
+        assert!(silence.reference.is_empty());
     }
 }
