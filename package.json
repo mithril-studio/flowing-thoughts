@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "eval": "cargo run --quiet --release --manifest-path src-tauri/Cargo.toml --example ft_eval --"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -43,6 +43,7 @@ mod coach;
 mod corrections;
 mod db;
 mod dev_vocab;
+pub mod eval;
 mod hotkey;
 mod local_transcribe;
 #[cfg(target_os = "macos")]
