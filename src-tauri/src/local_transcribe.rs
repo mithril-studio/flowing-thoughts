@@ -1,6 +1,7 @@
 use crate::model_manager::{self, Engine, ModelId};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
@@ -18,6 +19,13 @@ static CONTEXT_CACHE: LazyLock<Mutex<HashMap<String, Arc<WhisperContext>>>> =
 static VAD_CONTEXT: LazyLock<Mutex<Option<(String, WhisperVadContext)>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// A second copy of the VAD model for background callers (`speech_ranges`).
+/// A meeting runs VAD over five minutes of audio at a time; on the dictation
+/// context that would make a keypress wait on this lock for the whole pass.
+/// Silero is under 1 MB, so the copy costs nothing.
+static BACKGROUND_VAD_CONTEXT: LazyLock<Mutex<Option<(String, WhisperVadContext)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
 /// The loaded Parakeet model, tagged with its id. Decoding needs `&mut`, so the
 /// lock is held for the whole transcription — fine, since exactly one
 /// dictation runs at a time.
@@ -26,7 +34,7 @@ static PARAKEET: LazyLock<Mutex<Option<(String, ParakeetModel)>>> =
 
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
-fn get_or_load_context(model_id: &ModelId) -> Result<Arc<WhisperContext>, String> {
+pub(crate) fn get_or_load_context(model_id: &ModelId) -> Result<Arc<WhisperContext>, String> {
     let key = model_id.id();
     // Held across the load on purpose: a dictation that arrives while the
     // startup preload is still reading the file waits for it instead of
@@ -149,7 +157,7 @@ pub fn preload(model_id: &ModelId) -> Result<u64, String> {
     Ok(started.elapsed().as_millis() as u64)
 }
 
-fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
+pub(crate) fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     let mut reader = hound::WavReader::open(path)
         .map_err(|e| format!("Failed to open wav: {e}"))?;
     let spec = reader.spec();
@@ -215,26 +223,51 @@ const NO_SPEECH_PROB_THRESHOLD: f32 = 0.6;
 /// because the hotkey must be held a full second before a session commits.
 const VAD_MIN_SPEECH_MS: i32 = 400;
 
-fn vad_params() -> WhisperVadParams {
-    let mut vad = WhisperVadParams::default();
-    vad.set_min_speech_duration(VAD_MIN_SPEECH_MS);
-    vad
+/// Silero VAD parameters. `None` leaves whisper.cpp's default in place, so
+/// dictation sets exactly what it always has.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VadTuning {
+    pub min_speech_ms: i32,
+    pub min_silence_ms: Option<i32>,
+    pub speech_pad_ms: Option<i32>,
+    /// Longer speech is split, at a short silence when there is one.
+    pub max_speech_s: Option<f32>,
 }
 
-/// Does this capture contain speech at all?
-///
-/// Deliberately runs as a standalone pre-pass rather than via
-/// `FullParams::enable_vad`. That flag is only honoured by `whisper_full()`;
-/// this app decodes through `whisper_full_with_state()` (per-dictation state),
-/// which ignores `params.vad` outright — setting it looks like it works and
-/// silently does nothing. Verified by test: with the flag set, near-silent
-/// audio still came back "Thanks for watching."
-///
-/// Used purely as a gate, not a splicer. When speech is present the original
-/// untouched audio goes to the decoder, so transcription accuracy is exactly
-/// as before; only the all-silence case changes, and it never reaches Whisper.
-fn contains_speech(vad_model: &str, audio: &[f32]) -> Result<bool, String> {
-    let mut guard = VAD_CONTEXT
+impl VadTuning {
+    pub const DICTATION: VadTuning = VadTuning {
+        min_speech_ms: VAD_MIN_SPEECH_MS,
+        min_silence_ms: None,
+        speech_pad_ms: None,
+        max_speech_s: None,
+    };
+
+    fn params(&self) -> WhisperVadParams {
+        let mut vad = WhisperVadParams::default();
+        vad.set_min_speech_duration(self.min_speech_ms);
+        if let Some(ms) = self.min_silence_ms {
+            vad.set_min_silence_duration(ms);
+        }
+        if let Some(ms) = self.speech_pad_ms {
+            vad.set_speech_pad(ms);
+        }
+        if let Some(s) = self.max_speech_s {
+            vad.set_max_speech_duration(s);
+        }
+        vad
+    }
+}
+
+/// Runs Silero over `audio` on the VAD context in `slot`, loading it first if
+/// needed. Returns `(start, end)` per speech segment in centiseconds, as
+/// whisper.cpp reports them.
+fn vad_segments(
+    slot: &Mutex<Option<(String, WhisperVadContext)>>,
+    vad_model: &str,
+    audio: &[f32],
+    tuning: &VadTuning,
+) -> Result<Vec<(f32, f32)>, String> {
+    let mut guard = slot
         .lock()
         .map_err(|_| "VAD context lock poisoned".to_string())?;
     if guard.as_ref().map(|(p, _)| p.as_str()) != Some(vad_model) {
@@ -250,12 +283,52 @@ fn contains_speech(vad_model: &str, audio: &[f32]) -> Result<bool, String> {
     }
     let vad_ctx = &mut guard.as_mut().expect("just initialised").1;
     let segments = vad_ctx
-        .segments_from_samples(vad_params(), audio)
+        .segments_from_samples(tuning.params(), audio)
         .map_err(|e| format!("VAD failed: {e}"))?;
-    let n = segments.num_segments();
+    Ok(segments.into_iter().map(|s| (s.start, s.end)).collect())
+}
+
+/// Where the speech is, as `(start_ms, end_ms)` relative to the start of
+/// `audio`, in order. For background callers: it runs on its own copy of the
+/// VAD model and logs nothing, so it never holds up or clutters dictation.
+pub(crate) fn speech_ranges(
+    vad_model: &str,
+    audio: &[f32],
+    tuning: &VadTuning,
+) -> Result<Vec<(u64, u64)>, String> {
+    if audio.is_empty() {
+        return Ok(Vec::new());
+    }
+    let total_ms = audio.len() as u64 * 1000 / u64::from(WHISPER_SAMPLE_RATE);
+    let segments = vad_segments(&BACKGROUND_VAD_CONTEXT, vad_model, audio, tuning)?;
+    Ok(segments
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let start_ms = ((start.max(0.0) * 10.0).round() as u64).min(total_ms);
+            let end_ms = ((end.max(0.0) * 10.0).round() as u64).min(total_ms);
+            (end_ms > start_ms).then_some((start_ms, end_ms))
+        })
+        .collect())
+}
+
+/// Does this capture contain speech at all?
+///
+/// Deliberately runs as a standalone pre-pass rather than via
+/// `FullParams::enable_vad`. That flag is only honoured by `whisper_full()`;
+/// this app decodes through `whisper_full_with_state()` (per-dictation state),
+/// which ignores `params.vad` outright — setting it looks like it works and
+/// silently does nothing. Verified by test: with the flag set, near-silent
+/// audio still came back "Thanks for watching."
+///
+/// Used purely as a gate, not a splicer. When speech is present the original
+/// untouched audio goes to the decoder, so transcription accuracy is exactly
+/// as before; only the all-silence case changes, and it never reaches Whisper.
+fn contains_speech(vad_model: &str, audio: &[f32]) -> Result<bool, String> {
+    let segments = vad_segments(&VAD_CONTEXT, vad_model, audio, &VadTuning::DICTATION)?;
+    let n = segments.len();
     let speech_ms: f32 = segments
         .into_iter()
-        .map(|s| (s.end - s.start) * 10.0)
+        .map(|(start, end)| (end - start) * 10.0)
         .sum();
     let total_ms = audio.len() as f32 / WHISPER_SAMPLE_RATE as f32 * 1000.0;
     let _ = crate::storage::append_log(
@@ -263,6 +336,245 @@ fn contains_speech(vad_model: &str, audio: &[f32]) -> Result<bool, String> {
         &format!("VAD found {n} speech segment(s), {speech_ms:.0}ms of {total_ms:.0}ms captured"),
     );
     Ok(n > 0)
+}
+
+/// One decoded Whisper segment with everything the decoder said about it.
+/// Times are relative to the start of the audio that was decoded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptSegment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    /// Exactly as decoded: untrimmed, unfiltered.
+    pub text: String,
+    pub no_speech_prob: f32,
+    /// Mean log-probability of the segment's text tokens; 0.0 without any.
+    pub avg_logprob: f32,
+    /// Whisper language code of the decode, e.g. "nl".
+    pub lang: String,
+}
+
+/// Whisper's temperature fallback: decode at `start`, and while the result
+/// trips a threshold retry `increment` hotter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TemperatureFallback {
+    pub start: f32,
+    pub increment: f32,
+    pub entropy_threshold: f32,
+    pub logprob_threshold: f32,
+}
+
+/// Everything `decode_segments` lets a caller choose. `None` leaves
+/// whisper.cpp's default untouched, which is what dictation does.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeParams<'a> {
+    /// Whisper language code, or "auto".
+    pub language: &'a str,
+    pub prompt: Option<&'a str>,
+    pub no_context: Option<bool>,
+    pub temperature: Option<TemperatureFallback>,
+    /// Polled by whisper.cpp during the decode, possibly from another thread;
+    /// returning `true` stops it. Must not panic.
+    pub abort: Option<fn() -> bool>,
+}
+
+impl<'a> DecodeParams<'a> {
+    /// The parameters dictation has always decoded with.
+    pub fn dictation(language: &'a str, prompt: Option<&'a str>) -> Self {
+        Self {
+            language,
+            prompt,
+            no_context: None,
+            temperature: None,
+            abort: None,
+        }
+    }
+}
+
+/// What one `decode_segments` call produced.
+#[derive(Debug, Clone)]
+pub struct DecodeOutput {
+    /// Every segment, in order, nothing filtered. Empty when `aborted`.
+    pub segments: Vec<TranscriptSegment>,
+    pub lang_id: i32,
+    /// `DecodeParams::abort` stopped the decode. Not an error: the caller
+    /// decides whether to try again.
+    pub aborted: bool,
+    /// Segments (by index) whose bytes were not valid UTF-8, with the error.
+    /// Their `text` was converted lossily. Dictation fails on these when it
+    /// keeps the segment, as it always did; meetings keep the lossy text.
+    pub text_errors: Vec<(usize, String)>,
+}
+
+/// What the abort callback sees. whisper-rs's own `set_abort_callback_safe`
+/// reads its boxed closure back through the wrong type, so this goes through
+/// the raw callback with a plain struct instead.
+struct AbortProbe {
+    check: fn() -> bool,
+    fired: AtomicBool,
+}
+
+unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool {
+    // SAFETY: `user_data` is the `AbortProbe` that `decode_segments` keeps
+    // alive on its stack for the whole `full()` call; it is only read here.
+    let probe = &*(user_data as *const AbortProbe);
+    // Latched: once a decode is being aborted it stays aborted, even if the
+    // flag behind `check` drops again before whisper.cpp asks a second time.
+    if probe.fired.load(Ordering::Relaxed) {
+        return true;
+    }
+    let abort = (probe.check)();
+    if abort {
+        probe.fired.store(true, Ordering::Relaxed);
+    }
+    abort
+}
+
+/// One Whisper decode of `audio`, returning every segment with its timestamps
+/// and confidence. No VAD, no filtering, no logging: callers own those.
+pub(crate) fn decode_segments(
+    ctx: &WhisperContext,
+    audio: &[f32],
+    decode: &DecodeParams,
+) -> Result<DecodeOutput, String> {
+    let mut state = ctx
+        .create_state()
+        .map_err(|e| format!("Failed to create whisper state: {e}"))?;
+
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_n_threads(num_cpus_threads());
+    params.set_translate(false);
+    params.set_language(Some(decode.language));
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_suppress_blank(true);
+    // Suppress non-speech tokens ([BLANK_AUDIO], music markers, etc.) at the
+    // decoder level; for dictation lib.rs additionally filters hallucinated
+    // credit lines.
+    params.set_suppress_nst(true);
+    if let Some(p) = decode.prompt.filter(|s| !s.trim().is_empty()) {
+        params.set_initial_prompt(p);
+    }
+    if let Some(no_context) = decode.no_context {
+        params.set_no_context(no_context);
+    }
+    if let Some(t) = decode.temperature {
+        params.set_temperature(t.start);
+        params.set_temperature_inc(t.increment);
+        params.set_entropy_thold(t.entropy_threshold);
+        params.set_logprob_thold(t.logprob_threshold);
+    }
+    let probe = decode.abort.map(|check| AbortProbe {
+        check,
+        fired: AtomicBool::new(false),
+    });
+    if let Some(probe) = &probe {
+        // SAFETY: `probe` outlives `state.full` below, the only place the
+        // callback runs, and the trampoline only reads through the pointer.
+        unsafe {
+            params.set_abort_callback(Some(abort_trampoline));
+            params.set_abort_callback_user_data(
+                probe as *const AbortProbe as *mut std::ffi::c_void,
+            );
+        }
+    }
+
+    let result = state.full(params, audio);
+    if probe.is_some_and(|p| p.fired.load(Ordering::Relaxed)) {
+        // An aborted decode fails or stops short; either way its output is
+        // not the transcript of this audio.
+        return Ok(DecodeOutput {
+            segments: Vec::new(),
+            lang_id: state.full_lang_id_from_state(),
+            aborted: true,
+            text_errors: Vec::new(),
+        });
+    }
+    result.map_err(|e| format!("Whisper inference failed: {e}"))?;
+
+    let lang_id = state.full_lang_id_from_state();
+    let lang = whisper_rs::get_lang_str(lang_id).unwrap_or("").to_string();
+    let token_eot = ctx.token_eot();
+    let n_segments = state.full_n_segments();
+    let mut segments = Vec::with_capacity(n_segments.max(0) as usize);
+    let mut text_errors = Vec::new();
+    for i in 0..n_segments {
+        let seg = state
+            .get_segment(i)
+            .ok_or_else(|| format!("Missing whisper segment {i}"))?;
+        let text = match seg.to_str() {
+            Ok(text) => text.to_string(),
+            Err(e) => {
+                text_errors.push((segments.len(), e.to_string()));
+                seg.to_str_lossy().map(|t| t.into_owned()).unwrap_or_default()
+            }
+        };
+        // Special tokens (timestamps, end of text) sit at and above `eot`.
+        let (logprob_sum, n_text_tokens) = (0..seg.n_tokens())
+            .filter_map(|t| seg.get_token(t))
+            .filter(|token| token.token_id() < token_eot)
+            .fold((0.0f32, 0u32), |(sum, n), token| {
+                (sum + token.token_data().plog, n + 1)
+            });
+        segments.push(TranscriptSegment {
+            start_ms: seg.start_timestamp().max(0) as u64 * 10,
+            end_ms: seg.end_timestamp().max(0) as u64 * 10,
+            text,
+            no_speech_prob: seg.no_speech_probability(),
+            avg_logprob: if n_text_tokens == 0 {
+                0.0
+            } else {
+                logprob_sum / n_text_tokens as f32
+            },
+            lang: lang.clone(),
+        });
+    }
+    Ok(DecodeOutput {
+        segments,
+        lang_id,
+        aborted: false,
+        text_errors,
+    })
+}
+
+/// Which of the two supported languages is spoken in `audio`, with how sure
+/// the model is between those two (0.5 to 1.0). Only the first 30 s are
+/// looked at. One encoder pass, no decode. English-only models answer "en".
+pub(crate) fn detect_language(
+    ctx: &WhisperContext,
+    audio: &[f32],
+) -> Result<(&'static str, f32), String> {
+    if !ctx.is_multilingual() {
+        return Ok(("en", 1.0));
+    }
+    let audio = &audio[..audio.len().min(30 * WHISPER_SAMPLE_RATE as usize)];
+    if audio.is_empty() {
+        return Err("No audio to detect a language from".to_string());
+    }
+    let threads = num_cpus_threads() as usize;
+    let mut state = ctx
+        .create_state()
+        .map_err(|e| format!("Failed to create whisper state: {e}"))?;
+    state
+        .pcm_to_mel(audio, threads)
+        .map_err(|e| format!("Language detection failed: {e}"))?;
+    let (_, probs) = state
+        .lang_detect(0, threads)
+        .map_err(|e| format!("Language detection failed: {e}"))?;
+    let prob_of = |lang: &str| {
+        whisper_rs::get_lang_id(lang)
+            .and_then(|id| probs.get(id as usize).copied())
+            .unwrap_or(0.0)
+    };
+    // Everything outside the supported set is ignored rather than trusted:
+    // Dutch is routinely misread as Afrikaans or German.
+    let (en, nl) = (prob_of("en"), prob_of("nl"));
+    let total = en + nl;
+    if total <= 0.0 {
+        return Ok(("nl", 0.5));
+    }
+    Ok(if en > nl { ("en", en / total) } else { ("nl", nl / total) })
 }
 
 /// One decode pass. `vad_rejected` separates "the VAD gate kept this audio
@@ -298,48 +610,23 @@ fn run_inference(
         }
     }
 
-    let mut state = ctx
-        .create_state()
-        .map_err(|e| format!("Failed to create whisper state: {e}"))?;
+    let decoded = decode_segments(ctx, audio, &DecodeParams::dictation(language, prompt))?;
 
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_n_threads(num_cpus_threads());
-    params.set_translate(false);
-    params.set_language(Some(language));
-    params.set_print_special(false);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-    params.set_suppress_blank(true);
-    // Suppress non-speech tokens ([BLANK_AUDIO], music markers, etc.) at the
-    // decoder level; lib.rs additionally filters hallucinated credit lines.
-    params.set_suppress_nst(true);
-    if let Some(p) = prompt.filter(|s| !s.trim().is_empty()) {
-        params.set_initial_prompt(p);
-    }
-
-    state
-        .full(params, audio)
-        .map_err(|e| format!("Whisper inference failed: {e}"))?;
-
-    let n_segments = state.full_n_segments();
+    let n_segments = decoded.segments.len();
     let mut text = String::new();
     let mut dropped = 0;
-    let mut probs: Vec<String> = Vec::with_capacity(n_segments.max(0) as usize);
-    for i in 0..n_segments {
-        let seg = state
-            .get_segment(i)
-            .ok_or_else(|| format!("Missing whisper segment {i}"))?;
-        let no_speech = seg.no_speech_probability();
+    let mut probs: Vec<String> = Vec::with_capacity(n_segments);
+    for (i, seg) in decoded.segments.iter().enumerate() {
+        let no_speech = seg.no_speech_prob;
         probs.push(format!("{no_speech:.2}"));
         if no_speech > NO_SPEECH_PROB_THRESHOLD {
             dropped += 1;
             continue;
         }
-        let seg_text = seg
-            .to_str()
-            .map_err(|e| format!("Failed to decode segment {i}: {e}"))?;
-        text.push_str(seg_text);
+        if let Some((_, e)) = decoded.text_errors.iter().find(|(index, _)| *index == i) {
+            return Err(format!("Failed to decode segment {i}: {e}"));
+        }
+        text.push_str(&seg.text);
     }
     // Always record the no-speech distribution, not just the drops. The gate
     // above had never once fired across the whole log history, and a silent
@@ -362,7 +649,7 @@ fn run_inference(
     }
     Ok(Decoded {
         text: text.trim().to_string(),
-        lang_id: state.full_lang_id_from_state(),
+        lang_id: decoded.lang_id,
         vad_rejected: false,
     })
 }
@@ -518,6 +805,12 @@ pub async fn transcribe_local(
     };
     let started = Instant::now();
     let result = tokio::task::spawn_blocking(move || {
+        // Dictation goes first: this preempts a meeting window that is being
+        // decoded and keeps the worker out until the text is back. Taken here,
+        // on the blocking thread, so it covers both engines and is never held
+        // across an await. The eval harness calls `transcribe_wav_blocking`
+        // directly and stays outside the gate.
+        let _gate = crate::inference_gate::acquire_interactive();
         transcribe_wav_blocking(&model_id, &wav_path, &options)
     })
     .await
@@ -636,6 +929,42 @@ mod tests {
                 audio.len() as f32 / super::WHISPER_SAMPLE_RATE as f32
             );
         }
+    }
+
+    /// `detect_language` only ever answers "nl" or "en". Point FT_SAMPLE_WAV_NL
+    /// and FT_SAMPLE_WAV_EN at 16 kHz mono clips to check both; FT_SAMPLE_WAV
+    /// is checked against FT_SAMPLE_LANG when that is "nl" or "en". Without
+    /// any of them the test passes on the model loading alone.
+    #[test]
+    #[ignore = "needs the 574 MB large-v3-turbo model installed; run with --ignored"]
+    fn detect_language_chooses_between_dutch_and_english() {
+        let ctx = super::get_or_load_context(&ModelId::LargeV3TurboQ5)
+            .expect("large-v3-turbo model installed");
+        let expected_for_sample = std::env::var("FT_SAMPLE_LANG").ok();
+        let clips = [
+            ("FT_SAMPLE_WAV_NL", Some("nl")),
+            ("FT_SAMPLE_WAV_EN", Some("en")),
+            ("FT_SAMPLE_WAV", expected_for_sample.as_deref().filter(|l| ["nl", "en"].contains(l))),
+        ];
+        for (var, expected) in clips {
+            let path = std::env::var(var).unwrap_or_default();
+            if path.is_empty() {
+                continue;
+            }
+            let audio = super::load_wav_as_mono_16k(std::path::Path::new(&path)).unwrap();
+            let started = std::time::Instant::now();
+            let (lang, confidence) = super::detect_language(&ctx, &audio).unwrap();
+            println!(
+                "  {var}: {lang} ({confidence:.2}) in {} ms",
+                started.elapsed().as_millis()
+            );
+            assert!(["nl", "en"].contains(&lang));
+            assert!((0.5..=1.0).contains(&confidence));
+            if let Some(expected) = expected {
+                assert_eq!(lang, expected, "{var} detected as {lang}");
+            }
+        }
+        assert!(super::detect_language(&ctx, &[]).is_err());
     }
 
     /// Smoke test for the large-v3-turbo GGML file: it must load through the

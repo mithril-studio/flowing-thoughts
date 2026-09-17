@@ -1,5 +1,6 @@
-//! The pure, UI-free stages of a dictation: the capture gate, the vocabulary
-//! prompt, and the post-transcription text filters.
+//! The pure, UI-free stages of a dictation: the capture gate, the
+//! local-or-cloud routing decision, the vocabulary prompt, and the
+//! post-transcription text filters.
 //!
 //! The live session in `lib.rs` and the eval harness (`eval/`) both call these,
 //! so a measured result describes what dictation really does. Change a rule
@@ -20,6 +21,35 @@ pub const SILENCE_PEAK_THRESHOLD: f32 = 0.015;
 /// silent recording.
 pub fn is_capture_discarded(duration_ms: u64, peak_amplitude: f32) -> bool {
     duration_ms < MIN_DICTATION_MS || peak_amplitude < SILENCE_PEAK_THRESHOLD
+}
+
+/// Where a capture is sent for transcription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// On-device, with the installed local model (Whisper or Parakeet).
+    Local,
+    /// The cloud API. Only ever reached by explicit user choice.
+    Cloud,
+    /// Local mode, but the selected model is not on disk. An error, never a
+    /// reason to upload.
+    LocalModelMissing,
+}
+
+/// Decide the transcription route from the `transcription.provider` setting
+/// (`"local"` or `"api"`) and whether the selected local model is installed.
+///
+/// Audio leaves the machine only when the user explicitly selected the API
+/// provider. API keys are deliberately not an input: a configured key can
+/// never turn a missing local model into an upload. Any mode other than
+/// `"api"` is treated as local, so an unexpected value fails closed.
+pub fn choose_route(mode: &str, local_model_installed: bool) -> Route {
+    if mode == "api" {
+        Route::Cloud
+    } else if local_model_installed {
+        Route::Local
+    } else {
+        Route::LocalModelMissing
+    }
 }
 
 pub const CORRECTION_PROMPT_CHAR_CAP: usize = 800;
@@ -304,6 +334,45 @@ mod tests {
             filter_transcript(" Dit is een gewone Nederlandse zin. ", &[], true),
             Ok("Dit is een gewone Nederlandse zin.".to_string())
         );
+    }
+
+    #[test]
+    fn route_local_mode_uses_the_installed_model() {
+        assert_eq!(choose_route("local", true), Route::Local);
+    }
+
+    #[test]
+    fn route_local_mode_with_missing_model_is_an_error_not_an_upload() {
+        // Regression: this used to fall back to the cloud when an API key was
+        // configured. Keys are not an input any more, so no key state can
+        // change the answer.
+        assert_eq!(choose_route("local", false), Route::LocalModelMissing);
+    }
+
+    #[test]
+    fn route_cloud_only_when_api_is_explicitly_selected() {
+        // Cloud mode ignores whatever local model happens to be on disk.
+        assert_eq!(choose_route("api", true), Route::Cloud);
+        assert_eq!(choose_route("api", false), Route::Cloud);
+    }
+
+    #[test]
+    fn route_is_never_cloud_unless_mode_is_exactly_api() {
+        for mode in ["local", "", "API", "api ", "cloud", "groq", "openai"] {
+            for installed in [true, false] {
+                assert_ne!(
+                    choose_route(mode, installed),
+                    Route::Cloud,
+                    "mode {mode:?}, installed {installed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn route_unknown_mode_fails_closed_to_local() {
+        assert_eq!(choose_route("", true), Route::Local);
+        assert_eq!(choose_route("cloud", false), Route::LocalModelMissing);
     }
 
     #[test]

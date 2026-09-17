@@ -45,11 +45,13 @@ mod db;
 mod dev_vocab;
 pub mod eval;
 mod hotkey;
+mod inference_gate;
 mod local_transcribe;
 #[cfg(target_os = "macos")]
 mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_hotkey;
+mod meetings;
 mod model_manager;
 mod pipeline;
 mod storage;
@@ -217,7 +219,10 @@ fn maybe_learn_from_pending_capture(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_withhold_injection, MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS};
+    use super::{
+        sanitize_settings, should_withhold_injection, storage, MAX_AUTO_DELETE_AUDIO_DAYS,
+        MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS,
+    };
 
     #[test]
     fn injection_guard_allows_normal_dictations() {
@@ -232,6 +237,67 @@ mod tests {
         assert!(should_withhold_injection(29_110, 2_760_000));
         assert!(should_withhold_injection(MAX_AUTO_INJECT_CHARS + 1, 10_000));
         assert!(should_withhold_injection(500, MAX_AUTO_INJECT_MS + 1));
+    }
+
+    #[test]
+    fn meetings_settings_default_to_off_and_follow_the_dictation_model() {
+        let mut settings = storage::AppSettings::default();
+        settings.transcription.local_model = "whisper-large-v3-turbo-q5".to_string();
+        sanitize_settings(&mut settings);
+        assert!(!settings.meetings.enabled);
+        assert!(!settings.meetings.summary_enabled);
+        assert_eq!(settings.meetings.model, "whisper-large-v3-turbo-q5");
+        assert_eq!(settings.meetings.language, "auto");
+        assert_eq!(settings.meetings.auto_delete_audio_days, 0);
+    }
+
+    #[test]
+    fn meetings_settings_are_clamped() {
+        let mut settings = storage::AppSettings::default();
+        settings.meetings.model = "../../etc/passwd".to_string();
+        settings.meetings.language = "de".to_string();
+        settings.meetings.summary_model = "   ".to_string();
+        settings.meetings.auto_delete_audio_days = 100_000;
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.meetings.model, "whisper-small-q5");
+        assert_eq!(settings.meetings.language, "auto");
+        assert_eq!(settings.meetings.summary_model, "openai/gpt-4o-mini");
+        assert_eq!(settings.meetings.auto_delete_audio_days, MAX_AUTO_DELETE_AUDIO_DAYS);
+    }
+
+    #[test]
+    fn meetings_model_is_never_parakeet() {
+        // Long-form decoding needs Whisper timestamps; Parakeet has none.
+        let mut settings = storage::AppSettings::default();
+        settings.transcription.local_model = "parakeet-tdt-0.6b-v3".to_string();
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.transcription.local_model, "parakeet-tdt-0.6b-v3");
+        assert_eq!(settings.meetings.model, "whisper-small-q5");
+
+        settings.meetings.model = "parakeet-tdt-0.6b-v3".to_string();
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.meetings.model, "whisper-small-q5");
+    }
+
+    #[test]
+    fn a_valid_meetings_choice_survives_sanitizing() {
+        let mut settings = storage::AppSettings::default();
+        settings.meetings.enabled = true;
+        settings.meetings.model = "whisper-base-q5".to_string();
+        settings.meetings.language = "nl".to_string();
+        settings.meetings.auto_delete_audio_days = 30;
+        sanitize_settings(&mut settings);
+        assert!(settings.meetings.enabled);
+        assert_eq!(settings.meetings.model, "whisper-base-q5");
+        assert_eq!(settings.meetings.language, "nl");
+        assert_eq!(settings.meetings.auto_delete_audio_days, 30);
+    }
+
+    #[test]
+    fn settings_saved_before_meetings_existed_still_load() {
+        let raw = r#"{"coaching":{"enabled":true,"model":"x","batch_size":10}}"#;
+        let parsed: storage::AppSettings = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.meetings, storage::MeetingsSettings::default());
     }
 
 }
@@ -435,6 +501,12 @@ struct AppSettingsUpdateResult {
     warnings: Vec<String>,
 }
 
+/// Id of the menu bar icon, so code outside `run()` (the meeting session) can
+/// look it up with `app.tray_by_id` and set its title.
+pub(crate) const TRAY_ICON_ID: &str = "main";
+
+const MAX_AUTO_DELETE_AUDIO_DAYS: u32 = 365;
+
 fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.shortcuts.preset != "cmd_shift_space" && settings.shortcuts.preset != "fn" {
         settings.shortcuts.preset = "fn".to_string();
@@ -464,6 +536,30 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
         settings.coaching.model = "openai/gpt-4o-mini".to_string();
     }
     settings.coaching.batch_size = settings.coaching.batch_size.clamp(5, 100);
+
+    // Meetings decode long-form through the Whisper seam (timestamps, abort
+    // callback), so the model must be a Whisper one. Unset or invalid follows
+    // the dictation model; if that is Parakeet, fall back to the default.
+    let is_whisper = |id: &str| {
+        model_manager::ModelId::from_str(id)
+            .is_some_and(|m| m.engine() == model_manager::Engine::Whisper)
+    };
+    if !is_whisper(&settings.meetings.model) {
+        settings.meetings.model = if is_whisper(&settings.transcription.local_model) {
+            settings.transcription.local_model.clone()
+        } else {
+            "whisper-small-q5".to_string()
+        };
+    }
+    let valid_meeting_languages = ["auto", "nl", "en"];
+    if !valid_meeting_languages.contains(&settings.meetings.language.as_str()) {
+        settings.meetings.language = "auto".to_string();
+    }
+    if settings.meetings.summary_model.trim().is_empty() {
+        settings.meetings.summary_model = "openai/gpt-4o-mini".to_string();
+    }
+    settings.meetings.auto_delete_audio_days =
+        settings.meetings.auto_delete_audio_days.min(MAX_AUTO_DELETE_AUDIO_DAYS);
 }
 
 fn apply_window_movable(window: &WebviewWindow, movable: bool) {
@@ -1301,7 +1397,7 @@ pub fn run() {
 
             // Create the menu bar (tray) icon. Its presence means dictation
             // is armed; its title gives live feedback while dictating.
-            let tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .icon_as_template(true)
                 .menu(&menu)
@@ -1321,23 +1417,27 @@ pub fn run() {
                 .build(app)?;
 
             // Mirror the session phase in the menu bar: ● while recording,
-            // … while transcribing/typing, nothing when idle.
+            // … while transcribing/typing. When idle the title goes back to
+            // the running meeting's (dot plus duration), or to nothing.
             {
                 use tauri::Listener;
                 let tray_handle = tray.clone();
                 app.listen("session-phase", move |event| {
                     let payload = event.payload();
                     let title = if payload.contains("recording") {
-                        Some("●")
+                        Some("●".to_string())
                     } else if payload.contains("transcribing") || payload.contains("injecting")
                     {
-                        Some("…")
+                        Some("…".to_string())
                     } else {
-                        None
+                        meetings::idle_tray_title()
                     };
                     let _ = tray_handle.set_title(title);
                 });
             }
+
+            // Meetings: launch recovery, then the background worker.
+            meetings::init(app.handle());
 
             let shared_db_conn = db_conn.clone();
 
@@ -1779,11 +1879,11 @@ pub fn run() {
                                 let installed = local_model_id
                                     .as_ref()
                                     .is_some_and(model_manager::is_installed);
-                                let use_local = transcription_mode == "local" && installed;
+                                let route = pipeline::choose_route(&transcription_mode, installed);
 
                                 let started = Instant::now();
                                 let (primary_label, transcript_result): (String, Result<String, String>) =
-                                    if use_local {
+                                    if route == pipeline::Route::Local {
                                         let id = local_model_id.unwrap();
                                         let result = local_transcribe::transcribe_local(
                                             id,
@@ -1794,9 +1894,9 @@ pub fn run() {
                                         .await
                                         .map(|(text, _latency)| text);
                                         (local_model.clone(), result)
-                                    } else if transcription_mode == "local"
-                                        && runtime_api_key.is_none()
-                                    {
+                                    } else if route == pipeline::Route::LocalModelMissing {
+                                        // Local mode never uploads audio, whatever
+                                        // API keys happen to be configured.
                                         (
                                             local_model.clone(),
                                             Err(format!(
@@ -1804,9 +1904,8 @@ pub fn run() {
                                             )),
                                         )
                                     } else {
-                                        // Cloud path: chosen explicitly, or fallback
-                                        // because the local model isn't installed but
-                                        // an API key is configured.
+                                        // Cloud path: only when the user explicitly
+                                        // selected the API provider. Never a fallback.
                                         let label = match provider {
                                             storage::Provider::Groq => "groq-api".to_string(),
                                             storage::Provider::Openai => "openai-api".to_string(),
@@ -2144,7 +2243,27 @@ pub fn run() {
             delete_correction,
             update_history_text,
             save_correction_from_edit,
-            get_app_version
+            get_app_version,
+            meetings::commands::meetings_supported,
+            meetings::commands::check_system_audio_permission,
+            meetings::commands::open_system_audio_settings,
+            meetings::commands::start_meeting,
+            meetings::commands::pause_meeting,
+            meetings::commands::resume_meeting,
+            meetings::commands::stop_meeting,
+            meetings::commands::get_meeting_recording_status,
+            meetings::commands::list_meetings,
+            meetings::commands::get_meeting,
+            meetings::commands::rename_meeting,
+            meetings::commands::delete_meeting,
+            meetings::commands::delete_meeting_audio,
+            meetings::commands::list_meeting_segments,
+            meetings::commands::edit_meeting_segment_text,
+            meetings::commands::set_meeting_segment_hidden,
+            meetings::commands::retranscribe_meeting,
+            meetings::commands::generate_meeting_summary,
+            meetings::commands::get_meeting_summary,
+            meetings::commands::export_meeting_markdown
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2160,6 +2279,7 @@ pub fn run() {
                 // shutdown. All state is persisted eagerly, so skipping
                 // destructors is safe.
                 let _ = storage::append_log("INFO", "Exit requested — shutting down");
+                meetings::shutdown();
                 unsafe { libc::_exit(0) };
             }
         });
