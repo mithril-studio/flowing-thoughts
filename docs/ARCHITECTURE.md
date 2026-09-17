@@ -104,6 +104,162 @@ Hotkey (CGEventTap, global)
   (WER/CER/entities), harness, recorder, opt-in "keep my dictations"
 - Measurement only — see `docs/DUTCH_EVAL.md`. Run with `npm run eval -- help`
 
+## Meetings
+
+A second product on the same engine: record a call as two tracks, transcribe
+it locally after stop. Off by default (`settings.meetings.enabled`). User-facing
+behaviour, privacy model and the release checklist are in `docs/MEETINGS.md`.
+
+```text
+Meetings tab (start / pause / stop)
+  -> session.rs (state machine, one meeting at a time)
+    -> capture/ (mic via cpal, system audio via a Core Audio process tap)
+      -> recording/ (ring -> resample to 16 kHz mono -> timeline -> 60 s chunk files)
+  stop -> jobs.rs (transcript run + job row in SQLite)
+    -> worker.rs (one `meeting-worker` thread)
+      -> longform.rs (VAD windows <= 28 s, Whisper, flagging)  <- inference gate
+        -> echo.rs (hide mic segments that repeat the system track)
+          -> meeting `ready`; optional summary.rs (opt-in, BYOK), export.rs
+```
+
+Meetings do not inherit dictation's limits or filters: no 5-minute cap, no
+whole recording in RAM, no five-word floor, no `sanitize_transcript`, no
+injection guard, and never the cloud transcription route.
+
+### Module map (`src-tauri/src/meetings/`)
+
+| Path | What |
+|---|---|
+| `mod.rs` | `init` (launch recovery, then worker start), `idle_tray_title`, `shutdown` |
+| `types.rs` | The contracts: string enums stored as text in the schema, DTOs, and the `AudioSource` / `AudioSourceHandler` / `SampleSink` / `ChunkLedger` / `TrackAudio` traits the packages meet at |
+| `commands.rs` | Every Tauri command, as thin delegates |
+| `events.rs` | `meeting-state` (every phase change), `meeting-job-progress` (throttled, per window), `meeting-updated` (refetch this meeting). The backend owns state; React only renders |
+| `session.rs` | The recording state machine `idle -> starting -> recording <-> paused -> stopping -> idle`. `start` inserts the meeting, its tracks and the "Me"/"Them" speakers, builds sources and recorders, and bridges the chunk ledger to the store; no system audio means a mic-only meeting, never an error. `stop` drains and closes the chunks, then queues the transcription. Also owns the tray title (recording dot plus duration; dictation's title wins while a dictation is active), launch recovery, and deleting a meeting or only its audio |
+| `capture/` | The real `AudioSource`s. `mic.rs`: cpal 0.15, same input device as dictation, runs next to a dictation capture. `system_tap.rs`: global stereo process tap on an aggregate device, rebuilt when the default output changes. `permission.rs`: System Audio Recording (a denial is silence, not an error, so: best-effort TCC preflight behind the `private-tcc` feature, plus a zeros watchdog). `device_watch.rs`: default-device listeners and "is the output the built-in speakers" (`meetings.echo_risk`). `is_supported()` is the runtime gate: macOS 14.4+, `CATapDescription` present, both tap symbols resolvable |
+| `recording/` | Frames to disk. `recorder.rs` (ring, writer thread, pause/resume/stop), `resample.rs` (any format to 16 kHz mono), `timeline.rs` (runs, gaps, drift, chunk anchors; pure), `chunk_writer.rs`, `sidecar.rs` (`track.json`), `recovery.rs`, `reader.rs` (`TrackAudio` over chunk files; gaps and deleted chunks read as silence) |
+| `store/` | The only place meeting SQL lives; typed access to every v3 table, usable from the UI connection and the worker's own |
+| `jobs.rs` | The SQLite-backed queue: enqueue, "Re-transcribe as…", launch requeue |
+| `worker.rs` | The `meeting-worker` thread |
+| `longform.rs` | Window planning, per-track language, window decoding, segment flagging. Whisper only: Parakeet has no timestamps |
+| `echo.rs` | Text-level echo flagging between tracks, biased towards keeping what the user said |
+| `summary.rs` | Opt-in OpenRouter summary; the one place meeting text leaves the machine. Items must cite existing segments; the transcript is treated as untrusted input |
+| `export.rs` | A meeting as Markdown |
+
+The tap symbols (`AudioHardwareCreateProcessTap` / `DestroyProcessTap`) are
+resolved with `dlsym`, never linked, so the binary still loads where they do
+not exist. `scripts/release.sh` asserts that `nm -um` shows no `ProcessTap`
+import. cpal stays on 0.15 for the same reason: 0.17+ hard-links them.
+
+### On-disk layout
+
+```text
+~/Library/Application Support/FlowingThoughts/
+  flowing_thoughts.db                      all meeting rows (schema v3)
+  meetings/<meeting_id>/<mic|system>/
+    <seq>.pcm                              raw s16le, 16 kHz, mono, 60 s per chunk
+    track.json                             the chunk list, rewritten atomically
+```
+
+- Raw PCM has no header to finalize. The writer calls `write()` at least once
+  a second and `fsync`s when a chunk closes, because the app exits through
+  `_exit(0)` and may crash. About 230 MB per hour for two tracks.
+- One `meeting_audio_chunks` row per chunk: `open`, then `closed`. After a
+  crash an `open` chunk becomes `recovered` with `n_frames = file_len / 2`.
+  `track.json` allows the same repair without the database.
+- Each chunk is anchored to mach host time, the clock both tracks share.
+  Pauses, ring overflow and device rebuilds are recorded as gaps, so segment
+  timestamps stay on the meeting timeline. Memory is bounded by about 5 s of
+  ring buffer per track; the audio callback only copies into the ring.
+- Chunk rows store paths relative to the meetings root. Meeting ids are
+  validated before they become directory names, because deleting a meeting's
+  audio removes that directory.
+
+Schema v3 groups: recording (`meetings`, `meeting_tracks`,
+`meeting_audio_chunks`), transcript (`transcript_runs`, `transcript_windows`,
+`transcript_segments`, `segment_edits`), speakers and people (`speakers`,
+`speaker_turns`, `segment_speakers`, `people`, `participants`,
+`speaker_assignments`), summaries (`summaries`, `summary_items`,
+`summary_item_sources`) and `jobs`. Segments are immutable except for
+`suppressed_reason`; displayed text is `COALESCE(edit.text, seg.text)`. v1 only
+seeds the "Me" and "Them" track speakers; the people tables are there for
+per-person labels later.
+
+### Jobs and the worker
+
+- A transcription is a `transcript_runs` row (model, language, decode
+  parameters) plus a `jobs` row pointing at it, inserted together. Re-running
+  never destroys results: a first run is the meeting's active run from the
+  start so the transcript fills in live; a re-run replaces the old one only
+  once it is complete.
+- Nothing about the queue lives in memory. At launch, meetings left in
+  `recording` or `paused` become `interrupted`, their chunks are repaired and
+  a job is queued (`session::init`); `running` jobs go back to `queued`; then
+  the worker starts.
+- The worker is one thread with its own connection (`db::open_connection()`,
+  WAL plus `busy_timeout`). It never takes the managed UI connection's mutex.
+- Per job: plan windows for all tracks in one transaction (VAD over 5-minute
+  blocks, speech packed into windows of at most 28 s, breaking at silences
+  over 3 s), then decode the `pending` windows in timeline order. A window is
+  the unit of resume: its segments and its `done` state commit together, so a
+  restart never decodes a window twice.
+- A window that errors is retried up to `MAX_WINDOW_ATTEMPTS` (3), then marked
+  `failed` and the job goes on. A job can be claimed at most 8 times, which
+  stops a window that takes the process down from doing so at every launch.
+- When the run is settled: echo pass, run `done`, run becomes active, meeting
+  `ready`. The worker also applies `auto_delete_audio_days`.
+- Everything outside SQLite sits behind a `Host` trait (model, VAD, audio,
+  events, settings), so tests drive whole jobs with fakes and no thread.
+
+Meeting status: `recording`, `paused`, `interrupted`, `queued`,
+`transcribing`, `ready`, `failed`.
+
+### Inference gate (`src-tauri/src/inference_gate.rs`)
+
+Dictation and the worker share the CPU/GPU and the loaded model, so there is
+one local inference at a time, with dictation first in line.
+
+- Dictation calls `acquire_interactive()` on its blocking thread, around the
+  single transcription (`local_transcribe.rs`). That raises the preempt flag
+  at once, then waits for whoever holds the gate.
+- The worker calls `acquire_background()` around each model call only (one
+  window, or language detection), never around reading audio, VAD or planning,
+  and never for a whole job. It waits while the gate is held *or* an
+  interactive caller is waiting, so dictation never queues behind a second
+  window.
+- Whisper's abort callback polls `should_preempt()`. A preempted decode drops
+  its guard and leaves the window `pending` with no attempt counted; the
+  worker then waits until dictation is done. Between model calls the worker
+  also yields when the flag is up.
+- Worst case for dictation is one abort-check interval, not one window. The
+  rule "exactly one transcription per dictation" is unchanged. The eval
+  harness stays outside the gate.
+
+## Signing and Permissions
+
+macOS keys privacy permissions (Microphone, Accessibility, Input Monitoring,
+System Audio Recording) to the code signature.
+
+- `bundle.macOS.signingIdentity` is `"-"`: Tauri ad-hoc signs the bundle with
+  the bundle identifier, a bound Info.plist and sealed resources. Without it
+  the binary is only linker-signed (identifier = crate name plus a hash) and
+  `codesign --verify --deep --strict` fails.
+- `bundle.macOS.hardenedRuntime` is `false`. Tauri turns the hardened runtime
+  on by default as soon as it signs, and under it macOS refuses the microphone
+  without prompting unless the app carries the
+  `com.apple.security.device.audio-input` entitlement. The hardened runtime is
+  only needed for notarization; turn it on together with an entitlements file
+  when there is a Developer ID.
+- `scripts/release.sh` asserts, before anything is published: strict verify
+  passes, the signature identifier equals the bundle identifier, both usage
+  descriptions are in the bundled Info.plist, no `ProcessTap` symbol is
+  linked, the hardened runtime is not on without the audio-input entitlement,
+  and the app inside the updater tarball is the same signed code as
+  the one in the DMG.
+- An ad-hoc signature has no stable identity across builds: the designated
+  requirement is the code hash, so macOS asks for every permission again
+  after each update. Only a Developer ID certificate with notarization fixes
+  that. It is an open decision; `release.sh` has a commented placeholder.
+
 ## Reliability Rules
 
 - Every in-flight task is scoped to `session_id`; late results for old
