@@ -1,6 +1,6 @@
 [package]
 name = "flowing-thoughts"
-version = "0.3.1"
+version = "0.4.0"
 description = "Voice dictation for macOS — hold to record, release to type"
 authors = ["Joost Dolstra"]
 edition = "2021"
@@ -27,6 +27,9 @@ chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 tauri-plugin-updater = "2"
 whisper-rs = { version = "0.16", features = ["metal"] }
+# Parakeet TDT via ONNX Runtime. Only the `onnx` engines — Whisper stays on
+# our own whisper-rs so there is a single copy of whisper.cpp in the binary.
+transcribe-rs = { version = "0.3.11", default-features = false, features = ["onnx"] }
 futures = "0.3"
 futures-util = "0.3"
 sha2 = "0.10"

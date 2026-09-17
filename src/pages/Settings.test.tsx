@@ -162,4 +162,94 @@ describe("Settings", () => {
       );
     });
   });
+
+  it("adds a custom whisper model by name", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          groq_api_key_configured: false,
+          openai_api_key_configured: false,
+          active_provider: "groq",
+        });
+      }
+      if (command === "list_installed_models") {
+        return Promise.resolve([]);
+      }
+      if (command === "get_accessibility_help_info") {
+        return Promise.resolve({ executable_path: "", is_dev_build: true, note: "" });
+      }
+      if (command === "add_custom_model") {
+        return Promise.resolve("ggml-medium-q5_0");
+      }
+      return Promise.resolve({ settings: defaultAppSettings, warnings: [] });
+    });
+
+    render(<Settings settings={defaultAppSettings} onSettingsChange={vi.fn()} />);
+
+    const input = screen.getByLabelText("Add a whisper.cpp model");
+    fireEvent.change(input, { target: { value: " medium-q5_0 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("add_custom_model", { source: "medium-q5_0" });
+    });
+    expect(await screen.findByText("Downloading ggml-medium-q5_0…")).toBeInTheDocument();
+  });
+
+  it("removes an undownloaded catalog model from the list and can restore it", async () => {
+    let hidden = false;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_persisted_state") {
+        return Promise.resolve({
+          groq_api_key_configured: false,
+          openai_api_key_configured: false,
+          active_provider: "groq",
+        });
+      }
+      if (command === "list_installed_models") {
+        return Promise.resolve([
+          {
+            id: "whisper-base-q5",
+            display_name: "Whisper Base (English + Dutch)",
+            description: "Fast and tiny.",
+            filename: "ggml-base-q5_1.bin",
+            installed: false,
+            expected_size_bytes: 1,
+            local_path: null,
+            multilingual: true,
+            custom: false,
+            hidden,
+          },
+        ]);
+      }
+      if (command === "hide_model") {
+        hidden = true;
+        return Promise.resolve();
+      }
+      if (command === "unhide_model") {
+        hidden = false;
+        return Promise.resolve();
+      }
+      if (command === "get_accessibility_help_info") {
+        return Promise.resolve({ executable_path: "", is_dev_build: true, note: "" });
+      }
+      return Promise.resolve({ settings: defaultAppSettings, warnings: [] });
+    });
+
+    render(<Settings settings={defaultAppSettings} onSettingsChange={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("hide_model", { modelId: "whisper-base-q5" });
+    });
+    expect(await screen.findByText("Show 1 removed model")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Show 1 removed model"));
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("unhide_model", { modelId: "whisper-base-q5" });
+    });
+    expect(await screen.findByRole("button", { name: "Download" })).toBeInTheDocument();
+  });
 });

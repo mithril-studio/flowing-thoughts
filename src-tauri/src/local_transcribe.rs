@@ -1,14 +1,16 @@
-use crate::model_manager::{self, ModelId};
+use crate::model_manager::{self, Engine, ModelId};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
+use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
+use transcribe_rs::onnx::Quantization;
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext,
     WhisperVadContextParams, WhisperVadParams,
 };
 
-static CONTEXT_CACHE: LazyLock<Mutex<HashMap<&'static str, Arc<WhisperContext>>>> =
+static CONTEXT_CACHE: LazyLock<Mutex<HashMap<String, Arc<WhisperContext>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The VAD model, loaded once and reused. Rebuilding it per dictation would
@@ -16,17 +18,24 @@ static CONTEXT_CACHE: LazyLock<Mutex<HashMap<&'static str, Arc<WhisperContext>>>
 static VAD_CONTEXT: LazyLock<Mutex<Option<(String, WhisperVadContext)>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// The loaded Parakeet model, tagged with its id. Decoding needs `&mut`, so the
+/// lock is held for the whole transcription — fine, since exactly one
+/// dictation runs at a time.
+static PARAKEET: LazyLock<Mutex<Option<(String, ParakeetModel)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
-fn get_or_load_context(model_id: ModelId) -> Result<Arc<WhisperContext>, String> {
-    let key = model_id.as_str();
-    {
-        let guard = CONTEXT_CACHE
-            .lock()
-            .map_err(|_| "Whisper context cache lock poisoned".to_string())?;
-        if let Some(ctx) = guard.get(key) {
-            return Ok(ctx.clone());
-        }
+fn get_or_load_context(model_id: &ModelId) -> Result<Arc<WhisperContext>, String> {
+    let key = model_id.id();
+    // Held across the load on purpose: a dictation that arrives while the
+    // startup preload is still reading the file waits for it instead of
+    // loading a second copy of the model alongside.
+    let mut guard = CONTEXT_CACHE
+        .lock()
+        .map_err(|_| "Whisper context cache lock poisoned".to_string())?;
+    if let Some(ctx) = guard.get(&key) {
+        return Ok(ctx.clone());
     }
     let path = model_manager::model_path(model_id)?;
     if !path.exists() {
@@ -35,7 +44,10 @@ fn get_or_load_context(model_id: ModelId) -> Result<Arc<WhisperContext>, String>
             path.to_string_lossy()
         ));
     }
-    let params = WhisperContextParameters::default();
+    let mut params = WhisperContextParameters::default();
+    // Off by default in whisper-rs. Same output, less attention memory
+    // traffic — a free speed-up on Metal.
+    params.flash_attn(true);
     let ctx = WhisperContext::new_with_params(
         path.to_str()
             .ok_or_else(|| "Model path is not valid UTF-8".to_string())?,
@@ -43,11 +55,88 @@ fn get_or_load_context(model_id: ModelId) -> Result<Arc<WhisperContext>, String>
     )
     .map_err(|e| format!("Failed to load whisper model {key}: {e}"))?;
     let arc = Arc::new(ctx);
-    let mut guard = CONTEXT_CACHE
-        .lock()
-        .map_err(|_| "Whisper context cache lock poisoned".to_string())?;
     guard.insert(key, arc.clone());
     Ok(arc)
+}
+
+fn with_parakeet<T>(
+    model_id: &ModelId,
+    run: impl FnOnce(&mut ParakeetModel) -> Result<T, String>,
+) -> Result<T, String> {
+    let key = model_id.id();
+    let mut guard = PARAKEET
+        .lock()
+        .map_err(|_| "Parakeet model lock poisoned".to_string())?;
+    if guard.as_ref().map(|(k, _)| k.as_str()) != Some(key.as_str()) {
+        if !model_manager::is_installed(model_id) {
+            return Err(format!("Model not installed: {key}"));
+        }
+        let dir = model_manager::model_path(model_id)?;
+        let model = ParakeetModel::load(&dir, &Quantization::Int8)
+            .map_err(|e| format!("Failed to load Parakeet model {key}: {e}"))?;
+        *guard = Some((key, model));
+    }
+    run(&mut guard.as_mut().expect("just initialised").1)
+}
+
+/// Parakeet has no language switch and no prompt: it picks the language from
+/// the audio and decodes. The VAD gate still runs first — cheaper than the
+/// encoder, and it keeps the "no speech" behaviour identical across engines.
+fn run_parakeet(
+    model_id: &ModelId,
+    audio: &[f32],
+    vad_model: Option<&str>,
+) -> Result<String, String> {
+    if let Some(path) = vad_model {
+        if !contains_speech(path, audio)? {
+            return Ok(String::new());
+        }
+    }
+    let text = with_parakeet(model_id, |model| {
+        model
+            .transcribe_with(audio, &ParakeetParams::default())
+            .map(|r| r.text)
+            .map_err(|e| format!("Parakeet inference failed: {e}"))
+    })?;
+    let vad_state = if vad_model.is_some() { "on" } else { "off" };
+    let _ = crate::storage::append_log(
+        "INFO",
+        &format!("Parakeet decoded {} chars (VAD {vad_state})", text.trim().len()),
+    );
+    Ok(text.trim().to_string())
+}
+
+/// Load the model and push one second of silence through it, so the first
+/// real dictation after launch doesn't pay for reading the file, building the
+/// Metal pipelines and allocating the compute buffers.
+pub fn preload(model_id: &ModelId) -> Result<u64, String> {
+    let started = Instant::now();
+    let silence = vec![0.0f32; WHISPER_SAMPLE_RATE as usize];
+    match model_id.engine() {
+        Engine::Parakeet => with_parakeet(model_id, |model| {
+            model
+                .transcribe_with(&silence, &ParakeetParams::default())
+                .map(|_| ())
+                .map_err(|e| format!("Parakeet warm-up failed: {e}"))
+        })?,
+        Engine::Whisper => {
+            let ctx = get_or_load_context(model_id)?;
+            let mut state = ctx
+                .create_state()
+                .map_err(|e| format!("Failed to create whisper state: {e}"))?;
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            params.set_n_threads(num_cpus_threads());
+            params.set_language(Some("en"));
+            params.set_print_special(false);
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_timestamps(false);
+            state
+                .full(params, &silence)
+                .map_err(|e| format!("Whisper warm-up failed: {e}"))?;
+        }
+    }
+    Ok(started.elapsed().as_millis() as u64)
 }
 
 fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
@@ -262,7 +351,7 @@ fn num_cpus_threads() -> i32 {
 /// Map the app-level language mode ("en" | "nl" | "system") to the whisper
 /// language code for a given model. English-only models always decode as
 /// English; multilingual models honour the hint or auto-detect.
-fn whisper_language(model_id: ModelId, language_mode: &str) -> &'static str {
+fn whisper_language(model_id: &ModelId, language_mode: &str) -> &'static str {
     if !model_id.is_multilingual() {
         return "en";
     }
@@ -280,7 +369,7 @@ pub async fn transcribe_local(
     prompt: Option<String>,
 ) -> Result<(String, u64), String> {
     let wav_path = wav_path.to_path_buf();
-    let language = whisper_language(model_id, language_mode);
+    let language = whisper_language(&model_id, language_mode);
     let started = Instant::now();
     // Resolved once per dictation, not per decode pass, so the retry below
     // cannot disagree with the first pass about whether VAD is on.
@@ -295,9 +384,12 @@ pub async fn transcribe_local(
         );
     }
     let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let ctx = get_or_load_context(model_id)?;
         let audio = load_wav_as_mono_16k(&wav_path)?;
         let vad = vad_model.as_deref();
+        if model_id.engine() == Engine::Parakeet {
+            return run_parakeet(&model_id, &audio, vad);
+        }
+        let ctx = get_or_load_context(&model_id)?;
         let (text, lang_id) = run_inference(&ctx, &audio, language, prompt.as_deref(), vad)?;
         if language == "auto" {
             let detected = whisper_rs::get_lang_str(lang_id).unwrap_or("");
@@ -325,16 +417,18 @@ mod tests {
 
     #[test]
     fn multilingual_models_honour_language_mode() {
-        assert_eq!(whisper_language(ModelId::SmallQ5, "nl"), "nl");
-        assert_eq!(whisper_language(ModelId::SmallQ5, "en"), "en");
-        assert_eq!(whisper_language(ModelId::SmallQ5, "system"), "auto");
-        assert_eq!(whisper_language(ModelId::BaseQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::SmallQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::SmallQ5, "en"), "en");
+        assert_eq!(whisper_language(&ModelId::SmallQ5, "system"), "auto");
+        assert_eq!(whisper_language(&ModelId::BaseQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::LargeV3TurboQ5, "nl"), "nl");
+        assert_eq!(whisper_language(&ModelId::LargeV3TurboQ5, "system"), "auto");
     }
 
     #[test]
     fn english_only_models_always_decode_english() {
-        assert_eq!(whisper_language(ModelId::TinyEn, "nl"), "en");
-        assert_eq!(whisper_language(ModelId::DistilSmallEn, "system"), "en");
+        assert_eq!(whisper_language(&ModelId::TinyEn, "nl"), "en");
+        assert_eq!(whisper_language(&ModelId::DistilSmallEn, "system"), "en");
     }
 
     /// Write low-level noise that clears the app's 0.015 peak gate but carries
@@ -367,7 +461,7 @@ mod tests {
         let wav = dir.join("near_silence.wav");
         write_near_silence(&wav, 1_700);
 
-        let ctx = super::get_or_load_context(ModelId::SmallQ5).expect("speech model installed");
+        let ctx = super::get_or_load_context(&ModelId::SmallQ5).expect("speech model installed");
         let audio = super::load_wav_as_mono_16k(&wav).unwrap();
         let peak = audio.iter().fold(0f32, |m, s| m.max(s.abs()));
         assert!(
@@ -390,5 +484,79 @@ mod tests {
             with_vad.trim().is_empty(),
             "VAD let non-speech reach the decoder: {with_vad:?}"
         );
+    }
+
+    /// Parakeet end to end: loads, stays silent on near-silence, and — with
+    /// FT_SAMPLE_WAV set to a 16 kHz mono WAV — prints a transcript and timing.
+    #[test]
+    #[ignore = "needs the 670 MB Parakeet model + VAD model installed; run with --ignored"]
+    fn parakeet_loads_and_decodes() {
+        let id = ModelId::ParakeetV3;
+        let load_ms = super::preload(&id).expect("parakeet model installed");
+        println!("  parakeet preload: {load_ms} ms");
+        let vad_path = crate::model_manager::vad_model_path().unwrap();
+
+        let dir = std::env::temp_dir().join("flowing_thoughts_parakeet_check");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("near_silence.wav");
+        write_near_silence(&wav, 1_700);
+        let audio = super::load_wav_as_mono_16k(&wav).unwrap();
+        let gated = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap();
+        assert!(gated.is_empty(), "VAD let non-speech through: {gated:?}");
+        let ungated = super::run_parakeet(&id, &audio, None).unwrap();
+        println!("  parakeet on near-silence without VAD: {ungated:?}");
+
+        let sample = std::env::var("FT_SAMPLE_WAV").unwrap_or_default();
+        if !sample.is_empty() {
+            let audio = super::load_wav_as_mono_16k(std::path::Path::new(&sample)).unwrap();
+            let started = std::time::Instant::now();
+            let text = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap();
+            println!(
+                "  parakeet transcript ({} ms for {:.1}s audio): {text:?}",
+                started.elapsed().as_millis(),
+                audio.len() as f32 / super::WHISPER_SAMPLE_RATE as f32
+            );
+        }
+    }
+
+    /// Smoke test for the large-v3-turbo GGML file: it must load through the
+    /// bundled whisper.cpp (v3 models use 128 mel bins) and decode. Set
+    /// FT_SAMPLE_WAV to a 16 kHz mono WAV to also print a real transcript.
+    #[test]
+    #[ignore = "needs the 574 MB large-v3-turbo model + VAD model installed; run with --ignored"]
+    fn large_v3_turbo_loads_and_decodes() {
+        let ctx = super::get_or_load_context(&ModelId::LargeV3TurboQ5)
+            .expect("large-v3-turbo model installed");
+        let vad_path = crate::model_manager::vad_model_path().unwrap();
+
+        let dir = std::env::temp_dir().join("flowing_thoughts_turbo_check");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("near_silence.wav");
+        write_near_silence(&wav, 1_700);
+        let audio = super::load_wav_as_mono_16k(&wav).unwrap();
+        let (silence_text, _) =
+            super::run_inference(&ctx, &audio, "nl", None, vad_path.to_str()).unwrap();
+        assert!(
+            silence_text.trim().is_empty(),
+            "turbo invented text on near-silence: {silence_text:?}"
+        );
+
+        let sample = std::env::var("FT_SAMPLE_WAV").unwrap_or_default();
+        if !sample.is_empty() {
+            let audio = super::load_wav_as_mono_16k(std::path::Path::new(&sample)).unwrap();
+            // FT_SAMPLE_LANG=nl shows what forcing the language saves over "auto".
+            let lang = std::env::var("FT_SAMPLE_LANG").unwrap_or_else(|_| "auto".to_string());
+            for (label, model) in [("turbo", ModelId::LargeV3TurboQ5), ("small", ModelId::SmallQ5)] {
+                let Ok(ctx) = super::get_or_load_context(&model) else { continue };
+                let started = std::time::Instant::now();
+                let (text, lang) =
+                    super::run_inference(&ctx, &audio, &lang, None, vad_path.to_str()).unwrap();
+                println!(
+                    "  {label} transcript ({} ms, lang {}): {text:?}",
+                    started.elapsed().as_millis(),
+                    whisper_rs::get_lang_str(lang).unwrap_or("?")
+                );
+            }
+        }
     }
 }

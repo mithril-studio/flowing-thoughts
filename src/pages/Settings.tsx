@@ -42,6 +42,8 @@ interface InstalledModel {
   expected_size_bytes: number;
   local_path: string | null;
   multilingual: boolean;
+  custom: boolean;
+  hidden: boolean;
 }
 
 interface DownloadProgress {
@@ -117,6 +119,9 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
   const [modelProgress, setModelProgress] = useState<Record<string, DownloadProgress>>({});
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [customSource, setCustomSource] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
+  const [addingCustom, setAddingCustom] = useState(false);
   const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>("idle");
   const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
@@ -256,6 +261,42 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
     } catch (e) {
       setModelError(String(e));
       setDownloadingModel(null);
+    }
+  };
+
+  const addCustomModel = async () => {
+    const source = customSource.trim();
+    if (!source) return;
+    setModelError(null);
+    setAddingCustom(true);
+    try {
+      const id = await invoke<string>("add_custom_model", { source });
+      setDownloadingModel(id);
+      setCustomSource("");
+    } catch (e) {
+      setModelError(String(e));
+    } finally {
+      setAddingCustom(false);
+    }
+  };
+
+  const hideModel = async (id: string) => {
+    setModelError(null);
+    try {
+      await invoke("hide_model", { modelId: id });
+      await fetchModels();
+    } catch (e) {
+      setModelError(String(e));
+    }
+  };
+
+  const unhideModel = async (id: string) => {
+    setModelError(null);
+    try {
+      await invoke("unhide_model", { modelId: id });
+      await fetchModels();
+    } catch (e) {
+      setModelError(String(e));
     }
   };
 
@@ -434,7 +475,7 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
         <div className="space-y-2 pt-1">
           <p className="text-xs text-zinc-600 dark:text-zinc-400">Local models</p>
           {models.length === 0 && <p className="text-xs text-zinc-500">Loading…</p>}
-          {models.map((model) => {
+          {models.filter((m) => !m.hidden).map((model) => {
             const progress = modelProgress[model.id];
             const isDownloading = downloadingModel === model.id;
             const isSelected = selectedLocalModel === model.id;
@@ -461,6 +502,11 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
                       {model.multilingual && (
                         <span className="shrink-0 rounded-full border border-sky-200 dark:border-sky-800 bg-sky-100 dark:bg-sky-950/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-sky-700 dark:text-sky-300">
                           EN + NL
+                        </span>
+                      )}
+                      {model.custom && (
+                        <span className="shrink-0 rounded-full border border-amber-200 dark:border-amber-800 bg-amber-100 dark:bg-amber-950/60 px-1.5 py-px text-[9px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                          Custom
                         </span>
                       )}
                     </div>
@@ -496,20 +542,37 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
                         <button
                           type="button"
                           onClick={() => removeModel(model.id)}
-                          className="rounded-lg px-2 py-1.5 text-xs text-zinc-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-300"
+                          disabled={isSelected}
+                          title={
+                            isSelected
+                              ? "Switch to another model before deleting the active one"
+                              : `Remove ${model.filename} from disk`
+                          }
+                          className="rounded-lg border border-red-200 dark:border-red-900/60 px-2.5 py-1.5 text-xs text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Delete
                         </button>
                       </>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => startDownload(model.id)}
-                        disabled={isDownloading}
-                        className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
-                      >
-                        {isDownloading ? "Downloading…" : "Download"}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => startDownload(model.id)}
+                          disabled={isDownloading}
+                          className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
+                        >
+                          {isDownloading ? "Downloading…" : "Download"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => hideModel(model.id)}
+                          disabled={isDownloading}
+                          title="Remove from this list. You can restore it below."
+                          className="rounded-lg border border-red-200 dark:border-red-900/60 px-2.5 py-1.5 text-xs text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40"
+                        >
+                          Remove
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -530,6 +593,97 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
               </div>
             );
           })}
+          {downloadingModel && !models.some((m) => m.id === downloadingModel) && (() => {
+            const progress = modelProgress[downloadingModel];
+            const percent =
+              progress && progress.total_bytes > 0
+                ? Math.min(100, Math.floor((progress.bytes_downloaded / progress.total_bytes) * 100))
+                : 0;
+            return (
+              <div className="space-y-2 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/80 p-3">
+                <p className="truncate text-sm text-zinc-800 dark:text-zinc-200">
+                  Downloading {downloadingModel}…
+                </p>
+                <div className="h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-all"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+                {progress && (
+                  <p className="text-[11px] text-zinc-500">
+                    {formatBytes(progress.bytes_downloaded)} / {formatBytes(progress.total_bytes)} ({percent}%)
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+          {models.some((m) => m.hidden) && (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => setShowHidden((v) => !v)}
+                className="text-[11px] text-zinc-500 underline-offset-2 hover:underline"
+              >
+                {showHidden ? "Hide" : "Show"} {models.filter((m) => m.hidden).length} removed
+                model{models.filter((m) => m.hidden).length === 1 ? "" : "s"}
+              </button>
+              {showHidden && (
+                <ul className="space-y-1">
+                  {models
+                    .filter((m) => m.hidden)
+                    .map((m) => (
+                      <li
+                        key={m.id}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 dark:border-zinc-800 px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-400"
+                      >
+                        <span className="truncate">{m.display_name}</span>
+                        <button
+                          type="button"
+                          onClick={() => unhideModel(m.id)}
+                          className="shrink-0 rounded-lg border border-zinc-300 dark:border-zinc-700 px-2 py-1 text-[11px] text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        >
+                          Restore
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          )}
+          <form
+            className="space-y-1.5 rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void addCustomModel();
+            }}
+          >
+            <label htmlFor="custom-model-source" className="block text-xs text-zinc-600 dark:text-zinc-400">
+              Add a whisper.cpp model
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="custom-model-source"
+                type="text"
+                value={customSource}
+                onChange={(e) => setCustomSource(e.target.value)}
+                placeholder="medium-q5_0 or a Hugging Face .bin URL"
+                disabled={addingCustom}
+                className="min-w-0 flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 placeholder:text-zinc-400"
+              />
+              <button
+                type="submit"
+                disabled={addingCustom || customSource.trim() === ""}
+                className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-60"
+              >
+                {addingCustom ? "Adding…" : "Add"}
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Names are fetched from ggerganov/whisper.cpp on Hugging Face (medium, medium-q5_0,
+              large-v3-q5_0, large-v3-turbo-q8_0, …). Any model you add can be deleted here.
+            </p>
+          </form>
           {modelError && <p className="text-xs text-red-700 dark:text-red-300">{modelError}</p>}
         </div>
         )}
@@ -654,6 +808,14 @@ export default function Settings({ settings, onSettingsChange }: SettingsProps) 
             <p className="text-xs text-amber-700 dark:text-amber-300">
               The active local model is English-only. Pick a model marked EN + NL for
               Dutch.
+            </p>
+          )}
+        {local.transcription.provider === "local" &&
+          local.language.mode !== "system" &&
+          selectedLocalModel.startsWith("parakeet") && (
+            <p className="text-xs text-zinc-500">
+              Parakeet detects the language from your voice, so this choice only applies
+              to Whisper models.
             </p>
           )}
       </Section>

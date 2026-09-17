@@ -118,8 +118,8 @@ export default function Corrections() {
         </h3>
         {corrections.length === 0 ? (
           <p className="text-xs text-zinc-500">
-            Nothing learned yet. Edit a dictation to teach FlowingThoughts how
-            you spell a word.
+            Nothing learned yet. Fix a word in the pasted text (within 10
+            minutes, before your next dictation) or edit a dictation on Home.
           </p>
         ) : (
           <ul className="space-y-1">
@@ -133,8 +133,20 @@ export default function Corrections() {
                     {c.wrong_text} → {c.intended_text}
                   </span>
                   <span className="text-[10px] text-zinc-600">
-                    {new Date(c.created_at).toLocaleDateString()}
+                    {new Date(c.created_at).toLocaleString([], {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    })}{" "}
+                    · {c.model === "user-edit" ? "Home edit" : c.model}
                   </span>
+                  {c.context_snippet && (
+                    <span
+                      className="truncate text-[10px] italic text-zinc-500"
+                      title={c.context_snippet}
+                    >
+                      “{c.context_snippet}”
+                    </span>
+                  )}
                 </div>
                 <button
                   type="button"

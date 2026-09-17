@@ -109,7 +109,7 @@ struct PendingCapture {
     captured_at: Instant,
 }
 
-const PENDING_CAPTURE_TTL: Duration = Duration::from_secs(60);
+const PENDING_CAPTURE_TTL: Duration = Duration::from_secs(10 * 60);
 const CORRECTION_PROMPT_CHAR_CAP: usize = 800;
 const CORRECTION_PROMPT_LIMIT: i64 = 40;
 
@@ -144,24 +144,34 @@ struct PipelineErrorEvent {
 }
 
 /// If a text injection is still pending from a previous dictation, inspect
-/// the focused text field and learn any single-word correction the user made.
-/// Runs at the start of each recording session — fire-and-forget, silent on
-/// failure (non-AX apps, permission missing, multi-word edits).
+/// the focused text field and learn the word-level corrections the user made.
+/// Runs at the start of each recording session — fire-and-forget, but every
+/// exit path is logged so a silent no-op can be diagnosed from logs.txt.
 fn maybe_learn_from_pending_capture(
     pending: &Arc<Mutex<Option<PendingCapture>>>,
     db: &Arc<Mutex<rusqlite::Connection>>,
     persisted: &Arc<Mutex<storage::PersistedState>>,
 ) {
     let capture = match pending.lock() {
-        Ok(mut guard) => {
-            let taken = guard.take();
-            match taken {
-                Some(c) if c.captured_at.elapsed() <= PENDING_CAPTURE_TTL => c,
-                _ => return,
+        Ok(mut guard) => match guard.take() {
+            Some(c) if c.captured_at.elapsed() <= PENDING_CAPTURE_TTL => c,
+            Some(c) => {
+                let _ = storage::append_log(
+                    "INFO",
+                    &format!(
+                        "Correction check skipped for session {}: last paste was {}s ago (limit {}s)",
+                        c.session_id,
+                        c.captured_at.elapsed().as_secs(),
+                        PENDING_CAPTURE_TTL.as_secs()
+                    ),
+                );
+                return;
             }
-        }
+            None => return,
+        },
         Err(_) => return,
     };
+    let session_id = capture.session_id;
 
     let auto_learn = persisted
         .lock()
@@ -169,6 +179,10 @@ fn maybe_learn_from_pending_capture(
         .map(|s| s.settings.extras.auto_learn_corrections)
         .unwrap_or(true);
     if !auto_learn {
+        let _ = storage::append_log(
+            "INFO",
+            &format!("Correction check skipped for session {session_id}: 'Learn from my edits' is off"),
+        );
         return;
     }
 
@@ -178,38 +192,60 @@ fn maybe_learn_from_pending_capture(
     let focused: Option<String> = None;
 
     let Some(focused_text) = focused else {
+        let _ = storage::append_log(
+            "INFO",
+            &format!(
+                "Correction check skipped for session {session_id}: focused field unreadable (no Accessibility value, or app is not AX-compliant)"
+            ),
+        );
         return;
     };
 
     let injected_trimmed = capture.injected_text.trim();
     let focused_trimmed = focused_text.trim();
-    if injected_trimmed == focused_trimmed {
-        return;
-    }
-    // extract_single_word_correction itself rejects wildly-different texts
-    // (different word count), so hand it the raw focused content.
-    let Some((wrong, right)) =
-        corrections::extract_single_word_correction(injected_trimmed, focused_trimmed)
-    else {
-        return;
+    let pairs = match corrections::extract_corrections(injected_trimmed, focused_trimmed) {
+        Ok(pairs) => pairs,
+        Err(reason) => {
+            let _ = storage::append_log(
+                "INFO",
+                &format!("Correction check for session {session_id}: nothing learned ({reason})"),
+            );
+            return;
+        }
     };
 
     let Ok(conn) = db.lock() else { return };
-    let correction = db::Correction {
-        id: uuid::Uuid::new_v4().to_string(),
-        dictation_id: capture.dictation_id.clone(),
-        model: capture.model.clone(),
-        wrong_text: wrong,
-        intended_text: right,
-        context_snippet: Some(injected_trimmed.chars().take(200).collect()),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-    let _ = db::insert_correction(&conn, &correction);
+    let context: String = injected_trimmed.chars().take(200).collect();
+    let mut learned: Vec<String> = Vec::new();
+    for (wrong, right) in pairs {
+        let correction = db::Correction {
+            id: uuid::Uuid::new_v4().to_string(),
+            dictation_id: capture.dictation_id.clone(),
+            model: capture.model.clone(),
+            wrong_text: wrong,
+            intended_text: right,
+            context_snippet: Some(context.clone()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        match db::insert_correction(&conn, &correction) {
+            Ok(()) => learned.push(format!(
+                "'{}' -> '{}'",
+                correction.wrong_text, correction.intended_text
+            )),
+            Err(e) => {
+                let _ = storage::append_log(
+                    "ERROR",
+                    &format!("Failed to store correction for session {session_id}: {e}"),
+                );
+            }
+        }
+    }
     let _ = storage::append_log(
         "INFO",
         &format!(
-            "Learned correction from session {}: '{}' -> '{}'",
-            capture.session_id, correction.wrong_text, correction.intended_text
+            "Learned {} correction(s) from session {session_id}: {}",
+            learned.len(),
+            learned.join(", ")
         ),
     );
 }
@@ -738,6 +774,29 @@ fn get_app_version() -> AppVersion {
     }
 }
 
+/// Warm the selected local model on a background thread, so the first
+/// dictation doesn't wait on a cold load. A no-op in cloud mode or when the
+/// model isn't downloaded yet; never fatal.
+fn preload_local_model(transcription: &storage::TranscriptionSettings) {
+    if transcription.provider != "local" {
+        return;
+    }
+    let Some(id) = model_manager::ModelId::from_str(&transcription.local_model) else {
+        return;
+    };
+    if !model_manager::is_installed(&id) {
+        return;
+    }
+    std::thread::spawn(move || match local_transcribe::preload(&id) {
+        Ok(ms) => {
+            let _ = storage::append_log("INFO", &format!("Preloaded {} in {ms}ms", id.id()));
+        }
+        Err(e) => {
+            let _ = storage::append_log("WARN", &format!("Preload of {} failed: {e}", id.id()));
+        }
+    });
+}
+
 #[tauri::command]
 fn get_app_settings(
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
@@ -807,6 +866,10 @@ fn update_app_settings(
         if let Err(e) = apply_launch_at_login(next_settings.general.launch_at_login) {
             warnings.push(e);
         }
+    }
+
+    if next_settings.transcription != previous_settings.transcription {
+        preload_local_model(&next_settings.transcription);
     }
 
     for message in &warnings {
@@ -1079,9 +1142,70 @@ fn delete_note(
     db::delete_note(&conn, &id)
 }
 
+const HIDDEN_MODELS_KV_KEY: &str = "hidden_models";
+
+fn read_hidden_models(conn: &rusqlite::Connection) -> Vec<String> {
+    db::kv_get(conn, HIDDEN_MODELS_KV_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_hidden_models(conn: &rusqlite::Connection, ids: &[String]) -> Result<(), String> {
+    let raw = serde_json::to_string(ids).map_err(|e| format!("Failed to encode hidden models: {e}"))?;
+    db::kv_set(conn, HIDDEN_MODELS_KV_KEY, &raw)
+}
+
 #[tauri::command]
-fn list_installed_models() -> Result<Vec<model_manager::InstalledModel>, String> {
-    model_manager::list_installed()
+fn list_installed_models(
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<Vec<model_manager::InstalledModel>, String> {
+    let hidden = db_conn
+        .inner()
+        .lock()
+        .map(|conn| read_hidden_models(&conn))
+        .unwrap_or_default();
+    model_manager::list_installed(&hidden)
+}
+
+/// Remove a catalog model from the picker without touching disk. Only
+/// meaningful for built-ins that aren't downloaded; the entry can be restored.
+#[tauri::command]
+fn hide_model(
+    model_id: String,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let id = model_manager::ModelId::from_str(&model_id)
+        .ok_or_else(|| format!("Unknown model id: {model_id}"))?;
+    if matches!(id, model_manager::ModelId::Custom(_)) {
+        return Err("Custom models are deleted, not hidden".to_string());
+    }
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    let mut hidden = read_hidden_models(&conn);
+    if !hidden.contains(&model_id) {
+        hidden.push(model_id);
+    }
+    write_hidden_models(&conn, &hidden)
+}
+
+#[tauri::command]
+fn unhide_model(
+    model_id: String,
+    db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
+) -> Result<(), String> {
+    let conn = db_conn
+        .inner()
+        .lock()
+        .map_err(|_| "DB lock poisoned".to_string())?;
+    let hidden: Vec<String> = read_hidden_models(&conn)
+        .into_iter()
+        .filter(|h| *h != model_id)
+        .collect();
+    write_hidden_models(&conn, &hidden)
 }
 
 #[tauri::command]
@@ -1095,7 +1219,14 @@ async fn download_model(app: AppHandle, model_id: String) -> Result<(), String> 
 fn delete_model(model_id: String) -> Result<(), String> {
     let id = model_manager::ModelId::from_str(&model_id)
         .ok_or_else(|| format!("Unknown model id: {model_id}"))?;
-    model_manager::delete_model(id)
+    model_manager::delete_model(&id)
+}
+
+/// Add any whisper.cpp GGML model by catalog name (`medium-q5_0`) or direct
+/// URL. Returns the model id; progress arrives on the model-download events.
+#[tauri::command]
+async fn add_custom_model(app: AppHandle, source: String) -> Result<String, String> {
+    model_manager::add_custom_model(app, &source).await
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1201,7 +1332,7 @@ fn save_correction_from_edit(
     edited: String,
     persisted: tauri::State<'_, Arc<Mutex<storage::PersistedState>>>,
     db_conn: tauri::State<'_, Arc<Mutex<rusqlite::Connection>>>,
-) -> Result<Option<db::Correction>, String> {
+) -> Result<Vec<db::Correction>, String> {
     let auto_learn = persisted
         .inner()
         .lock()
@@ -1209,28 +1340,52 @@ fn save_correction_from_edit(
         .map(|s| s.settings.extras.auto_learn_corrections)
         .unwrap_or(true);
     if !auto_learn {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let Some((wrong, right)) =
-        corrections::extract_single_word_correction(&original, &edited)
-    else {
-        return Ok(None);
+    let pairs = match corrections::extract_corrections(&original, &edited) {
+        Ok(pairs) => pairs,
+        Err(reason) => {
+            let _ = storage::append_log(
+                "INFO",
+                &format!("Home edit on session {session_id}: nothing learned ({reason})"),
+            );
+            return Ok(Vec::new());
+        }
     };
-    let correction = db::Correction {
-        id: uuid::Uuid::new_v4().to_string(),
-        dictation_id: dictation_id.unwrap_or_else(|| format!("history-session-{session_id}")),
-        model: model.unwrap_or_else(|| "user-edit".to_string()),
-        wrong_text: wrong,
-        intended_text: right,
-        context_snippet: Some(original.chars().take(200).collect()),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
+    let dictation_id = dictation_id.unwrap_or_else(|| format!("history-session-{session_id}"));
+    let model = model.unwrap_or_else(|| "user-edit".to_string());
+    let context: String = original.chars().take(200).collect();
     let conn = db_conn
         .inner()
         .lock()
         .map_err(|_| "DB lock poisoned".to_string())?;
-    db::insert_correction(&conn, &correction)?;
-    Ok(Some(correction))
+    let mut stored = Vec::with_capacity(pairs.len());
+    for (wrong, right) in pairs {
+        let correction = db::Correction {
+            id: uuid::Uuid::new_v4().to_string(),
+            dictation_id: dictation_id.clone(),
+            model: model.clone(),
+            wrong_text: wrong,
+            intended_text: right,
+            context_snippet: Some(context.clone()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        db::insert_correction(&conn, &correction)?;
+        stored.push(correction);
+    }
+    let _ = storage::append_log(
+        "INFO",
+        &format!(
+            "Learned {} correction(s) from Home edit on session {session_id}: {}",
+            stored.len(),
+            stored
+                .iter()
+                .map(|c| format!("'{}' -> '{}'", c.wrong_text, c.intended_text))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    );
+    Ok(stored)
 }
 
 #[tauri::command]
@@ -1321,6 +1476,10 @@ pub fn run() {
                         }
                     }
                 });
+            }
+
+            if let Ok(state) = persisted.lock() {
+                preload_local_model(&state.settings.transcription);
             }
 
             // Build tray menu
@@ -1810,9 +1969,8 @@ pub fn run() {
                                 // dictation, which saturated CPU/RAM and froze the UI.)
                                 let local_model_id = model_manager::ModelId::from_str(&local_model);
                                 let installed = local_model_id
-                                    .and_then(|id| model_manager::model_path(id).ok())
-                                    .map(|p| p.exists())
-                                    .unwrap_or(false);
+                                    .as_ref()
+                                    .is_some_and(model_manager::is_installed);
                                 let use_local = transcription_mode == "local" && installed;
 
                                 let started = Instant::now();
@@ -2178,6 +2336,9 @@ pub fn run() {
             list_installed_models,
             download_model,
             delete_model,
+            add_custom_model,
+            hide_model,
+            unhide_model,
             list_lab_sessions,
             get_top_mistranscribed,
             list_corrections,
