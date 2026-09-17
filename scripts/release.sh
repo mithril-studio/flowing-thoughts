@@ -57,13 +57,111 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # The DMG bundler (Finder AppleScript) is flaky in non-interactive shells and
 # a failure there would otherwise abort the whole release. Build the app +
 # updater artifacts first, then create the DMG ourselves with hdiutil.
+#
+# Code signing: `bundle.macOS.signingIdentity` is "-" in tauri.conf.json, so
+# this build ad-hoc signs the bundle itself (bundle identifier, bound
+# Info.plist, sealed resources) BEFORE it packs the updater tarball. Do not
+# re-sign the .app after this point: the tarball and its .sig already exist,
+# and updates would then ship different code than the DMG. The assertions
+# below check both.
 npx tauri build --bundles app
 
+# --- Developer ID + notarization: PLACEHOLDER, NOT ENABLED -------------------
+# Open decision for the owner (Apple Developer Program, 99 USD per year). An
+# ad-hoc signature has no stable identity, so macOS asks for every permission
+# again after each update; only a Developer ID fixes that. Tauri signs and
+# notarizes during `tauri build` when these are set, so they would go above
+# the build, not here:
+#
+#   APPLE_CERTIFICATE            base64 of the "Developer ID Application" .p12
+#   APPLE_CERTIFICATE_PASSWORD   password of that .p12
+#   APPLE_SIGNING_IDENTITY       "Developer ID Application: <name> (<TEAMID>)"
+#                                (replaces signingIdentity "-")
+#   and for notarization either
+#   APPLE_API_ISSUER, APPLE_API_KEY, APPLE_API_KEY_PATH   (App Store Connect key)
+#   or
+#   APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
+#
+# Notarization requires the hardened runtime: set bundle.macOS.hardenedRuntime
+# back to true AND add an entitlements file with at least
+# com.apple.security.device.audio-input, or the microphone stops working
+# without any prompt. The DMG below is built by hand, so it would also need
+# its own `xcrun notarytool submit --wait` and `xcrun stapler staple`.
+# -----------------------------------------------------------------------------
+
 BUNDLE_DIR_EARLY="src-tauri/target/release/bundle"
+APP_PATH="$BUNDLE_DIR_EARLY/macos/FlowingThoughts.app"
+UPDATER_TAR="$APP_PATH.tar.gz"
+
+# Release assertions. macOS keys privacy permissions (Microphone,
+# Accessibility, Input Monitoring, System Audio Recording) to the code
+# signature, so a malformed signature or a missing usage description is a
+# broken release even though the app builds and launches here.
+fail() {
+  echo "error: release check failed: $*" >&2
+  exit 1
+}
+
+echo "==> Checking the signed bundle"
+BUNDLE_ID="$(jq -r .identifier src-tauri/tauri.conf.json)"
+[ -d "$APP_PATH" ] || fail "$APP_PATH was not built"
+APP_PLIST="$APP_PATH/Contents/Info.plist"
+APP_BIN="$APP_PATH/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP_PLIST")"
+[ -f "$APP_BIN" ] || fail "main binary not found at $APP_BIN"
+
+codesign --verify --deep --strict --verbose=2 "$APP_PATH" \
+  || fail "codesign --verify --deep --strict does not pass (is bundle.macOS.signingIdentity still \"-\"?)"
+
+# Captured first, then matched: `codesign | grep -q` can die of SIGPIPE under
+# pipefail. The same goes for nm below.
+SIGN_INFO="$(codesign -dvvv "$APP_PATH" 2>&1)"
+SIGN_ID="$(sed -n 's/^Identifier=//p' <<< "$SIGN_INFO")"
+[ "$SIGN_ID" = "$BUNDLE_ID" ] \
+  || fail "signature identifier is '$SIGN_ID', expected the bundle identifier '$BUNDLE_ID'"
+grep -q '^Info.plist entries=' <<< "$SIGN_INFO" \
+  || fail "Info.plist is not bound to the signature"
+
+# Hardened runtime without the audio-input entitlement means macOS refuses
+# the microphone without ever prompting. It is off on purpose until there is
+# a Developer ID (see the placeholder above).
+if grep -q '^CodeDirectory.*runtime' <<< "$SIGN_INFO"; then
+  ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null || true)"
+  grep -q 'com.apple.security.device.audio-input' <<< "$ENTITLEMENTS" \
+    || fail "hardened runtime is on but the com.apple.security.device.audio-input entitlement is missing"
+fi
+
+for KEY in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription; do
+  VALUE="$(plutil -extract "$KEY" raw "$APP_PLIST" 2>/dev/null || true)"
+  [ -n "$VALUE" ] || fail "$KEY is missing from the bundled Info.plist"
+done
+
+# The process tap functions do not exist before macOS 14.4 and the app must
+# still launch on 13.4, so they are resolved with dlsym at runtime. A hard
+# link shows up as an undefined symbol here.
+UNDEFINED_SYMBOLS="$(nm -um "$APP_BIN")" || fail "nm could not read $APP_BIN"
+if grep -q 'ProcessTap' <<< "$UNDEFINED_SYMBOLS"; then
+  grep 'ProcessTap' <<< "$UNDEFINED_SYMBOLS" >&2
+  fail "the binary hard-links ProcessTap symbols and would not launch before macOS 14.4"
+fi
+
+# The updater tarball must hold the same signed code as the DMG.
+[ -f "$UPDATER_TAR" ] || fail "updater tarball not found at $UPDATER_TAR"
+UPDATER_CHECK_DIR="$(mktemp -d)"
+tar -xzf "$UPDATER_TAR" -C "$UPDATER_CHECK_DIR"
+codesign --verify --deep --strict "$UPDATER_CHECK_DIR/FlowingThoughts.app" \
+  || fail "the app inside the updater tarball does not pass codesign --verify"
+APP_CDHASH="$(sed -n 's/^CDHash=//p' <<< "$SIGN_INFO")"
+UPDATER_CDHASH="$(codesign -dvvv "$UPDATER_CHECK_DIR/FlowingThoughts.app" 2>&1 | sed -n 's/^CDHash=//p')"
+rm -rf "$UPDATER_CHECK_DIR"
+[ -n "$APP_CDHASH" ] && [ "$APP_CDHASH" = "$UPDATER_CDHASH" ] \
+  || fail "updater tarball has CDHash '$UPDATER_CDHASH' but the app has '$APP_CDHASH'"
+echo "    signed as $SIGN_ID, CDHash $APP_CDHASH, checks passed"
+
 mkdir -p "$BUNDLE_DIR_EARLY/dmg"
 DMG_OUT="$BUNDLE_DIR_EARLY/dmg/FlowingThoughts_${VERSION}_$(uname -m).dmg"
 STAGE="$(mktemp -d)"
-cp -R "$BUNDLE_DIR_EARLY/macos/FlowingThoughts.app" "$STAGE/"
+cp -R "$APP_PATH" "$STAGE/"
+codesign --verify --deep --strict "$STAGE/FlowingThoughts.app" || fail "the staged copy for the DMG lost its signature"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "FlowingThoughts" -srcfolder "$STAGE" -ov -format UDZO "$DMG_OUT" >/dev/null
 rm -rf "$STAGE"
