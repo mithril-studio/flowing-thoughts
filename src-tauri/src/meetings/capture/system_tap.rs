@@ -42,11 +42,17 @@ pub fn aggregate_owner_pid(uid: &str) -> Option<u32> {
 }
 
 /// Whether the device with `uid` is one of our aggregates that nobody uses
-/// any more: made by this process (a source never keeps one across `start`),
-/// or by a process that is gone.
-pub fn is_leaked_aggregate(uid: &str, own_pid: u32, pid_is_alive: impl Fn(u32) -> bool) -> bool {
+/// any more: made by this process but not in `live` (left by a start that
+/// went wrong), or made by a process that is gone.
+pub fn is_leaked_aggregate(
+    uid: &str,
+    own_pid: u32,
+    live: &[String],
+    pid_is_alive: impl Fn(u32) -> bool,
+) -> bool {
     match aggregate_owner_pid(uid) {
-        Some(pid) => pid == own_pid || !pid_is_alive(pid),
+        Some(pid) if pid == own_pid => !live.iter().any(|l| l == uid),
+        Some(pid) => !pid_is_alive(pid),
         None => false,
     }
 }
@@ -154,9 +160,9 @@ mod imp {
     use std::cell::UnsafeCell;
     use std::ffi::{c_void, CStr};
     use std::ptr::NonNull;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
 
@@ -541,10 +547,23 @@ mod imp {
             .ok_or_else(|| "CFArrayCreate failed".to_string())
     }
 
+    /// UIDs of the aggregates this process has built and not yet destroyed.
+    fn live_aggregates() -> std::sync::MutexGuard<'static, Vec<String>> {
+        static LIVE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        LIVE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Unique in this process, across sources.
+    fn next_aggregate_uid() -> String {
+        static INSTANCE: AtomicU32 = AtomicU32::new(0);
+        let instance = INSTANCE.fetch_add(1, Ordering::Relaxed);
+        format!("{AGGREGATE_UID_PREFIX}{}.{instance}", std::process::id())
+    }
+
     fn aggregate_description(
         tap_uid: &NSString,
         output_uid: &CFString,
-        instance: u32,
+        aggregate_uid: &str,
     ) -> Result<CFRetained<CFDictionary>, String> {
         // SAFETY: every key is a CFString and every value a CF/NS object that
         // outlives the `set_value` call, which retains it.
@@ -561,9 +580,8 @@ mod imp {
             dict_set(&sub_device, kAudioSubDeviceUIDKey, output_uid);
             let sub_devices = array_of_one(&sub_device)?;
 
-            let pid = std::process::id();
             let name = CFString::from_str("FlowingThoughts Meeting Audio");
-            let uid = CFString::from_str(&format!("{AGGREGATE_UID_PREFIX}{pid}.{instance}"));
+            let uid = CFString::from_str(aggregate_uid);
 
             let dict = dict_new()?;
             dict_set(&dict, kAudioAggregateDeviceNameKey, &*name);
@@ -587,7 +605,8 @@ mod imp {
         let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
         for device in hal::all_devices() {
             let Ok(uid) = hal::device_uid(device) else { continue };
-            if is_leaked_aggregate(&uid.to_string(), own_pid, alive) {
+            let live = live_aggregates().clone();
+            if is_leaked_aggregate(&uid.to_string(), own_pid, &live, alive) {
                 // SAFETY: an aggregate device id the HAL just listed.
                 let status = unsafe { AudioHardwareDestroyAggregateDevice(device) };
                 log("INFO", &format!("Meetings: removed a leftover audio aggregate ({})", status_str(status)));
@@ -597,6 +616,7 @@ mod imp {
 
     struct Built {
         aggregate: AudioObjectID,
+        aggregate_uid: String,
         proc_id: AudioDeviceIOProcID,
         ctx: *mut TapCtx,
         output_device: AudioObjectID,
@@ -604,7 +624,7 @@ mod imp {
         format: SourceFormat,
     }
 
-    fn build(tap: &Tap, slot: &Arc<HandlerSlot>, shared: &Arc<Shared>, instance: u32) -> Result<Built, String> {
+    fn build(tap: &Tap, slot: &Arc<HandlerSlot>, shared: &Arc<Shared>) -> Result<Built, String> {
         let output_device = hal::default_output_device()?;
         let output_uid = hal::device_uid(output_device)
             .map_err(|e| format!("The output device has no UID: {}", status_str(e)))?;
@@ -624,16 +644,23 @@ mod imp {
         let non_interleaved = tap_format.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0;
         let tap_buffers = if non_interleaved { tap_channels } else { 1 };
 
-        let description = aggregate_description(&tap.uid, &output_uid, instance)?;
+        let aggregate_uid = next_aggregate_uid();
+        let description = aggregate_description(&tap.uid, &output_uid, &aggregate_uid)?;
         let mut aggregate: AudioObjectID = 0;
+        // Registered before it exists, so that another source starting right
+        // now does not take it for a leftover.
+        live_aggregates().push(aggregate_uid.clone());
+        let forget = |uid: &str| live_aggregates().retain(|live| live != uid);
         // SAFETY: a valid dictionary and out-pointer.
         let status = unsafe { AudioHardwareCreateAggregateDevice(&description, NonNull::from(&mut aggregate)) };
         if status != 0 {
+            forget(&aggregate_uid);
             return Err(format!("Failed to create the audio aggregate: {}", status_str(status)));
         }
         let destroy_aggregate = || {
             // SAFETY: created above, destroyed once.
             unsafe { AudioHardwareDestroyAggregateDevice(aggregate) };
+            forget(&aggregate_uid);
         };
 
         // F1: the IOProc delivers at the aggregate's rate, which follows the
@@ -691,7 +718,7 @@ mod imp {
         *shared.format.lock().unwrap_or_else(|e| e.into_inner()) = Some(format);
         *shared.device_name.lock().unwrap_or_else(|e| e.into_inner()) = output_name;
         device_watch::watch_sample_rate(output_device);
-        Ok(Built { aggregate, proc_id, ctx, output_device, output_rate, format })
+        Ok(Built { aggregate, aggregate_uid, proc_id, ctx, output_device, output_rate, format })
     }
 
     /// Stops and destroys the IOProc and the aggregate. The context goes to
@@ -711,6 +738,7 @@ mod imp {
             let text: Vec<String> = statuses.iter().map(|s| status_str(*s)).collect();
             log("INFO", &format!("Meetings: system audio teardown statuses: {}", text.join(", ")));
         }
+        live_aggregates().retain(|live| *live != built.aggregate_uid);
         retired.push(built.ctx);
     }
 
@@ -724,6 +752,12 @@ mod imp {
         }
     }
 
+    /// Nothing runs I/O on the output device, not even our aggregate: nothing
+    /// is playing on it, and the IOProc is not being called.
+    fn output_is_idle(built: &Built) -> bool {
+        hal::device_is_running_somewhere(built.output_device) == Some(false)
+    }
+
     /// Whether a device event needs a rebuild at all: the default output often
     /// flaps away and back.
     fn still_valid(built: &Built, delivering: bool) -> bool {
@@ -732,7 +766,8 @@ mod imp {
             && hal::nominal_sample_rate(built.output_device) == built.output_rate
     }
 
-    /// "Is another process playing audio right now?", rationed.
+    /// "Is another process playing audio right now?", rationed. It feeds the
+    /// `SilenceDetector`; nothing else waits for it.
     ///
     /// Found on hardware (built-in speakers, macOS 26): while no process plays
     /// anything the output device does not run and the IOProc does not fire at
@@ -749,21 +784,20 @@ mod imp {
         fn new(output_device: Option<AudioObjectID>) -> Self {
             let now = Instant::now();
             let mut probe = Self { playing: None, checked_at: now, full_checked_at: now };
-            probe.check(now, output_device, true);
+            probe.check(now, output_device);
             probe
         }
 
-        fn is_playing(&self) -> bool {
-            self.playing == Some(true)
-        }
-
-        fn check(&mut self, now: Instant, output_device: Option<AudioObjectID>, full: bool) {
+        fn check(&mut self, now: Instant, output_device: Option<AudioObjectID>) {
             // An output device nobody runs means nobody plays on it: one cheap
             // read. The process list is only walked when that is not the
-            // answer, or now and then for audio on another device.
+            // answer, and now and then for audio that plays on another device
+            // (every time, once that was the case).
             let device_idle = output_device.and_then(hal::device_is_running_somewhere) == Some(false);
-            let full_is_due = now.duration_since(self.full_checked_at) >= FULL_CHECK_WHILE_IDLE;
-            if device_idle && !full && !full_is_due && self.playing != Some(true) {
+            let full_is_due = self.playing.is_none()
+                || self.playing == Some(true)
+                || now.duration_since(self.full_checked_at) >= FULL_CHECK_WHILE_IDLE;
+            if device_idle && !full_is_due {
                 self.playing = Some(false);
             } else {
                 self.playing = hal::other_process_running_output();
@@ -774,7 +808,7 @@ mod imp {
 
         fn check_if_older(&mut self, now: Instant, max_age: Duration, output_device: Option<AudioObjectID>) {
             if now.duration_since(self.checked_at) >= max_age {
-                self.check(now, output_device, false);
+                self.check(now, output_device);
             }
         }
     }
@@ -788,7 +822,6 @@ mod imp {
         ready: Sender<Result<SourceFormat, String>>,
     ) {
         let mut ready = Some(ready);
-        let mut instance = 0u32;
         let mut retired: Vec<*mut TapCtx> = Vec::new();
         let started = Instant::now();
         destroy_leaked_aggregates();
@@ -824,7 +857,7 @@ mod imp {
                 return;
             }
         };
-        let mut built = match build(tap.as_ref().expect("just created"), &slot, &shared, instance) {
+        let mut built = match build(tap.as_ref().expect("just created"), &slot, &shared) {
             Ok(built) => Some(built),
             Err(e) => {
                 log("ERROR", &format!("Meetings: system audio: {e}"));
@@ -846,13 +879,15 @@ mod imp {
         );
 
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), Instant::now());
-        // Nothing is playing: there is no first callback to wait for.
-        let mut probe = PlayingProbe::new(built.as_ref().map(|b| b.output_device));
-        if !probe.is_playing() {
+        // The output device is not running, so nothing plays on it and the
+        // IOProc will not fire (see `PlayingProbe`): there is no first
+        // callback to wait for.
+        if built.as_ref().is_some_and(output_is_idle) {
             if let (Some(ready), Some(built)) = (ready.take(), built.as_ref()) {
                 let _ = ready.send(Ok(built.format));
             }
         }
+        let mut probe = PlayingProbe::new(built.as_ref().map(|b| b.output_device));
         let mut seen_callbacks = shared.callbacks.load(Ordering::Relaxed);
         // When the current build last delivered. `None`: not yet.
         let mut last_progress: Option<Instant> = None;
@@ -902,24 +937,20 @@ mod imp {
                     }
                 }
             } else {
-                // Not delivering. Whether that matters depends on whether
-                // anything is playing: ask while a decision hangs on it.
-                let output_device = built.as_ref().map(|b| b.output_device);
+                // Callbacks stopped while the output device runs: a stall.
+                // While it does not run there is nothing to deliver.
                 let stalled = planner.is_running()
                     && last_progress.is_some_and(|at| now.duration_since(at) > STALL_TIMEOUT);
-                if planner.is_awaiting_first_callback() {
-                    probe.check_if_older(now, TICK, output_device);
-                } else if stalled {
-                    probe.check_if_older(now, OBSERVE_EVERY, output_device);
-                }
-                if stalled && probe.is_playing() {
-                    log("WARN", "Meetings: system audio stalled while audio is playing; rebuilding");
+                if stalled && !built.as_ref().is_some_and(output_is_idle) {
+                    log("WARN", "Meetings: system audio stalled; rebuilding");
                     slot.discontinuity(Discontinuity::Stalled, clock::host_now_ns());
                     event_at.get_or_insert(now);
                     planner.on_event(now, RebuildReason::Stalled);
                 }
             }
-            let idle = !probe.is_playing();
+            // An idle tap is neither reported nor retried. One cheap read,
+            // and only while the answer decides something.
+            let idle = planner.is_waiting_for_callbacks() && built.as_ref().is_some_and(output_is_idle);
 
             match planner.poll(now, Hold { settle: false, retry: idle }) {
                 Action::Wait => {}
@@ -973,9 +1004,8 @@ mod imp {
                     if tap.is_none() {
                         tap = create_tap(api).map_err(|e| log("WARN", &format!("Meetings: {e}"))).ok();
                     }
-                    instance += 1;
                     let result = match tap.as_ref() {
-                        Some(tap) => build(tap, &slot, &shared, instance),
+                        Some(tap) => build(tap, &slot, &shared),
                         None => Err("there is no system audio tap".to_string()),
                     };
                     seen_callbacks = shared.callbacks.load(Ordering::Relaxed);
@@ -1002,9 +1032,9 @@ mod imp {
                             // With nothing playing there is no first callback
                             // to wait for: the output side is as ready as it
                             // gets, and the microphone need not wait.
-                            probe.check(Instant::now(), built.as_ref().map(|b| b.output_device), true);
-                            if !probe.is_playing() {
+                            if built.as_ref().is_some_and(output_is_idle) {
                                 output_gate().settle(gate_generation);
+                                event_at = None;
                             }
                         }
                         Err(e) => {
@@ -1062,7 +1092,7 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::super::super::test_support::CapturingHandler;
+        use super::super::super::test_support::{hardware_lock, CapturingHandler};
         use super::*;
 
         fn our_aggregates() -> usize {
@@ -1084,6 +1114,7 @@ mod imp {
         #[test]
         #[ignore = "needs audio hardware, the System Audio Recording permission, and plays a sound"]
         fn five_seconds_from_the_tap_while_afplay_runs_are_not_all_zeros() {
+            let _hardware = hardware_lock();
             let handler = CapturingHandler::default();
             let mut tap = SystemTapSource::new().expect("process taps are supported");
             let monitor = tap.monitor();
@@ -1124,6 +1155,7 @@ mod imp {
         #[test]
         #[ignore = "needs audio hardware, the System Audio Recording permission, and plays a sound"]
         fn a_device_event_rebuilds_an_idle_tap_but_not_one_that_still_delivers() {
+            let _hardware = hardware_lock();
             let handler = CapturingHandler::default();
             let mut tap = SystemTapSource::new().expect("process taps are supported");
             let monitor = tap.monitor();
@@ -1175,6 +1207,7 @@ mod imp {
         #[test]
         #[ignore = "needs audio hardware"]
         fn start_and_stop_leave_no_aggregate_behind() {
+            let _hardware = hardware_lock();
             for _ in 0..2 {
                 let mut tap = SystemTapSource::new().expect("process taps are supported");
                 let monitor = tap.monitor();
@@ -1217,12 +1250,14 @@ mod tests {
 
     #[test]
     fn leftovers_are_ours_or_a_dead_process_never_a_live_one() {
-        let uid = |pid: u32| format!("{AGGREGATE_UID_PREFIX}{pid}.0");
+        let uid = |pid: u32, n: u32| format!("{AGGREGATE_UID_PREFIX}{pid}.{n}");
         let alive = |pid: u32| pid == 200;
-        assert!(is_leaked_aggregate(&uid(100), 100, alive), "this process: left by an earlier start");
-        assert!(is_leaked_aggregate(&uid(300), 100, alive), "a process that is gone");
-        assert!(!is_leaked_aggregate(&uid(200), 100, alive), "a second copy of the app that is running");
-        assert!(!is_leaked_aggregate("AppleUSBAudioEngine:1", 100, alive));
+        let live = vec![uid(100, 1)];
+        assert!(is_leaked_aggregate(&uid(100, 0), 100, &live, alive), "this process: left by an earlier start");
+        assert!(!is_leaked_aggregate(&uid(100, 1), 100, &live, alive), "this process: in use right now");
+        assert!(is_leaked_aggregate(&uid(300, 0), 100, &live, alive), "a process that is gone");
+        assert!(!is_leaked_aggregate(&uid(200, 0), 100, &live, alive), "a second copy of the app that is running");
+        assert!(!is_leaked_aggregate("AppleUSBAudioEngine:1", 100, &live, alive));
     }
 
     #[test]

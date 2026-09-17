@@ -322,6 +322,13 @@ pub(crate) mod test_support {
 
     use crate::meetings::types::{AudioFrames, AudioSourceHandler, Discontinuity, SourceFormat};
 
+    /// The hardware tests share one microphone, one output device and one
+    /// pair of ears: one at a time, however `cargo test` is run.
+    pub fn hardware_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[derive(Debug, Default)]
     pub struct Captured {
         pub buffers: usize,
@@ -482,6 +489,7 @@ mod tests {
     #[test]
     #[ignore = "needs a microphone, audio output, both permissions, and plays a sound"]
     fn both_sources_record_through_the_recorder_on_one_timeline() {
+        let _hardware = super::test_support::hardware_lock();
         use crate::meetings::recording::{start_track, RecorderConfig};
         use crate::meetings::types::{SampleSink, TARGET_SAMPLE_RATE};
         use std::sync::Mutex;

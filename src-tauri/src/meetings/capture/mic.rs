@@ -593,6 +593,7 @@ mod tests {
     #[test]
     #[ignore = "needs a microphone and the Microphone permission"]
     fn five_seconds_from_the_microphone_are_not_all_zeros() {
+        let _hardware = super::super::test_support::hardware_lock();
         let handler = CapturingHandler::default();
         let mut mic = open();
         let before = clock::host_now_ns();
@@ -622,6 +623,7 @@ mod tests {
     #[test]
     #[ignore = "needs a microphone and the Microphone permission"]
     fn two_streams_on_the_same_microphone_coexist() {
+        let _hardware = super::super::test_support::hardware_lock();
         // What a dictation during a meeting amounts to: a second cpal input
         // stream on the device, opened and closed while ours keeps running.
         let handler = CapturingHandler::default();
