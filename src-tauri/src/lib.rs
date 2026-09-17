@@ -218,7 +218,10 @@ fn maybe_learn_from_pending_capture(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_withhold_injection, MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS};
+    use super::{
+        sanitize_settings, should_withhold_injection, storage, MAX_AUTO_DELETE_AUDIO_DAYS,
+        MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS,
+    };
 
     #[test]
     fn injection_guard_allows_normal_dictations() {
@@ -233,6 +236,67 @@ mod tests {
         assert!(should_withhold_injection(29_110, 2_760_000));
         assert!(should_withhold_injection(MAX_AUTO_INJECT_CHARS + 1, 10_000));
         assert!(should_withhold_injection(500, MAX_AUTO_INJECT_MS + 1));
+    }
+
+    #[test]
+    fn meetings_settings_default_to_off_and_follow_the_dictation_model() {
+        let mut settings = storage::AppSettings::default();
+        settings.transcription.local_model = "whisper-large-v3-turbo-q5".to_string();
+        sanitize_settings(&mut settings);
+        assert!(!settings.meetings.enabled);
+        assert!(!settings.meetings.summary_enabled);
+        assert_eq!(settings.meetings.model, "whisper-large-v3-turbo-q5");
+        assert_eq!(settings.meetings.language, "auto");
+        assert_eq!(settings.meetings.auto_delete_audio_days, 0);
+    }
+
+    #[test]
+    fn meetings_settings_are_clamped() {
+        let mut settings = storage::AppSettings::default();
+        settings.meetings.model = "../../etc/passwd".to_string();
+        settings.meetings.language = "de".to_string();
+        settings.meetings.summary_model = "   ".to_string();
+        settings.meetings.auto_delete_audio_days = 100_000;
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.meetings.model, "whisper-small-q5");
+        assert_eq!(settings.meetings.language, "auto");
+        assert_eq!(settings.meetings.summary_model, "openai/gpt-4o-mini");
+        assert_eq!(settings.meetings.auto_delete_audio_days, MAX_AUTO_DELETE_AUDIO_DAYS);
+    }
+
+    #[test]
+    fn meetings_model_is_never_parakeet() {
+        // Long-form decoding needs Whisper timestamps; Parakeet has none.
+        let mut settings = storage::AppSettings::default();
+        settings.transcription.local_model = "parakeet-tdt-0.6b-v3".to_string();
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.transcription.local_model, "parakeet-tdt-0.6b-v3");
+        assert_eq!(settings.meetings.model, "whisper-small-q5");
+
+        settings.meetings.model = "parakeet-tdt-0.6b-v3".to_string();
+        sanitize_settings(&mut settings);
+        assert_eq!(settings.meetings.model, "whisper-small-q5");
+    }
+
+    #[test]
+    fn a_valid_meetings_choice_survives_sanitizing() {
+        let mut settings = storage::AppSettings::default();
+        settings.meetings.enabled = true;
+        settings.meetings.model = "whisper-base-q5".to_string();
+        settings.meetings.language = "nl".to_string();
+        settings.meetings.auto_delete_audio_days = 30;
+        sanitize_settings(&mut settings);
+        assert!(settings.meetings.enabled);
+        assert_eq!(settings.meetings.model, "whisper-base-q5");
+        assert_eq!(settings.meetings.language, "nl");
+        assert_eq!(settings.meetings.auto_delete_audio_days, 30);
+    }
+
+    #[test]
+    fn settings_saved_before_meetings_existed_still_load() {
+        let raw = r#"{"coaching":{"enabled":true,"model":"x","batch_size":10}}"#;
+        let parsed: storage::AppSettings = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.meetings, storage::MeetingsSettings::default());
     }
 
 }
@@ -436,6 +500,8 @@ struct AppSettingsUpdateResult {
     warnings: Vec<String>,
 }
 
+const MAX_AUTO_DELETE_AUDIO_DAYS: u32 = 365;
+
 fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.shortcuts.preset != "cmd_shift_space" && settings.shortcuts.preset != "fn" {
         settings.shortcuts.preset = "fn".to_string();
@@ -465,6 +531,30 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
         settings.coaching.model = "openai/gpt-4o-mini".to_string();
     }
     settings.coaching.batch_size = settings.coaching.batch_size.clamp(5, 100);
+
+    // Meetings decode long-form through the Whisper seam (timestamps, abort
+    // callback), so the model must be a Whisper one. Unset or invalid follows
+    // the dictation model; if that is Parakeet, fall back to the default.
+    let is_whisper = |id: &str| {
+        model_manager::ModelId::from_str(id)
+            .is_some_and(|m| m.engine() == model_manager::Engine::Whisper)
+    };
+    if !is_whisper(&settings.meetings.model) {
+        settings.meetings.model = if is_whisper(&settings.transcription.local_model) {
+            settings.transcription.local_model.clone()
+        } else {
+            "whisper-small-q5".to_string()
+        };
+    }
+    let valid_meeting_languages = ["auto", "nl", "en"];
+    if !valid_meeting_languages.contains(&settings.meetings.language.as_str()) {
+        settings.meetings.language = "auto".to_string();
+    }
+    if settings.meetings.summary_model.trim().is_empty() {
+        settings.meetings.summary_model = "openai/gpt-4o-mini".to_string();
+    }
+    settings.meetings.auto_delete_audio_days =
+        settings.meetings.auto_delete_audio_days.min(MAX_AUTO_DELETE_AUDIO_DAYS);
 }
 
 fn apply_window_movable(window: &WebviewWindow, movable: bool) {

@@ -151,6 +151,39 @@ impl Default for CoachingSettings {
     }
 }
 
+/// Meeting recording and transcription. Off by default; the Meetings tab
+/// stays hidden until the user turns it on.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MeetingsSettings {
+    pub enabled: bool,
+    /// Local model for meeting transcription. Empty means "not chosen yet":
+    /// `sanitize_settings` fills in the dictation model.
+    pub model: String,
+    /// `auto`, `nl` or `en`. Auto detects once per track.
+    pub language: String,
+    /// Opt-in cloud summary (OpenRouter, the user's own key). Even when on,
+    /// each summary still asks before a transcript leaves the machine.
+    pub summary_enabled: bool,
+    pub summary_model: String,
+    /// Delete a meeting's audio this many days after it was transcribed.
+    /// 0 keeps audio until the user deletes it.
+    pub auto_delete_audio_days: u32,
+}
+
+impl Default for MeetingsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: String::new(),
+            language: "auto".to_string(),
+            summary_enabled: false,
+            summary_model: "openai/gpt-4o-mini".to_string(),
+            auto_delete_audio_days: 0,
+        }
+    }
+}
+
 impl Default for ExtrasSettings {
     fn default() -> Self {
         Self {
@@ -182,6 +215,8 @@ pub struct AppSettings {
     pub transcription: TranscriptionSettings,
     #[serde(default)]
     pub coaching: CoachingSettings,
+    #[serde(default)]
+    pub meetings: MeetingsSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

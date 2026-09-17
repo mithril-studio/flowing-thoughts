@@ -36,6 +36,21 @@ export interface AppSettings {
     model: string;
     batch_size: number;
   };
+  meetings: MeetingsSettings;
+}
+
+export type MeetingLanguage = "auto" | "nl" | "en";
+
+/** Mirrors `MeetingsSettings` in src-tauri/src/storage.rs. */
+export interface MeetingsSettings {
+  enabled: boolean;
+  /** A Whisper model id. The backend fills in the dictation model when unset. */
+  model: string;
+  language: MeetingLanguage | string;
+  summary_enabled: boolean;
+  summary_model: string;
+  /** Delete audio this many days after transcription. 0 keeps it. */
+  auto_delete_audio_days: number;
 }
 
 export interface AppSettingsUpdateResult {
@@ -80,5 +95,13 @@ export const defaultAppSettings: AppSettings = {
     enabled: false,
     model: "openai/gpt-4o-mini",
     batch_size: 20,
+  },
+  meetings: {
+    enabled: false,
+    model: "whisper-small-q5",
+    language: "auto",
+    summary_enabled: false,
+    summary_model: "openai/gpt-4o-mini",
+    auto_delete_audio_days: 0,
   },
 };
