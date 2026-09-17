@@ -14,7 +14,7 @@ Free, open source voice dictation for macOS. Hold a key, speak, release. Your wo
 3. Follow the setup: download the speech model (one time), grant **Accessibility** and **Input Monitoring**, and run the injection test.
 4. Hold `Fn`, speak, release.
 
-Prefer cloud transcription? Bring your own Groq or OpenAI API key in Settings.
+Prefer cloud transcription? Bring your own Groq or OpenAI API key in Settings. Audio is only uploaded when you select the API provider there; local mode never falls back to the cloud, even with a key saved.
 
 ## How it works
 

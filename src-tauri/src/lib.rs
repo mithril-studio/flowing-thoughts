@@ -1777,11 +1777,11 @@ pub fn run() {
                                 let installed = local_model_id
                                     .as_ref()
                                     .is_some_and(model_manager::is_installed);
-                                let use_local = transcription_mode == "local" && installed;
+                                let route = pipeline::choose_route(&transcription_mode, installed);
 
                                 let started = Instant::now();
                                 let (primary_label, transcript_result): (String, Result<String, String>) =
-                                    if use_local {
+                                    if route == pipeline::Route::Local {
                                         let id = local_model_id.unwrap();
                                         let result = local_transcribe::transcribe_local(
                                             id,
@@ -1792,9 +1792,9 @@ pub fn run() {
                                         .await
                                         .map(|(text, _latency)| text);
                                         (local_model.clone(), result)
-                                    } else if transcription_mode == "local"
-                                        && runtime_api_key.is_none()
-                                    {
+                                    } else if route == pipeline::Route::LocalModelMissing {
+                                        // Local mode never uploads audio, whatever
+                                        // API keys happen to be configured.
                                         (
                                             local_model.clone(),
                                             Err(format!(
@@ -1802,9 +1802,8 @@ pub fn run() {
                                             )),
                                         )
                                     } else {
-                                        // Cloud path: chosen explicitly, or fallback
-                                        // because the local model isn't installed but
-                                        // an API key is configured.
+                                        // Cloud path: only when the user explicitly
+                                        // selected the API provider. Never a fallback.
                                         let label = match provider {
                                             storage::Provider::Groq => "groq-api".to_string(),
                                             storage::Provider::Openai => "openai-api".to_string(),

@@ -73,6 +73,9 @@ Hotkey (CGEventTap, global)
 
 ### `src-tauri/src/transcribe.rs`
 - Optional cloud path: Groq (`whisper-large-v3-turbo`) or OpenAI (`whisper-1`)
+- Used only when the user explicitly selects the API provider. Local mode
+  never falls back to it: a missing local model is a `pipeline-error`, even
+  when an API key is configured (`pipeline::choose_route`)
 - Retries once on 429/5xx
 
 ### `src-tauri/src/corrections.rs` + `ax_snapshot.rs`
@@ -89,8 +92,9 @@ Hotkey (CGEventTap, global)
 - Clipboard-paste injection with clipboard preservation
 
 ### `src-tauri/src/pipeline.rs`
-- The pure stages of a dictation: capture gate (tap/silence), vocabulary
-  prompt, transcript filters (marker/credit sanitizer, prompt-echo, five-word
+- The pure stages of a dictation: capture gate (tap/silence), transcription
+  route (local, cloud, or "model missing"), vocabulary prompt, transcript
+  filters (marker/credit sanitizer, prompt-echo, five-word
   floor) and finalisation (developer dictionary, learned corrections)
 - Called by the live session in `lib.rs` *and* by the eval harness, so
   measured results describe what dictation really does
