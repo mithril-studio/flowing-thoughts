@@ -95,6 +95,9 @@ RELEASE_SIG="${RELEASE_TAR}.sig"
 cp "$APP_TAR" "$BUNDLE_DIR/$RELEASE_TAR"
 cp "$APP_SIG" "$BUNDLE_DIR/$RELEASE_SIG"
 
+# No here-strings below: `<<<` appends a newline, and the updater rejects a
+# signature that ends in one ("Invalid symbol 10, offset 416").
+#
 # The file must literally be named latest.json — `gh release upload file#label`
 # only changes the display label, while the updater resolves assets by name.
 LATEST_JSON_DIR="$(mktemp -d)"
@@ -102,11 +105,11 @@ LATEST_JSON="$LATEST_JSON_DIR/latest.json"
 cat > "$LATEST_JSON" <<EOF
 {
   "version": "${VERSION}",
-  "notes": $(jq -Rs . <<< "${NOTES:-Release ${TAG}}"),
+  "notes": $(printf '%s' "${NOTES:-Release ${TAG}}" | jq -Rs .),
   "pub_date": "${PUB_DATE}",
   "platforms": {
     "darwin-${RUST_TARGET}": {
-      "signature": $(jq -Rs . <<< "$SIGNATURE"),
+      "signature": $(printf '%s' "$SIGNATURE" | jq -Rs .),
       "url": "https://github.com/${RELEASES_REPO}/releases/download/${TAG}/${RELEASE_TAR}"
     }
   }

@@ -1259,6 +1259,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The update banner relaunches the app after installing.
+        .plugin(tauri_plugin_process::init())
         .manage(session_state.clone())
         .manage(persisted.clone())
         .manage(hotkey_mode.clone())
