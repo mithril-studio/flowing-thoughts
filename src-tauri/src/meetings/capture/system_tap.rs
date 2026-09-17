@@ -90,17 +90,21 @@ impl SystemAudioMonitor {
         self.0.echo_risk.load(Ordering::Relaxed)
     }
 
-    /// Audio callbacks so far.
+    /// Audio callbacks so far. The three counters below are what the hardware
+    /// tests assert on; the session only needs the notice and the echo risk.
+    #[cfg(test)]
     pub fn callbacks(&self) -> u64 {
         self.0.callbacks.load(Ordering::Relaxed)
     }
 
     /// Whether anything but digital silence has arrived yet.
+    #[cfg(test)]
     pub fn heard_audio(&self) -> bool {
         self.0.nonzero_callbacks.load(Ordering::Relaxed) > 0
     }
 
     /// Rebuilds after the initial build (device changes, retries).
+    #[cfg(test)]
     pub fn rebuilds(&self) -> u64 {
         self.0.rebuilds.load(Ordering::Relaxed)
     }

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use rusqlite::{params, Connection, Row};
 
 use super::super::types::{JobKind, JobProgress, JobStatus};
-use super::{enum_col, execute, expect_found, new_id, now, query_all, query_opt, u32_col};
+use super::{enum_col, execute, new_id, now, query_all, query_opt, u32_col};
 
 #[derive(Debug, Clone)]
 pub struct NewJob {
@@ -123,6 +123,7 @@ pub fn get_job(conn: &Connection, job_id: &str) -> Result<Option<JobRow>, String
 }
 
 /// The job `claim_next_job` would take, without taking it.
+#[cfg(test)] // the worker claims (`claim_next_job`); only the tests peek
 pub fn next_queued_job(conn: &Connection) -> Result<Option<JobRow>, String> {
     query_opt(
         conn,
@@ -205,32 +206,6 @@ pub fn finish_job(conn: &Connection, job_id: &str) -> Result<bool, String> {
 /// `running` to `failed`. `false` when the job was no longer `running`.
 pub fn fail_job(conn: &Connection, job_id: &str, error: &str) -> Result<bool, String> {
     settle_job(conn, job_id, JobStatus::Failed, Some(error))
-}
-
-/// Sets any status from any status, for the moves the worker's own functions
-/// do not cover (cancelling, retrying a failed job by hand). A final status
-/// stamps `finished_at`; going back to `queued` clears the run's timestamps.
-pub fn set_job_status(
-    conn: &Connection,
-    job_id: &str,
-    status: JobStatus,
-    error: Option<&str>,
-) -> Result<(), String> {
-    let changed = execute(
-        conn,
-        "set job status",
-        "UPDATE jobs
-            SET status = ?2,
-                error = ?3,
-                started_at = CASE WHEN ?2 = 'queued' THEN NULL
-                                  WHEN ?2 = 'running' THEN COALESCE(started_at, ?4)
-                                  ELSE started_at END,
-                finished_at = CASE WHEN ?2 IN ('done', 'failed', 'cancelled') THEN ?4 END,
-                updated_at = ?4
-          WHERE id = ?1",
-        params![job_id, status.as_str(), error, now()],
-    )?;
-    expect_found(changed, "Job", job_id)
 }
 
 /// Cancels the meeting's `queued` and `running` jobs, before its audio or the

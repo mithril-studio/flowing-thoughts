@@ -5,6 +5,12 @@
 //! nothing has to be written per segment until diarization splits "Them"
 //! into people. The rest of this file is the CRUD that stage needs.
 
+// v1 only seeds and lists the track speakers. The rest is for diarization and
+// per-person labels, which the plan schedules right after v1; the segment
+// queries already honour `segment_speakers`. Kept, and covered by
+// `store/tests.rs`, rather than rebuilt then.
+#![allow(dead_code)]
+
 use rusqlite::{params, Connection, Row};
 
 use super::super::types::{Segment, Speaker, SpeakerSource, TrackKind};

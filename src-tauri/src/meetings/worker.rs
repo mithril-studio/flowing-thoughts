@@ -34,7 +34,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use tauri::{AppHandle, Manager};
 
-use super::echo::{self, EchoCandidate};
+use super::echo;
 use super::longform::{
     self, PlannedWindow, SileroDetector, SpeechDetector, WhisperDecoder, WindowDecoder,
     WindowOutcome,
@@ -43,7 +43,7 @@ use super::recording::{self, log, ChunkTrackAudio};
 use super::store::{self, JobRow, WindowRow};
 use super::types::{
     JobKind, JobProgress, JobStatus, MeetingChange, MeetingStatus, MeetingTrack, RunStatus,
-    Segment, SuppressedReason, TrackAudio, TrackKind, WindowStatus,
+    TrackAudio, WindowStatus,
 };
 use super::{events, jobs, PersistedHandle};
 use crate::inference_gate;
@@ -608,11 +608,9 @@ impl<H: Host> Worker<H> {
         let note = (counts.failed > 0).then(|| {
             format!("{} of {} parts could not be transcribed.", counts.failed, counts.total)
         });
-        let echoes = echo_segment_ids(&store::list_segments(conn, meeting_id, Some(run_id))?);
+        let mut echoes_flagged = 0;
         store::transaction(conn, || {
-            if !echoes.is_empty() {
-                store::flag_segments(conn, &echoes, SuppressedReason::Echo)?;
-            }
+            echoes_flagged = echo::flag_run_echoes(conn, meeting_id, run_id)?.flagged;
             store::set_run_status(conn, run_id, RunStatus::Done, note.as_deref())?;
             store::set_active_run(conn, meeting_id, run_id)?;
             store::set_meeting_status(conn, meeting_id, MeetingStatus::Ready, None)?;
@@ -623,7 +621,7 @@ impl<H: Host> Worker<H> {
         })?;
         progress.status = JobStatus::Done;
         host.job_progress(&progress);
-        if !takes_over || transcript_unannounced || !echoes.is_empty() {
+        if !takes_over || transcript_unannounced || echoes_flagged > 0 {
             host.meeting_updated(meeting_id, MeetingChange::Transcript);
         }
         host.meeting_updated(meeting_id, MeetingChange::Status);
@@ -716,25 +714,6 @@ fn planned_error(conn: &Connection, run_id: &str) -> Option<String> {
 /// The echo pass: mic segments that repeat what the system track said. Only
 /// segments nothing else flagged are compared, and only when both tracks
 /// have some. `echo.rs` decides; an empty answer (also its stub's) is a skip.
-fn echo_segment_ids(segments: &[Segment]) -> Vec<String> {
-    let of = |kind: TrackKind| -> Vec<EchoCandidate> {
-        segments
-            .iter()
-            .filter(|s| s.track_kind == kind && s.suppressed_reason.is_none())
-            .map(|s| EchoCandidate {
-                segment_id: s.id.clone(),
-                start_ms: s.start_ms,
-                end_ms: s.end_ms,
-                text: s.text.clone(),
-            })
-            .collect()
-    };
-    let (mic, system) = (of(TrackKind::Mic), of(TrackKind::System));
-    if mic.is_empty() || system.is_empty() {
-        return Vec::new();
-    }
-    echo::find_echo_segments(&mic, &system)
-}
 
 // ---------------------------------------------------------------------------
 // Test support, shared with `jobs.rs`
@@ -865,6 +844,7 @@ mod tests {
 
     use super::test_support::{new_meeting, TestDb, TestMeeting};
     use super::*;
+    use crate::meetings::types::TrackKind;
     use crate::local_transcribe::TranscriptSegment;
     use crate::meetings::longform::{DecodeResult, LevelDetector, MemoryTrackAudio};
     use crate::meetings::types::{MeetingLanguage, RetranscribeOptions};

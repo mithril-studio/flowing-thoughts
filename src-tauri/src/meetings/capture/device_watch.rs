@@ -26,6 +26,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::meetings::echo::output_has_echo_risk;
+
 /// Why a source rebuilds. Only used for logs and status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildReason {
@@ -273,17 +275,13 @@ pub fn output_gate() -> &'static OutputGate {
     &GATE
 }
 
-const TRANSPORT_BUILT_IN: u32 = u32::from_be_bytes(*b"bltn");
-const DATA_SOURCE_HEADPHONES: u32 = u32::from_be_bytes(*b"hdpn");
-
 /// Built-in output that is not the headphone jack. On Macs where the jack is
-/// a data source of the one built-in device it reads `'hdpn'`; where it is a
-/// device of its own it is named "External Headphones".
+/// a data source of the one built-in device it reads `'hdpn'`, which is
+/// `echo::output_has_echo_risk`'s decision; where it is a device of its own
+/// it is named "External Headphones".
 pub fn is_builtin_speakers(transport: Option<u32>, data_source: Option<u32>, name: Option<&str>) -> bool {
-    if transport != Some(TRANSPORT_BUILT_IN) || data_source == Some(DATA_SOURCE_HEADPHONES) {
-        return false;
-    }
-    !name.is_some_and(|n| n.to_ascii_lowercase().contains("headphone"))
+    transport.is_some_and(|transport| output_has_echo_risk(transport, data_source))
+        && !name.is_some_and(|n| n.to_ascii_lowercase().contains("headphone"))
 }
 
 /// Whether the current default output is the built-in speakers: the session
@@ -725,6 +723,7 @@ mod tests {
 
     #[test]
     fn echo_risk_means_built_in_speakers_only() {
+        use crate::meetings::echo::{DATA_SOURCE_HEADPHONES, TRANSPORT_BUILT_IN};
         let builtin = Some(TRANSPORT_BUILT_IN);
         let speakers = Some(u32::from_be_bytes(*b"ispk"));
         let bluetooth = Some(u32::from_be_bytes(*b"blue"));

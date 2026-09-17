@@ -135,7 +135,8 @@ fn recover_track_dir(track_dir: &Path) -> Result<RecoveredTrack, String> {
 mod tests {
     use super::super::chunk_writer::test_support::FakeLedger;
     use super::super::test_support::TempDir;
-    use super::super::{ChunkWriter, ChunkWriterConfig};
+    use super::super::chunk_writer::ChunkWriter;
+    use super::super::ChunkWriterConfig;
     use super::*;
     use crate::meetings::types::SampleSink;
     use std::io::Write;

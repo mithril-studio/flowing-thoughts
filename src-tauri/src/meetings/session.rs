@@ -612,7 +612,7 @@ impl Session {
         // The microphone first, and only then the tap: the other way round
         // stalls the HAL for seconds with a Bluetooth headset (spike F2).
         let mut tracks: Vec<LiveTrack> = Vec::new();
-        match self.open_track(&meeting, TrackKind::Mic, self.env.open_mic()) {
+        match self.open_track(&meeting, self.env.open_mic()) {
             Ok(track) => tracks.push(track),
             Err(e) => {
                 let message = format!("The microphone could not be started: {e}");
@@ -632,7 +632,7 @@ impl Session {
 
         let mut monitor: Option<Box<dyn SystemMonitor>> = None;
         let tap = self.env.open_system_tap().and_then(|opened| {
-            let track = self.open_track(&meeting, TrackKind::System, opened.source)?;
+            let track = self.open_track(&meeting, opened.source)?;
             Ok((track, opened.monitor))
         });
         match tap {
@@ -684,9 +684,9 @@ impl Session {
     fn open_track(
         &self,
         meeting: &ActiveMeeting,
-        kind: TrackKind,
         mut source: Box<dyn AudioSource>,
     ) -> Result<LiveTrack, String> {
+        let kind = source.kind();
         let track_id = match kind {
             TrackKind::Mic => &meeting.mic_track_id,
             TrackKind::System => &meeting.system_track_id,
@@ -996,12 +996,13 @@ pub(crate) struct RecoveredMeeting {
     pub queued: bool,
 }
 
-/// Nothing can be recording when the app has just started. Every meeting
-/// still `recording` or `paused` becomes `interrupted`; its open chunks are
-/// repaired from the files (`recording::recovery`), its end and duration are
-/// filled in, and whatever audio survived is queued for transcription, which
-/// moves the meeting on to `queued`. A meeting nothing survived of stays
-/// `interrupted`. Jobs left `running` go back to `queued`.
+/// Nothing can be recording when the app has just started. Every chunk still
+/// `open` is repaired from its file (`recording::recovery`), whichever meeting
+/// it belongs to. Every meeting still `recording` or `paused` becomes
+/// `interrupted`; its end and duration are filled in, and whatever audio
+/// survived is queued for transcription, which moves the meeting on to
+/// `queued`. A meeting nothing survived of stays `interrupted`. Jobs left
+/// `running` go back to `queued`.
 pub(crate) fn recover_at_launch(conn: &Connection, root: &Path) -> Result<Vec<RecoveredMeeting>, String> {
     let requeued = jobs::recover_at_launch(conn)?;
     if requeued > 0 {
@@ -1009,9 +1010,22 @@ pub(crate) fn recover_at_launch(conn: &Connection, root: &Path) -> Result<Vec<Re
     }
     let interrupted =
         store::list_meetings_with_status(conn, &[MeetingStatus::Recording, MeetingStatus::Paused])?;
+    // A chunk can also be left open under a meeting that did stop: a ledger
+    // write that failed, a quit between the stop and the last close.
+    let open_chunks = recovery::recover_chunks(&store::list_open_chunks(conn)?, root)?;
+    let mut repaired_tracks = Vec::new();
+    store::transaction(conn, || {
+        for chunk in &open_chunks {
+            store::mark_chunk_recovered(conn, &chunk.id, chunk.n_frames)?;
+            repaired_tracks.push(chunk.track_id.clone());
+        }
+        Ok(())
+    })?;
     let mut recovered = Vec::new();
     for item in interrupted {
-        match store::transaction(conn, || recover_meeting(conn, root, &item.id, &item.started_at)) {
+        match store::transaction(conn, || {
+            recover_meeting(conn, root, &item.id, &item.started_at, &repaired_tracks)
+        }) {
             Ok(meeting) => {
                 log(
                     "INFO",
@@ -1035,11 +1049,12 @@ fn recover_meeting(
     root: &Path,
     meeting_id: &str,
     started_at: &str,
+    repaired_tracks: &[String],
 ) -> Result<RecoveredMeeting, String> {
     store::set_meeting_status(conn, meeting_id, MeetingStatus::Interrupted, None)?;
 
-    // The sidecars first: they are repaired in place and list every chunk
-    // file, also one whose row never made it into the database.
+    // The sidecars are repaired in place and list every chunk file, also one
+    // whose row never made it into the database.
     let sidecars = match recovery::recover_meeting_dir(&recording::meeting_dir(root, meeting_id)?) {
         Ok(tracks) => tracks,
         Err(e) => {
@@ -1052,10 +1067,7 @@ fn recover_meeting(
     let (mut recorded_frames, mut end_ms) = (0u64, 0u64);
     for track in store::list_tracks(conn, meeting_id)? {
         let rows = store::list_chunks(conn, &track.id)?;
-        for chunk in recovery::recover_chunks(&rows, root)? {
-            store::mark_chunk_recovered(conn, &chunk.id, chunk.n_frames)?;
-            chunks_repaired += 1;
-        }
+        chunks_repaired += repaired_tracks.iter().filter(|id| **id == track.id).count();
         let on_disk = sidecars
             .iter()
             .filter_map(|t| t.sidecar.as_ref())
@@ -1204,7 +1216,8 @@ mod tests {
     use super::*;
     use crate::meetings::capture::fake::FakeSource;
     use crate::meetings::recording::test_support::TempDir;
-    use crate::meetings::recording::{ChunkWriter, BYTES_PER_FRAME};
+    use crate::meetings::recording::chunk_writer::ChunkWriter;
+    use crate::meetings::recording::BYTES_PER_FRAME;
     use crate::meetings::types::{
         AudioSourceHandler, ChunkStatus, JobStatus, SampleSink, SpeakerSource,
     };

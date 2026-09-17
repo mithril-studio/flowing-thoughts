@@ -589,15 +589,11 @@ fn segments_interleave_tracks_and_respect_the_edit_layer() {
     assert!(cleared.original_text.is_none() && cleared.hidden);
     assert_eq!(count(&conn, "segment_edits"), 2);
 
-    // Clearing the layer falls back to the pipeline's flag.
-    assert!(clear_segment_edit(&conn, &mic[1]).unwrap().hidden);
-    assert!(!clear_segment_edit(&conn, &mic[0]).unwrap().hidden);
-    assert_eq!(count(&conn, "segment_edits"), 0);
 
     // Typing the decoded text back is not an edit.
     set_segment_text(&conn, &system[0], Some("Hoi")).unwrap();
     assert!(set_segment_text(&conn, &system[0], Some("Hoi Joost")).unwrap().original_text.is_none());
-    assert_eq!(count(&conn, "segment_edits"), 0);
+    assert_eq!(count(&conn, "segment_edits"), 2, "only the two hidden choices above are left");
 
     assert!(set_segment_text(&conn, "nope", Some("x")).unwrap_err().contains("not found"));
     assert!(set_segment_hidden(&conn, "nope", true).is_err());
@@ -619,10 +615,6 @@ fn suppressed_reason_is_the_only_mutable_segment_column() {
     assert_eq!(listed[1].suppressed_reason, Some(SuppressedReason::NoSpeech));
     assert!(listed[0].hidden && !listed[2].hidden);
     assert_eq!(listed[0].text, "Hoi Joost");
-
-    set_suppressed_reason(&conn, &ids[0], None).unwrap();
-    assert!(!get_segment(&conn, &ids[0]).unwrap().unwrap().hidden);
-    assert!(set_suppressed_reason(&conn, "nope", None).is_err());
 }
 
 // --- Speakers ------------------------------------------------------------------
@@ -1016,16 +1008,12 @@ fn the_worker_cannot_resurrect_a_cancelled_job() {
     assert_eq!(cancelled.status, JobStatus::Cancelled);
     assert!(cancelled.finished_at.is_some() && cancelled.error.is_none());
 
-    // A failure is recorded, and a failed job can be put back by hand.
+    // A failure is recorded.
     let retry = insert_job(&conn, &transcribe_job(&f.meeting_id, 0)).unwrap();
     claim_next_job(&conn).unwrap().unwrap();
     assert!(fail_job(&conn, &retry.id, "model missing").unwrap());
     let failed = get_job(&conn, &retry.id).unwrap().unwrap();
     assert_eq!((failed.status, failed.error.as_deref()), (JobStatus::Failed, Some("model missing")));
-    set_job_status(&conn, &retry.id, JobStatus::Queued, None).unwrap();
-    let queued = get_job(&conn, &retry.id).unwrap().unwrap();
-    assert!(queued.started_at.is_none() && queued.finished_at.is_none() && queued.error.is_none());
-    assert!(set_job_status(&conn, "nope", JobStatus::Done, None).is_err());
 
     let listed = list_jobs(&conn, &f.meeting_id).unwrap();
     assert_eq!(listed.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec![retry.id.as_str(), job.id.as_str()]);

@@ -22,9 +22,6 @@
 //! - `output_has_echo_risk` is the pure decision behind `meetings.echo_risk`;
 //!   the Core Audio reads belong to `capture::device_watch` (WP5).
 
-// Scaffold: remove once WP6 and WP7 call into this file.
-#![allow(dead_code)]
-
 use rusqlite::Connection;
 
 use super::store;
@@ -175,7 +172,8 @@ pub struct EchoOutcome {
 }
 
 /// The worker's entry point, once both tracks of `run_id` are transcribed:
-/// flags the run's echoes and logs the counts (never text). Emitting
+/// flags the run's echoes and logs the counts (never text). The worker calls
+/// it inside the transaction that settles the run; emitting
 /// `meeting-updated` stays with the worker.
 pub fn flag_run_echoes(
     conn: &Connection,
@@ -183,7 +181,7 @@ pub fn flag_run_echoes(
     run_id: &str,
 ) -> Result<EchoOutcome, String> {
     let outcome = apply_echo_flags(conn, meeting_id, run_id)?;
-    let _ = crate::storage::append_log(
+    super::recording::log(
         "INFO",
         &format!(
             "Meetings: echo check on run {run_id}: {} of {} mic segments flagged",

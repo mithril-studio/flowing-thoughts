@@ -26,12 +26,10 @@ pub struct MeetingUpdated {
     pub change: MeetingChange,
 }
 
-#[allow(dead_code)] // scaffold: first used by session.rs (WP7)
 pub fn emit_state(app: &AppHandle, status: &RecordingStatus) {
     let _ = app.emit(MEETING_STATE, status);
 }
 
-#[allow(dead_code)] // scaffold: first used by worker.rs (WP6)
 pub fn emit_job_progress(app: &AppHandle, progress: &JobProgress) {
     let _ = app.emit(MEETING_JOB_PROGRESS, progress);
 }

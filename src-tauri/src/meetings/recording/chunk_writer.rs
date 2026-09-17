@@ -111,6 +111,7 @@ impl ChunkWriter {
     }
 
     /// Frames in the chunk being written, 0 when none is open.
+    #[cfg(test)]
     pub fn open_chunk_frames(&self) -> u64 {
         self.open.as_ref().map(|chunk| chunk.frames).unwrap_or(0)
     }

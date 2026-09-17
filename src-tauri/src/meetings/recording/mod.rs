@@ -20,8 +20,8 @@
 //!   and the layout under it, `<meeting_id>/<track>/<seq>.pcm`, where
 //!   `<track>` is `TrackKind::as_str()`. Chunk rows store the path relative
 //!   to the root.
-//! - `delete_meeting_audio(meeting_id)` and `audio_bytes(meeting_id)` for the
-//!   session (WP7) and the store's DTOs.
+//! - `delete_meeting_audio` / `delete_meeting_audio_in` for the session (WP7) and the
+//!   worker's retention. (Bytes on disk come from the chunk rows, in `store`.)
 //! - A `types::TrackAudio` implementation over a track's `ChunkRecord`s, for
 //!   long-form decoding. Gaps and deleted chunks read as silence.
 //!
@@ -44,10 +44,6 @@
 //! Tests need no hardware: fake `AudioSource`, fake `SampleSink`, fake
 //! `ChunkLedger`, a temp directory.
 
-// Nothing calls into this module until WP5 (capture) and WP7 (session) land.
-// Remove once they do.
-#![allow(dead_code)]
-
 pub mod chunk_writer;
 pub mod reader;
 pub mod recorder;
@@ -61,15 +57,9 @@ use std::path::{Path, PathBuf};
 
 use super::types::{TrackKind, TARGET_SAMPLE_RATE};
 
-// Unused for the same reason as the `dead_code` allow above.
-#[allow(unused_imports)]
-pub use chunk_writer::{ChunkWriter, ChunkWriterConfig};
-#[allow(unused_imports)]
-pub use reader::{AudioSpan, ChunkTrackAudio};
-#[allow(unused_imports)]
-pub use recorder::{
-    record_to_disk, start_track, RecorderConfig, RecorderHandler, RecorderStatus, TrackRecorder,
-};
+pub use chunk_writer::ChunkWriterConfig;
+pub use reader::ChunkTrackAudio;
+pub use recorder::{record_to_disk, RecorderConfig, TrackRecorder};
 
 /// Length of a full chunk file.
 pub const CHUNK_SECONDS: u64 = 60;
@@ -136,27 +126,6 @@ pub fn delete_meeting_audio_in(root: &Path, meeting_id: &str) -> Result<(), Stri
     }
 }
 
-/// Bytes of chunk audio still on disk for a meeting; 0 when there is none.
-pub fn audio_bytes(meeting_id: &str) -> u64 {
-    meetings_root().map(|root| audio_bytes_in(&root, meeting_id)).unwrap_or(0)
-}
-
-pub fn audio_bytes_in(root: &Path, meeting_id: &str) -> u64 {
-    let Ok(dir) = meeting_dir(root, meeting_id) else {
-        return 0;
-    };
-    let mut total = 0;
-    for track in fs::read_dir(dir).into_iter().flatten().flatten() {
-        for file in fs::read_dir(track.path()).into_iter().flatten().flatten() {
-            let path = file.path();
-            if path.extension().and_then(|e| e.to_str()) == Some(CHUNK_EXTENSION) {
-                total += file.metadata().map(|m| m.len()).unwrap_or(0);
-            }
-        }
-    }
-    total
-}
-
 /// Never from the audio callback. Silent in tests, which must not write to
 /// the user's real log file.
 pub(crate) fn log(level: &str, message: &str) {
@@ -213,27 +182,18 @@ mod tests {
         for bad in ["", "..", "../other", "a/b", ".", "a b"] {
             assert!(meeting_dir(Path::new("/root"), bad).is_err(), "{bad:?}");
             assert!(delete_meeting_audio_in(Path::new("/root"), bad).is_err(), "{bad:?}");
-            assert_eq!(audio_bytes_in(Path::new("/root"), bad), 0);
         }
         assert!(meeting_dir(Path::new("/root"), &uuid::Uuid::new_v4().to_string()).is_ok());
     }
 
     #[test]
-    fn audio_bytes_counts_pcm_only_and_delete_removes_the_meeting() {
+    fn delete_removes_the_meeting_and_nothing_else() {
         let tmp = TempDir::new("paths");
         let mic = track_dir(tmp.path(), "m1", TrackKind::Mic).unwrap();
-        let system = track_dir(tmp.path(), "m1", TrackKind::System).unwrap();
         fs::create_dir_all(&mic).unwrap();
-        fs::create_dir_all(&system).unwrap();
         fs::write(mic.join(chunk_file_name(0)), vec![0u8; 1_000]).unwrap();
-        fs::write(mic.join(chunk_file_name(1)), vec![0u8; 24]).unwrap();
-        fs::write(system.join(chunk_file_name(0)), vec![0u8; 500]).unwrap();
         fs::write(mic.join("track.json"), b"{}").unwrap();
         fs::create_dir_all(tmp.path().join("m2").join("mic")).unwrap();
-
-        assert_eq!(audio_bytes_in(tmp.path(), "m1"), 1_524);
-        assert_eq!(audio_bytes_in(tmp.path(), "m2"), 0);
-        assert_eq!(audio_bytes_in(tmp.path(), "missing"), 0);
 
         delete_meeting_audio_in(tmp.path(), "m1").unwrap();
         assert!(!tmp.path().join("m1").exists());
