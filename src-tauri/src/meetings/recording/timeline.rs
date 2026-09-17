@@ -47,9 +47,9 @@ pub fn ns_to_frames(ns: u64, sample_rate: u32) -> u64 {
 
 /// Silence between the end of one chunk and the start of the next, as the
 /// sidecar records it. Overlap (drift) is 0.
-pub fn gap_between_ms(prev_start_ms: u64, prev_frames: u64, sample_rate: u32, next_start_ms: u64) -> u64 {
-    let prev_end_ms = prev_start_ms + frames_to_ns(prev_frames, sample_rate) / NS_PER_MS;
-    next_start_ms.saturating_sub(prev_end_ms)
+pub fn gap_between_ms(prev_anchor_ns: u64, prev_frames: u64, sample_rate: u32, next_anchor_ns: u64) -> u64 {
+    let prev_end_ns = prev_anchor_ns + frames_to_ns(prev_frames, sample_rate);
+    next_anchor_ns.saturating_sub(prev_end_ns) / NS_PER_MS
 }
 
 /// What to do with a buffer, given its host time.
@@ -255,8 +255,8 @@ mod tests {
         assert_eq!(ns_to_frames(60 * NS_PER_SEC, 16_000), 960_000);
         assert_eq!(host_to_timeline_ms(ORIGIN, ORIGIN + 1_500 * NS_PER_MS), 1_500);
         assert_eq!(host_to_timeline_ms(ORIGIN, ORIGIN - 1), 0);
-        assert_eq!(gap_between_ms(0, 16_000, 16_000, 1_250), 250);
-        assert_eq!(gap_between_ms(0, 16_000, 16_000, 998), 0);
+        assert_eq!(gap_between_ms(ORIGIN, 16_000, 16_000, ORIGIN + 1_250 * NS_PER_MS), 250);
+        assert_eq!(gap_between_ms(ORIGIN, 16_000, 16_000, ORIGIN + 998 * NS_PER_MS), 0);
     }
 
     #[test]
