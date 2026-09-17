@@ -100,6 +100,15 @@ pub fn open_system_tap() -> Result<SystemTapSource, String> {
     SystemTapSource::new()
 }
 
+/// Destroys aggregate devices a crashed run of the app left behind. For the
+/// session (WP7) at launch. Talks to the HAL, which may block: call it from a
+/// thread that may.
+pub fn cleanup_leaked_devices() {
+    if is_supported() {
+        system_tap::destroy_leaked_aggregates();
+    }
+}
+
 /// `"14.4.1"` to `(14, 4, 1)`. Missing parts are 0.
 pub fn parse_os_version(version: &str) -> Option<(u32, u32, u32)> {
     let mut parts = version.trim().trim_end_matches('\0').split('.');

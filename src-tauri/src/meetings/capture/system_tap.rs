@@ -107,10 +107,10 @@ impl SystemAudioMonitor {
 }
 
 #[cfg(target_os = "macos")]
-pub use imp::{check_support, SystemTapSource};
+pub use imp::{check_support, destroy_leaked_aggregates, SystemTapSource};
 
 #[cfg(not(target_os = "macos"))]
-pub use stub::{check_support, SystemTapSource};
+pub use stub::{check_support, destroy_leaked_aggregates, SystemTapSource};
 
 #[cfg(not(target_os = "macos"))]
 mod stub {
@@ -123,6 +123,8 @@ mod stub {
     pub fn check_support() -> Result<(), String> {
         Err("system audio capture needs macOS".to_string())
     }
+
+    pub fn destroy_leaked_aggregates() {}
 
     pub struct SystemTapSource(Arc<Shared>);
 
@@ -599,7 +601,7 @@ mod imp {
     /// Destroys aggregates an earlier start of this process, or a process
     /// that is gone, left behind. (coreaudiod reclaims a dead process's
     /// private aggregates by itself; this covers what it does not.)
-    fn destroy_leaked_aggregates() {
+    pub fn destroy_leaked_aggregates() {
         let own_pid = std::process::id();
         // SAFETY: signal 0 only checks that the process exists.
         let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };

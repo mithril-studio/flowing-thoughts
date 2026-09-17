@@ -14,7 +14,8 @@
 //! | `jobs.rs`, `worker.rs` | WP6 | job queue and the `meeting-worker` thread |
 //! | `session.rs` | WP7 | start/pause/stop state machine, tray, launch recovery |
 //! | `echo.rs` | WP9 | flags mic segments that echo the system track |
-//! | `summary.rs`, `export.rs` | WP10 | BYOK summary, Markdown export |
+//! | `summary.rs` | WP10 | BYOK summary |
+//! | `export.rs` | WP7 | Markdown export |
 //!
 //! State lives here in the backend; React only renders the three events in
 //! `events.rs`. Everything is persisted as it happens, because the app exits
@@ -44,7 +45,8 @@ pub type PersistedHandle = Arc<Mutex<crate::storage::PersistedState>>;
 
 /// Called once from `lib.rs` setup, after the DB, the settings and the tray
 /// exist. Recovery runs before the worker starts, so the worker's first look
-/// at the queue already includes the jobs recovery put back.
+/// at the queue already includes the jobs recovery put back. A failed
+/// recovery is logged and never keeps the worker, or the app, from starting.
 pub fn init(app: &tauri::AppHandle) {
     if let Err(e) = session::init(app) {
         let _ = crate::storage::append_log("ERROR", &format!("Meetings: launch recovery failed: {e}"));
@@ -66,9 +68,4 @@ pub fn idle_tray_title() -> Option<String> {
 /// chunks cleanly. Must return within a second.
 pub fn shutdown() {
     session::shutdown();
-}
-
-/// The placeholder every stub returns until its package lands.
-pub(crate) fn not_implemented<T>(what: &str, owner: &str) -> Result<T, String> {
-    Err(format!("{what} is not implemented yet ({owner})"))
 }
