@@ -50,8 +50,8 @@ fi
 
 if [ ! -f "$KEY_PATH" ]; then
   echo "error: signing key not found at $KEY_PATH" >&2
-  echo "set TAURI_SIGNING_PRIVATE_KEY_PATH or regenerate with:" >&2
-  echo "  npx @tauri-apps/cli signer generate --password '' --write-keys $KEY_PATH" >&2
+  echo "restore the existing updater key and set TAURI_SIGNING_PRIVATE_KEY_PATH" >&2
+  echo "do not generate a replacement: installed apps trust the existing public key" >&2
   exit 1
 fi
 
