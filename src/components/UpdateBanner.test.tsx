@@ -32,7 +32,10 @@ describe("UpdateBanner", () => {
     downloadAndInstall.mockReturnValue(new Promise<void>((resolve) => { complete = resolve; }));
     render(<UpdateBanner />);
     fireEvent.click(await screen.findByRole("button", { name: "Install & restart" }));
-    expect(screen.getByRole("button", { name: "Installing..." })).toBeDisabled();
+    const installing = screen.getByRole("button", { name: "Installing..." });
+    expect(installing).toBeDisabled();
+    fireEvent.click(installing);
+    expect(downloadAndInstall).toHaveBeenCalledOnce();
     expect(relaunch).not.toHaveBeenCalled();
     await act(async () => complete());
     expect(relaunch).toHaveBeenCalledOnce();
