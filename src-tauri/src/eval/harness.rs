@@ -99,8 +99,16 @@ pub struct RunConfig {
 
 impl RunConfig {
     pub fn label(&self) -> String {
-        let language = if self.language_mode == "system" { "auto" } else { &self.language_mode };
-        let mut label = format!("{} · {language} · vocab={}", self.model, self.vocab.as_str());
+        let language = if self.language_mode == "system" {
+            "auto"
+        } else {
+            &self.language_mode
+        };
+        let mut label = format!(
+            "{} · {language} · vocab={}",
+            self.model,
+            self.vocab.as_str()
+        );
         if !self.use_vad {
             label.push_str(" · vad=off");
         }
@@ -128,11 +136,14 @@ impl Vocabulary {
         };
         if variant.uses_personal() {
             if let Some(conn) = crate::db::open_read_only()? {
-                vocabulary.user_terms =
-                    crate::db::top_mistranscribed_words(&conn, None, pipeline::CORRECTION_PROMPT_LIMIT)?
-                        .into_iter()
-                        .map(|row| row.intended_text)
-                        .collect();
+                vocabulary.user_terms = crate::db::top_mistranscribed_words(
+                    &conn,
+                    None,
+                    pipeline::CORRECTION_PROMPT_LIMIT,
+                )?
+                .into_iter()
+                .map(|row| row.intended_text)
+                .collect();
                 vocabulary.correction_pairs = crate::db::list_correction_pairs(&conn)?;
             }
         }
@@ -260,9 +271,16 @@ pub fn run_clip(
     }
 
     if clip.expected == Expected::Speech {
-        result.raw_score = Some(score::score_clip(&clip.reference, &result.raw, &clip.entities));
-        result.final_score =
-            Some(score::score_clip(&clip.reference, &result.final_text, &clip.entities));
+        result.raw_score = Some(score::score_clip(
+            &clip.reference,
+            &result.raw,
+            &clip.entities,
+        ));
+        result.final_score = Some(score::score_clip(
+            &clip.reference,
+            &result.final_text,
+            &clip.entities,
+        ));
     }
     Ok(result)
 }
@@ -356,7 +374,10 @@ impl Tally {
                 }
                 if score::is_blank(&r.final_text) {
                     self.speech_discarded += 1;
-                    let by = r.discarded_by.clone().unwrap_or_else(|| "unknown".to_string());
+                    let by = r
+                        .discarded_by
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
                     *self.speech_discarded_by.entry(by).or_default() += 1;
                 }
             }
@@ -456,9 +477,15 @@ pub fn run_config(
             .map_err(|e| format!("clip {}: {e}", clip.id))?;
         run.overall.add(&result);
         for category in &result.categories {
-            run.by_category.entry(category.clone()).or_default().add(&result);
+            run.by_category
+                .entry(category.clone())
+                .or_default()
+                .add(&result);
         }
-        run.by_condition.entry(result.condition.clone()).or_default().add(&result);
+        run.by_condition
+            .entry(result.condition.clone())
+            .or_default()
+            .add(&result);
         if let Some(language) = &result.detected_language {
             *run.detected_languages.entry(language.clone()).or_default() += 1;
         }
@@ -471,7 +498,9 @@ pub fn run_config(
 }
 
 /// Transcriber backed by the real local Whisper path.
-pub fn local_transcriber(model: ModelId) -> impl Fn(&Path, &DecodeOptions) -> Result<LocalTranscript, String> {
+pub fn local_transcriber(
+    model: ModelId,
+) -> impl Fn(&Path, &DecodeOptions) -> Result<LocalTranscript, String> {
     move |wav, options| crate::local_transcribe::transcribe_wav_blocking(&model, wav, options)
 }
 
@@ -616,10 +645,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ft-eval-harness-{}", uuid::Uuid::new_v4()));
         manifest::ensure_layout(&dir).unwrap();
         let mut clips = vec![
-            clip("long", "Dit is een gewone Nederlandse zin.", Expected::Speech, "everyday"),
+            clip(
+                "long",
+                "Dit is een gewone Nederlandse zin.",
+                Expected::Speech,
+                "everyday",
+            ),
             clip("short", "Ja, dat klopt.", Expected::Speech, "short_reply"),
-            clip("wrong", "Deploy de API key morgen.", Expected::Speech, "mixed_tech"),
-            clip("vad", "Morgen om drie uur.", Expected::Speech, "short_reply"),
+            clip(
+                "wrong",
+                "Deploy de API key morgen.",
+                Expected::Speech,
+                "mixed_tech",
+            ),
+            clip(
+                "vad",
+                "Morgen om drie uur.",
+                Expected::Speech,
+                "short_reply",
+            ),
             clip("noise", "", Expected::NonSpeech, "non_speech"),
             clip("echo", "", Expected::NonSpeech, "non_speech"),
             clip("silent", "", Expected::NonSpeech, "non_speech"),
@@ -671,7 +715,10 @@ mod tests {
         assert_eq!(overall.final_stage.terms, Hits { hit: 0, total: 1 });
 
         // Both hallucinations reach the raw stage; the filters catch both.
-        assert_eq!((overall.hallucinated_raw, overall.hallucinated_final), (2, 0));
+        assert_eq!(
+            (overall.hallucinated_raw, overall.hallucinated_final),
+            (2, 0)
+        );
         let silent = run.clips.iter().find(|c| c.id == "silent").unwrap();
         assert_eq!(silent.discarded_by.as_deref(), Some(discard::CAPTURE_GATE));
 
@@ -692,7 +739,10 @@ mod tests {
         clips[1].split = Split::Test;
         clips[2].verified = false;
         let (dev, unverified) = select_clips(clips.clone(), Split::Dev, None, None, None);
-        assert_eq!(dev.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["a", "d"]);
+        assert_eq!(
+            dev.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["a", "d"]
+        );
         assert_eq!(unverified, 1);
         let (test, _) = select_clips(clips.clone(), Split::Test, None, None, None);
         assert_eq!(test.len(), 1);
@@ -710,6 +760,9 @@ mod tests {
         c.language_mode = "system".into();
         c.use_vad = false;
         c.resampler = Resampler::Afconvert;
-        assert_eq!(c.label(), "fake · auto · vocab=developer · vad=off · resample=afconvert");
+        assert_eq!(
+            c.label(),
+            "fake · auto · vocab=developer · vad=off · resample=afconvert"
+        );
     }
 }

@@ -4,8 +4,8 @@ use rusqlite::{params, Connection, ToSql};
 
 use super::super::types::{MeetingDetail, MeetingLanguage, MeetingListItem, MeetingStatus};
 use super::{
-    audio, execute, expect_found, jobs, new_id, now, query_all, query_opt, speakers, transaction,
-    transcript, enum_col, u64_col,
+    audio, enum_col, execute, expect_found, jobs, new_id, now, query_all, query_opt, speakers,
+    transaction, transcript, u64_col,
 };
 
 #[derive(Debug, Clone)]
@@ -221,7 +221,9 @@ pub fn set_active_run(conn: &Connection, meeting_id: &str, run_id: &str) -> Resu
         params![meeting_id, run_id, now()],
     )?;
     if changed == 0 {
-        return Err(format!("Run '{run_id}' does not belong to meeting '{meeting_id}'"));
+        return Err(format!(
+            "Run '{run_id}' does not belong to meeting '{meeting_id}'"
+        ));
     }
     Ok(())
 }

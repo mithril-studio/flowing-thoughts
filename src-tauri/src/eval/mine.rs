@@ -26,7 +26,10 @@ pub struct Suggestion {
 pub fn suggest(corrections_history: &[Correction], limit: usize) -> Vec<Suggestion> {
     let mut grouped: BTreeMap<(String, String), (usize, Option<String>)> = BTreeMap::new();
     for c in corrections_history {
-        let key = (c.wrong_text.trim().to_lowercase(), c.intended_text.trim().to_string());
+        let key = (
+            c.wrong_text.trim().to_lowercase(),
+            c.intended_text.trim().to_string(),
+        );
         let entry = grouped.entry(key).or_default();
         entry.0 += 1;
         if entry.1.is_none() {
@@ -48,7 +51,11 @@ pub fn suggest(corrections_history: &[Correction], limit: usize) -> Vec<Suggesti
             sentence,
         })
         .collect();
-    out.sort_by(|a, b| b.occurrences.cmp(&a.occurrences).then_with(|| a.intended.cmp(&b.intended)));
+    out.sort_by(|a, b| {
+        b.occurrences
+            .cmp(&a.occurrences)
+            .then_with(|| a.intended.cmp(&b.intended))
+    });
     out.truncate(limit);
     out
 }
@@ -113,7 +120,11 @@ mod tests {
     #[test]
     fn most_frequent_corrections_become_reviewable_prompt_lines() {
         let history = vec![
-            correction("work tree", "worktree", Some("Maak een nieuwe work tree aan voor deze branch.")),
+            correction(
+                "work tree",
+                "worktree",
+                Some("Maak een nieuwe work tree aan voor deze branch."),
+            ),
             correction("Work tree", "worktree", None),
             correction("versel", "Vercel", None),
         ];

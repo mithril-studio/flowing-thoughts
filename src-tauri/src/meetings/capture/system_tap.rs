@@ -119,9 +119,7 @@ pub use stub::{check_support, destroy_leaked_aggregates, SystemTapSource};
 #[cfg(not(target_os = "macos"))]
 mod stub {
     use super::{Shared, SystemAudioMonitor};
-    use crate::meetings::types::{
-        AudioSource, AudioSourceHandler, SourceFormat, TrackKind,
-    };
+    use crate::meetings::types::{AudioSource, AudioSourceHandler, SourceFormat, TrackKind};
     use std::sync::Arc;
 
     pub fn check_support() -> Result<(), String> {
@@ -203,14 +201,12 @@ mod imp {
     };
     use super::super::hal::{self, status_str, OSStatus};
     use super::super::mic::join_with_timeout;
-    use super::super::permission::{
-        self, Observation, SilenceDetector, SystemAudioNotice,
-    };
+    use super::super::permission::{self, Observation, SilenceDetector, SystemAudioNotice};
     use super::super::{parse_os_version, version_supports_taps, HandlerSlot};
     use super::{is_leaked_aggregate, Shared, SystemAudioMonitor, AGGREGATE_UID_PREFIX};
     use crate::meetings::types::{
-        AudioFrames, AudioSource, AudioSourceHandler, Discontinuity, PermissionState,
-        SourceFormat, TrackKind,
+        AudioFrames, AudioSource, AudioSourceHandler, Discontinuity, PermissionState, SourceFormat,
+        TrackKind,
     };
 
     /// `AudioDeviceCreateIOProcID` blocked for up to 6 s in the spike while a
@@ -241,7 +237,8 @@ mod imp {
         let _ = (level, message);
     }
 
-    type CreateTapFn = unsafe extern "C" fn(*const CATapDescription, *mut AudioObjectID) -> OSStatus;
+    type CreateTapFn =
+        unsafe extern "C" fn(*const CATapDescription, *mut AudioObjectID) -> OSStatus;
     type DestroyTapFn = unsafe extern "C" fn(AudioObjectID) -> OSStatus;
 
     #[derive(Clone, Copy)]
@@ -276,7 +273,10 @@ mod imp {
     fn resolve_api() -> Result<TapApi, String> {
         let version = os_version()?;
         if !version_supports_taps(version) {
-            return Err(format!("macOS {}.{}.{} is older than 14.4", version.0, version.1, version.2));
+            return Err(format!(
+                "macOS {}.{}.{} is older than 14.4",
+                version.0, version.1, version.2
+            ));
         }
         if AnyClass::get(c"CATapDescription").is_none() {
             return Err("the CATapDescription class is missing".to_string());
@@ -284,8 +284,14 @@ mod imp {
         // SAFETY: NUL-terminated names; the signatures are those of
         // `AudioHardwareCreateProcessTap` and `AudioHardwareDestroyProcessTap`.
         unsafe {
-            let create = libc::dlsym(libc::RTLD_DEFAULT, c"AudioHardwareCreateProcessTap".as_ptr());
-            let destroy = libc::dlsym(libc::RTLD_DEFAULT, c"AudioHardwareDestroyProcessTap".as_ptr());
+            let create = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                c"AudioHardwareCreateProcessTap".as_ptr(),
+            );
+            let destroy = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                c"AudioHardwareDestroyProcessTap".as_ptr(),
+            );
             if create.is_null() || destroy.is_null() {
                 return Err("the process tap functions are missing".to_string());
             }
@@ -322,7 +328,11 @@ mod imp {
         /// until `start`.
         pub fn new() -> Result<Self, String> {
             super::super::support()?;
-            Ok(Self { api: resolve_api()?, shared: Arc::default(), worker: None })
+            Ok(Self {
+                api: resolve_api()?,
+                shared: Arc::default(),
+                worker: None,
+            })
         }
 
         /// Take it before boxing the source as a `dyn AudioSource`.
@@ -337,7 +347,11 @@ mod imp {
         }
 
         fn device_name(&self) -> Option<String> {
-            self.shared.device_name.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.shared
+                .device_name
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
 
         fn format(&self) -> Option<SourceFormat> {
@@ -360,7 +374,8 @@ mod imp {
             let (tx, rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::channel();
             let thread = {
-                let (api, slot, shared, tx) = (self.api, slot.clone(), self.shared.clone(), tx.clone());
+                let (api, slot, shared, tx) =
+                    (self.api, slot.clone(), self.shared.clone(), tx.clone());
                 std::thread::Builder::new()
                     .name("meeting-tap".to_string())
                     .spawn(move || run(api, slot, shared, rx, tx, ready_tx))
@@ -388,7 +403,9 @@ mod imp {
             worker.slot.close();
             join_with_timeout(worker.thread, STOP_TIMEOUT, "system audio");
             *self.shared.format.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            self.shared.notice.store(SystemAudioNotice::None.as_u8(), Ordering::Relaxed);
+            self.shared
+                .notice
+                .store(SystemAudioNotice::None.as_u8(), Ordering::Relaxed);
             Ok(())
         }
     }
@@ -451,7 +468,13 @@ mod imp {
             let scratch = &mut *ctx.scratch.get();
             let frames = tap
                 .iter()
-                .map(|b| if b.mData.is_null() { 0 } else { b.mDataByteSize as usize / 4 })
+                .map(|b| {
+                    if b.mData.is_null() {
+                        0
+                    } else {
+                        b.mDataByteSize as usize / 4
+                    }
+                })
                 .min()
                 .unwrap_or(0)
                 .min(scratch.capacity() / tap.len());
@@ -469,15 +492,19 @@ mod imp {
 
         let frames = samples.len() as u64 / channels as u64;
         let time = input_time.as_ref();
-        let host_time_ns = if time.mFlags.contains(AudioTimeStampFlags::HostTimeValid) && time.mHostTime != 0 {
+        let host_time_ns = if time.mFlags.contains(AudioTimeStampFlags::HostTimeValid)
+            && time.mHostTime != 0
+        {
             clock::ticks_to_ns(ctx.timebase, time.mHostTime)
         } else {
-            clock::now_ns(ctx.timebase)
-                .saturating_sub(clock::frames_to_ns(frames, ctx.sample_rate))
+            clock::now_ns(ctx.timebase).saturating_sub(clock::frames_to_ns(frames, ctx.sample_rate))
         };
         ctx.slot.frames(AudioFrames {
             samples,
-            format: SourceFormat { sample_rate: ctx.sample_rate, channels },
+            format: SourceFormat {
+                sample_rate: ctx.sample_rate,
+                channels,
+            },
             host_time_ns,
         });
         if samples.iter().any(|s| *s != 0.0) {
@@ -510,7 +537,10 @@ mod imp {
         // SAFETY: a valid description and out-pointer.
         let status = unsafe { (api.create)(Retained::as_ptr(&description), &mut id) };
         if status != 0 {
-            return Err(format!("Failed to create the system audio tap: {}", status_str(status)));
+            return Err(format!(
+                "Failed to create the system audio tap: {}",
+                status_str(status)
+            ));
         }
         // SAFETY: plain getters.
         let uid = unsafe { description.UUID().UUIDString() };
@@ -521,7 +551,13 @@ mod imp {
         // SAFETY: `tap.id` came from `create_tap` and is destroyed once.
         let status = unsafe { (api.destroy)(tap.id) };
         if status != 0 {
-            log("WARN", &format!("Meetings: destroying the system audio tap failed: {}", status_str(status)));
+            log(
+                "WARN",
+                &format!(
+                    "Meetings: destroying the system audio tap failed: {}",
+                    status_str(status)
+                ),
+            );
         }
     }
 
@@ -549,8 +585,13 @@ mod imp {
 
     unsafe fn array_of_one(dict: &CFMutableDictionary) -> Result<CFRetained<CFArray>, String> {
         let items = [dict as *const CFMutableDictionary as *const c_void];
-        CFArray::new(kCFAllocatorDefault, items.as_ptr() as *mut *const c_void, 1, &kCFTypeArrayCallBacks)
-            .ok_or_else(|| "CFArrayCreate failed".to_string())
+        CFArray::new(
+            kCFAllocatorDefault,
+            items.as_ptr() as *mut *const c_void,
+            1,
+            &kCFTypeArrayCallBacks,
+        )
+        .ok_or_else(|| "CFArrayCreate failed".to_string())
     }
 
     /// UIDs of the aggregates this process has built and not yet destroyed.
@@ -610,12 +651,20 @@ mod imp {
         // SAFETY: signal 0 only checks that the process exists.
         let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
         for device in hal::all_devices() {
-            let Ok(uid) = hal::device_uid(device) else { continue };
+            let Ok(uid) = hal::device_uid(device) else {
+                continue;
+            };
             let live = live_aggregates().clone();
             if is_leaked_aggregate(&uid.to_string(), own_pid, &live, alive) {
                 // SAFETY: an aggregate device id the HAL just listed.
                 let status = unsafe { AudioHardwareDestroyAggregateDevice(device) };
-                log("INFO", &format!("Meetings: removed a leftover audio aggregate ({})", status_str(status)));
+                log(
+                    "INFO",
+                    &format!(
+                        "Meetings: removed a leftover audio aggregate ({})",
+                        status_str(status)
+                    ),
+                );
             }
         }
     }
@@ -638,9 +687,12 @@ mod imp {
         let output_rate = hal::nominal_sample_rate(output_device);
 
         // SAFETY: the property is an AudioStreamBasicDescription.
-        let tap_format: AudioStreamBasicDescription = unsafe { hal::get_prop(tap.id, kAudioTapPropertyFormat) }
-            .map_err(|e| format!("The system audio tap has no format: {}", status_str(e)))?;
-        if tap_format.mFormatFlags & kAudioFormatFlagIsFloat == 0 || tap_format.mBitsPerChannel != 32 {
+        let tap_format: AudioStreamBasicDescription =
+            unsafe { hal::get_prop(tap.id, kAudioTapPropertyFormat) }
+                .map_err(|e| format!("The system audio tap has no format: {}", status_str(e)))?;
+        if tap_format.mFormatFlags & kAudioFormatFlagIsFloat == 0
+            || tap_format.mBitsPerChannel != 32
+        {
             return Err(format!(
                 "The system audio tap is not float32 (flags {:#x}, {} bits)",
                 tap_format.mFormatFlags, tap_format.mBitsPerChannel
@@ -658,10 +710,15 @@ mod imp {
         live_aggregates().push(aggregate_uid.clone());
         let forget = |uid: &str| live_aggregates().retain(|live| live != uid);
         // SAFETY: a valid dictionary and out-pointer.
-        let status = unsafe { AudioHardwareCreateAggregateDevice(&description, NonNull::from(&mut aggregate)) };
+        let status = unsafe {
+            AudioHardwareCreateAggregateDevice(&description, NonNull::from(&mut aggregate))
+        };
         if status != 0 {
             forget(&aggregate_uid);
-            return Err(format!("Failed to create the audio aggregate: {}", status_str(status)));
+            return Err(format!(
+                "Failed to create the audio aggregate: {}",
+                status_str(status)
+            ));
         }
         let destroy_aggregate = || {
             // SAFETY: created above, destroyed once.
@@ -677,9 +734,14 @@ mod imp {
             .unwrap_or(tap_format.mSampleRate);
         if !(8_000.0..=768_000.0).contains(&rate) {
             destroy_aggregate();
-            return Err(format!("The audio aggregate reports a sample rate of {rate}"));
+            return Err(format!(
+                "The audio aggregate reports a sample rate of {rate}"
+            ));
         }
-        let format = SourceFormat { sample_rate: rate.round() as u32, channels: tap_channels as u16 };
+        let format = SourceFormat {
+            sample_rate: rate.round() as u32,
+            channels: tap_channels as u16,
+        };
 
         let ctx = Box::into_raw(Box::new(TapCtx {
             slot: slot.clone(),
@@ -692,13 +754,21 @@ mod imp {
         let mut proc_id: AudioDeviceIOProcID = None;
         // SAFETY: `ctx` stays alive until after the IOProc is destroyed.
         let status = unsafe {
-            AudioDeviceCreateIOProcID(aggregate, Some(io_proc), ctx as *mut c_void, NonNull::from(&mut proc_id))
+            AudioDeviceCreateIOProcID(
+                aggregate,
+                Some(io_proc),
+                ctx as *mut c_void,
+                NonNull::from(&mut proc_id),
+            )
         };
         if status != 0 {
             destroy_aggregate();
             // SAFETY: the IOProc was never registered.
             drop(unsafe { Box::from_raw(ctx) });
-            return Err(format!("Failed to attach to the audio aggregate: {}", status_str(status)));
+            return Err(format!(
+                "Failed to attach to the audio aggregate: {}",
+                status_str(status)
+            ));
         }
         // SAFETY: a valid device and IOProc id.
         let status = unsafe { AudioDeviceStart(aggregate, proc_id) };
@@ -709,7 +779,10 @@ mod imp {
                 destroy_aggregate();
                 drop(Box::from_raw(ctx));
             }
-            return Err(format!("Failed to start the audio aggregate: {}", status_str(status)));
+            return Err(format!(
+                "Failed to start the audio aggregate: {}",
+                status_str(status)
+            ));
         }
 
         shared.output_device.store(output_device, Ordering::Relaxed);
@@ -724,7 +797,15 @@ mod imp {
         *shared.format.lock().unwrap_or_else(|e| e.into_inner()) = Some(format);
         *shared.device_name.lock().unwrap_or_else(|e| e.into_inner()) = output_name;
         device_watch::watch_sample_rate(output_device);
-        Ok(Built { aggregate, aggregate_uid, proc_id, ctx, output_device, output_rate, format })
+        Ok(Built {
+            aggregate,
+            aggregate_uid,
+            proc_id,
+            ctx,
+            output_device,
+            output_rate,
+            format,
+        })
     }
 
     /// Stops and destroys the IOProc and the aggregate. The context goes to
@@ -742,7 +823,13 @@ mod imp {
         if statuses.iter().any(|s| *s != 0) {
             // Normal when the device under the aggregate has vanished.
             let text: Vec<String> = statuses.iter().map(|s| status_str(*s)).collect();
-            log("INFO", &format!("Meetings: system audio teardown statuses: {}", text.join(", ")));
+            log(
+                "INFO",
+                &format!(
+                    "Meetings: system audio teardown statuses: {}",
+                    text.join(", ")
+                ),
+            );
         }
         live_aggregates().retain(|live| *live != built.aggregate_uid);
         retired.push(built.ctx);
@@ -789,7 +876,11 @@ mod imp {
     impl PlayingProbe {
         fn new(output_device: Option<AudioObjectID>) -> Self {
             let now = Instant::now();
-            let mut probe = Self { playing: None, checked_at: now, full_checked_at: now };
+            let mut probe = Self {
+                playing: None,
+                checked_at: now,
+                full_checked_at: now,
+            };
             probe.check(now, output_device);
             probe
         }
@@ -799,7 +890,8 @@ mod imp {
             // read. The process list is only walked when that is not the
             // answer, and now and then for audio that plays on another device
             // (every time, once that was the case).
-            let device_idle = output_device.and_then(hal::device_is_running_somewhere) == Some(false);
+            let device_idle =
+                output_device.and_then(hal::device_is_running_somewhere) == Some(false);
             let full_is_due = self.playing.is_none()
                 || self.playing == Some(true)
                 || now.duration_since(self.full_checked_at) >= FULL_CHECK_WHILE_IDLE;
@@ -812,7 +904,12 @@ mod imp {
             self.checked_at = now;
         }
 
-        fn check_if_older(&mut self, now: Instant, max_age: Duration, output_device: Option<AudioObjectID>) {
+        fn check_if_older(
+            &mut self,
+            now: Instant,
+            max_age: Duration,
+            output_device: Option<AudioObjectID>,
+        ) {
             if now.duration_since(self.checked_at) >= max_age {
                 self.check(now, output_device);
             }
@@ -911,9 +1008,15 @@ mod imp {
 
         loop {
             let now = Instant::now();
-            let tick = if planner.is_awaiting_first_callback() { FIRST_CALLBACK_TICK } else { TICK };
+            let tick = if planner.is_awaiting_first_callback() {
+                FIRST_CALLBACK_TICK
+            } else {
+                TICK
+            };
             // Never zero: a rebuild that is held back must not spin.
-            let timeout = planner.next_deadline(now).map_or(tick, |d| d.clamp(FIRST_CALLBACK_TICK, tick));
+            let timeout = planner
+                .next_deadline(now)
+                .map_or(tick, |d| d.clamp(FIRST_CALLBACK_TICK, tick));
             match msgs.recv_timeout(timeout) {
                 Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(Msg::Device(event)) => {
@@ -939,7 +1042,13 @@ mod imp {
                         let _ = ready.send(Ok(built.format));
                     }
                     if let Some(event_at) = event_at.take() {
-                        log("INFO", &format!("Meetings: system audio recovered {} ms after the device event", event_at.elapsed().as_millis()));
+                        log(
+                            "INFO",
+                            &format!(
+                                "Meetings: system audio recovered {} ms after the device event",
+                                event_at.elapsed().as_millis()
+                            ),
+                        );
                     }
                 }
             } else {
@@ -956,9 +1065,16 @@ mod imp {
             }
             // An idle tap is neither reported nor retried. One cheap read,
             // and only while the answer decides something.
-            let idle = planner.is_waiting_for_callbacks() && built.as_ref().is_some_and(output_is_idle);
+            let idle =
+                planner.is_waiting_for_callbacks() && built.as_ref().is_some_and(output_is_idle);
 
-            match planner.poll(now, Hold { settle: false, retry: idle }) {
+            match planner.poll(
+                now,
+                Hold {
+                    settle: false,
+                    retry: idle,
+                },
+            ) {
                 Action::Wait => {}
                 Action::Degraded => {
                     output_gate().settle(gate_generation);
@@ -979,8 +1095,8 @@ mod imp {
                 }
                 Action::Rebuild(reason) => {
                     gate_generation = output_gate().generation();
-                    let delivering =
-                        last_progress.is_some_and(|at| now.duration_since(at) < Duration::from_millis(600));
+                    let delivering = last_progress
+                        .is_some_and(|at| now.duration_since(at) < Duration::from_millis(600));
                     let device_event = matches!(
                         reason,
                         RebuildReason::DefaultDeviceChanged | RebuildReason::SampleRateChanged
@@ -1008,7 +1124,9 @@ mod imp {
                         }
                     }
                     if tap.is_none() {
-                        tap = create_tap(api).map_err(|e| log("WARN", &format!("Meetings: {e}"))).ok();
+                        tap = create_tap(api)
+                            .map_err(|e| log("WARN", &format!("Meetings: {e}")))
+                            .ok();
                     }
                     let result = match tap.as_ref() {
                         Some(tap) => build(tap, &slot, &shared),
@@ -1044,7 +1162,13 @@ mod imp {
                             }
                         }
                         Err(e) => {
-                            log("WARN", &format!("Meetings: system audio rebuild failed ({}): {e}", reason.as_str()));
+                            log(
+                                "WARN",
+                                &format!(
+                                    "Meetings: system audio rebuild failed ({}): {e}",
+                                    reason.as_str()
+                                ),
+                            );
                             output_gate().settle(gate_generation);
                         }
                     }
@@ -1054,7 +1178,8 @@ mod imp {
             if now.duration_since(observed_at) >= OBSERVE_EVERY {
                 observed_at = now;
                 if observations % PREFLIGHT_EVERY == 0 {
-                    permission_state = permission::map_preflight(&permission::preflight_audio_capture()).state;
+                    permission_state =
+                        permission::map_preflight(&permission::preflight_audio_capture()).state;
                 }
                 observations = observations.wrapping_add(1);
                 let nonzero = shared.nonzero_callbacks.load(Ordering::Relaxed);
@@ -1063,7 +1188,11 @@ mod imp {
                 // Audible audio needs no second opinion. Zeros and silence on
                 // the line do, but not every second.
                 if !heard_audio {
-                    let max_age = if delivering { PLAYING_CHECK_WHILE_SILENT } else { OBSERVE_EVERY };
+                    let max_age = if delivering {
+                        PLAYING_CHECK_WHILE_SILENT
+                    } else {
+                        OBSERVE_EVERY
+                    };
                     probe.check_if_older(now, max_age, built.as_ref().map(|b| b.output_device));
                 }
                 let observation = Observation {
@@ -1077,7 +1206,10 @@ mod imp {
                 let before = detector.notice();
                 let notice = detector.observe(now, observation);
                 if notice != before {
-                    log("INFO", &format!("Meetings: system audio notice: {before:?} -> {notice:?}"));
+                    log(
+                        "INFO",
+                        &format!("Meetings: system audio notice: {before:?} -> {notice:?}"),
+                    );
                 }
                 shared.notice.store(notice.as_u8(), Ordering::Relaxed);
             }
@@ -1125,7 +1257,9 @@ mod imp {
             let mut tap = SystemTapSource::new().expect("process taps are supported");
             let monitor = tap.monitor();
             let before = clock::host_now_ns();
-            let format = tap.start(Box::new(handler.clone())).expect("the tap starts");
+            let format = tap
+                .start(Box::new(handler.clone()))
+                .expect("the tap starts");
             let mut player = std::process::Command::new("afplay")
                 .arg("/System/Library/Sounds/Submarine.aiff")
                 .spawn()
@@ -1146,13 +1280,26 @@ mod imp {
                 captured.nonzero_samples,
                 permission::preflight_audio_capture(),
             );
-            assert!(captured.buffers > 0, "the IOProc never fired (permission undetermined?)");
+            assert!(
+                captured.buffers > 0,
+                "the IOProc never fired (permission undetermined?)"
+            );
             // On the built-in speakers the IOProc only starts with the sound.
             // That must not have counted as a fault.
             assert_eq!((monitor.rebuilds(), notice), (0, SystemAudioNotice::None));
-            assert!((4.0..=5.5).contains(&seconds), "{seconds} s of audio in 5 s");
-            assert!(captured.nonzero_samples > 0, "only zeros: System Audio Recording is probably denied");
-            assert_eq!(captured.formats, vec![format], "frames carry the format start() returned");
+            assert!(
+                (4.0..=5.5).contains(&seconds),
+                "{seconds} s of audio in 5 s"
+            );
+            assert!(
+                captured.nonzero_samples > 0,
+                "only zeros: System Audio Recording is probably denied"
+            );
+            assert_eq!(
+                captured.formats,
+                vec![format],
+                "frames carry the format start() returned"
+            );
             let first = captured.first_host_ns.unwrap();
             assert!(first + 1_000_000_000 > before && captured.last_host_ns < after);
             assert_eq!(our_aggregates(), 0, "stop destroyed the aggregate");
@@ -1165,10 +1312,16 @@ mod imp {
             let handler = CapturingHandler::default();
             let mut tap = SystemTapSource::new().expect("process taps are supported");
             let monitor = tap.monitor();
-            tap.start(Box::new(handler.clone())).expect("the tap starts");
+            tap.start(Box::new(handler.clone()))
+                .expect("the tap starts");
             let inject = |tap: &SystemTapSource| {
                 output_gate().note_event();
-                let _ = tap.worker.as_ref().unwrap().tx.send(Msg::Device(DeviceEvent::DefaultOutputChanged));
+                let _ = tap
+                    .worker
+                    .as_ref()
+                    .unwrap()
+                    .tx
+                    .send(Msg::Device(DeviceEvent::DefaultOutputChanged));
             };
 
             // Nothing delivers yet, so nothing proves the aggregate is still
@@ -1179,7 +1332,10 @@ mod imp {
             while monitor.rebuilds() == 0 && t.elapsed() < Duration::from_secs(5) {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            println!("tap: rebuilt {} ms after the event", t.elapsed().as_millis());
+            println!(
+                "tap: rebuilt {} ms after the event",
+                t.elapsed().as_millis()
+            );
             assert_eq!(monitor.rebuilds(), 1);
             assert!(t.elapsed() < Duration::from_secs(2));
             std::thread::sleep(Duration::from_millis(100));
@@ -1195,7 +1351,11 @@ mod imp {
             // Still the same device and delivering: a flap back is ignored.
             inject(&tap);
             std::thread::sleep(Duration::from_millis(1_000));
-            assert_eq!(monitor.rebuilds(), 1, "a tap that still delivers is left alone");
+            assert_eq!(
+                monitor.rebuilds(),
+                1,
+                "a tap that still delivers is left alone"
+            );
             assert!(!output_gate().is_busy());
             let _ = player.kill();
             let _ = player.wait();
@@ -1203,7 +1363,10 @@ mod imp {
 
             let captured = handler.0.lock().unwrap();
             assert!(
-                captured.discontinuities.iter().any(|d| matches!(d, Discontinuity::FormatChanged { .. })),
+                captured
+                    .discontinuities
+                    .iter()
+                    .any(|d| matches!(d, Discontinuity::FormatChanged { .. })),
                 "{:?}",
                 captured.discontinuities
             );
@@ -1259,11 +1422,28 @@ mod tests {
         let uid = |pid: u32, n: u32| format!("{AGGREGATE_UID_PREFIX}{pid}.{n}");
         let alive = |pid: u32| pid == 200;
         let live = vec![uid(100, 1)];
-        assert!(is_leaked_aggregate(&uid(100, 0), 100, &live, alive), "this process: left by an earlier start");
-        assert!(!is_leaked_aggregate(&uid(100, 1), 100, &live, alive), "this process: in use right now");
-        assert!(is_leaked_aggregate(&uid(300, 0), 100, &live, alive), "a process that is gone");
-        assert!(!is_leaked_aggregate(&uid(200, 0), 100, &live, alive), "a second copy of the app that is running");
-        assert!(!is_leaked_aggregate("AppleUSBAudioEngine:1", 100, &live, alive));
+        assert!(
+            is_leaked_aggregate(&uid(100, 0), 100, &live, alive),
+            "this process: left by an earlier start"
+        );
+        assert!(
+            !is_leaked_aggregate(&uid(100, 1), 100, &live, alive),
+            "this process: in use right now"
+        );
+        assert!(
+            is_leaked_aggregate(&uid(300, 0), 100, &live, alive),
+            "a process that is gone"
+        );
+        assert!(
+            !is_leaked_aggregate(&uid(200, 0), 100, &live, alive),
+            "a second copy of the app that is running"
+        );
+        assert!(!is_leaked_aggregate(
+            "AppleUSBAudioEngine:1",
+            100,
+            &live,
+            alive
+        ));
     }
 
     #[test]
@@ -1272,7 +1452,10 @@ mod tests {
         let monitor = SystemAudioMonitor(shared.clone());
         assert_eq!(monitor.notice(), SystemAudioNotice::None);
         assert!(!monitor.heard_audio() && !monitor.echo_risk());
-        shared.notice.store(SystemAudioNotice::NoAudioDetected.as_u8(), Ordering::Relaxed);
+        shared.notice.store(
+            SystemAudioNotice::NoAudioDetected.as_u8(),
+            Ordering::Relaxed,
+        );
         shared.nonzero_callbacks.store(3, Ordering::Relaxed);
         shared.echo_risk.store(true, Ordering::Relaxed);
         assert!(monitor.notice().is_problem());

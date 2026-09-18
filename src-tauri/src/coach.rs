@@ -70,7 +70,9 @@ pub async fn generate_tips(
     api_key: &str,
 ) -> Result<String, String> {
     if api_key.trim().is_empty() {
-        return Err("No OpenRouter API key configured. Add one in Settings → Coaching.".to_string());
+        return Err(
+            "No OpenRouter API key configured. Add one in Settings → Coaching.".to_string(),
+        );
     }
     // Only consider entries that actually contain words.
     let usable: Vec<&HistoryEntry> = entries
@@ -131,7 +133,9 @@ pub async fn generate_tips(
             "OpenRouter rate limit hit. Wait a moment and try again.".to_string()
         }
         StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST => {
-            format!("OpenRouter couldn't use that model ({status}). Check the model id in Settings.")
+            format!(
+                "OpenRouter couldn't use that model ({status}). Check the model id in Settings."
+            )
         }
         _ => format!("Coaching failed ({status}): {body_text}"),
     };

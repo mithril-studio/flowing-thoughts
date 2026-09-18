@@ -296,8 +296,18 @@ mod tests {
 
     #[test]
     fn exact_duplicate_is_flagged() {
-        let system = [seg("s1", 10_000, 14_000, "We should move the release to next Friday.")];
-        let mic = [seg("m1", 10_200, 14_300, "We should move the release to next Friday.")];
+        let system = [seg(
+            "s1",
+            10_000,
+            14_000,
+            "We should move the release to next Friday.",
+        )];
+        let mic = [seg(
+            "m1",
+            10_200,
+            14_300,
+            "We should move the release to next Friday.",
+        )];
         assert_eq!(flagged(&mic, &system), vec!["m1"]);
     }
 
@@ -345,8 +355,18 @@ mod tests {
             "The numbers for the third quarter look better than expected, mostly because of the new pricing.",
         )];
         let mic = [
-            seg("m1", 200, 4_500, "The numbers for the third quarter look better"),
-            seg("m2", 4_600, 9_100, "than expected mostly because of the new pricing"),
+            seg(
+                "m1",
+                200,
+                4_500,
+                "The numbers for the third quarter look better",
+            ),
+            seg(
+                "m2",
+                4_600,
+                9_100,
+                "than expected mostly because of the new pricing",
+            ),
         ];
         assert_eq!(flagged(&mic, &system), vec!["m1", "m2"]);
 
@@ -365,8 +385,18 @@ mod tests {
 
     #[test]
     fn unrelated_simultaneous_speech_is_not_flagged() {
-        let system = [seg("s1", 10_000, 15_000, "Then we can look at the budget for the next quarter.")];
-        let mic = [seg("m1", 10_500, 14_000, "Sorry, can you hear me? My connection is bad.")];
+        let system = [seg(
+            "s1",
+            10_000,
+            15_000,
+            "Then we can look at the budget for the next quarter.",
+        )];
+        let mic = [seg(
+            "m1",
+            10_500,
+            14_000,
+            "Sorry, can you hear me? My connection is bad.",
+        )];
         assert!(flagged(&mic, &system).is_empty());
     }
 
@@ -407,7 +437,12 @@ mod tests {
     #[test]
     fn double_talk_is_not_flagged() {
         // The user talks over the speakers: own words plus some bleed.
-        let system = [seg("s1", 10_000, 15_000, "and then we roll it out to all the customers in March")];
+        let system = [seg(
+            "s1",
+            10_000,
+            15_000,
+            "and then we roll it out to all the customers in March",
+        )];
         let mic = [seg(
             "m1",
             10_500,
@@ -419,7 +454,12 @@ mod tests {
 
     #[test]
     fn double_talk_is_flagged_only_when_the_bleed_clears_the_threshold() {
-        let system = [seg("s1", 10_000, 15_000, "and then we roll it out to all the customers in March")];
+        let system = [seg(
+            "s1",
+            10_000,
+            15_000,
+            "and then we roll it out to all the customers in March",
+        )];
         // 12 of 14 tokens are bleed.
         let mic = [seg(
             "m1",
@@ -478,7 +518,12 @@ mod tests {
             seg("s1", 0, 4_000, "the launch date is the first of June"),
             seg("s2", 60_000, 64_000, "we also need a new logo"),
         ];
-        let mic = [seg("m1", 61_000, 65_000, "the launch date is the first of June")];
+        let mic = [seg(
+            "m1",
+            61_000,
+            65_000,
+            "the launch date is the first of June",
+        )];
         assert!(flagged(&mic, &system).is_empty());
         assert!(flagged(&mic, &[]).is_empty());
         assert!(flagged(&[], &system).is_empty());
@@ -506,8 +551,14 @@ mod tests {
             normalize_text("  Eén ding: coördinatie van de ideeën, vóór 's ochtends!  "),
             "een ding coordinatie van de ideeen voor s ochtends"
         );
-        assert_eq!(normalize_text("Zo’n café… oké?"), normalize_text("zo'n cafe oke"));
-        assert_eq!(normalize_text("Het is 10.30 uur — privé-afspraak."), "het is 10 30 uur prive afspraak");
+        assert_eq!(
+            normalize_text("Zo’n café… oké?"),
+            normalize_text("zo'n cafe oke")
+        );
+        assert_eq!(
+            normalize_text("Het is 10.30 uur — privé-afspraak."),
+            "het is 10 30 uur prive afspraak"
+        );
         // Decomposed diacritics (e + combining acute) fold the same way.
         assert_eq!(normalize_text("cafe\u{0301}"), "cafe");
         assert_eq!(normalize_text("ĲSSEL"), "ijssel");
@@ -526,14 +577,27 @@ mod tests {
 
     #[test]
     fn diacritics_and_punctuation_do_not_hide_an_echo() {
-        let system = [seg("s1", 0, 5_000, "Eén ding nog: de coördinatie van het café-overleg, oké?")];
-        let mic = [seg("m1", 300, 5_200, "een ding nog de coordinatie van het cafe overleg oke")];
+        let system = [seg(
+            "s1",
+            0,
+            5_000,
+            "Eén ding nog: de coördinatie van het café-overleg, oké?",
+        )];
+        let mic = [seg(
+            "m1",
+            300,
+            5_200,
+            "een ding nog de coordinatie van het cafe overleg oke",
+        )];
         assert_eq!(flagged(&mic, &system), vec!["m1"]);
     }
 
     #[test]
     fn lcs_is_a_subsequence_length() {
-        assert_eq!(lcs_len(&["a", "b", "c", "d"], &["a", "x", "c", "d", "y"]), 3);
+        assert_eq!(
+            lcs_len(&["a", "b", "c", "d"], &["a", "x", "c", "d", "y"]),
+            3
+        );
         assert_eq!(lcs_len(&["a", "b"], &["b", "a"]), 1);
         assert_eq!(lcs_len(&["a"], &[]), 0);
     }
@@ -550,7 +614,8 @@ mod tests {
         while let Some(start) = rest.find("\"BEGIN;") {
             let batch = &rest[start + 1..];
             let end = batch.find("COMMIT;\"").expect("end of migration batch") + "COMMIT;".len();
-            conn.execute_batch(&batch[..end]).expect("run migration batch");
+            conn.execute_batch(&batch[..end])
+                .expect("run migration batch");
             rest = &batch[end..];
         }
         conn
@@ -589,7 +654,11 @@ mod tests {
         let mic = track(TrackKind::Mic);
         let system = track(TrackKind::System);
         store::seed_track_speakers(conn, &meeting_id).unwrap();
-        Fixture { meeting_id, mic, system }
+        Fixture {
+            meeting_id,
+            mic,
+            system,
+        }
     }
 
     fn new_run(conn: &Connection, meeting_id: &str) -> String {
@@ -618,7 +687,12 @@ mod tests {
     }
 
     /// One window on `track_id` holding `segments`. Returns the segment ids.
-    fn decode(conn: &Connection, run_id: &str, track_id: &str, segments: &[NewSegment]) -> Vec<String> {
+    fn decode(
+        conn: &Connection,
+        run_id: &str,
+        track_id: &str,
+        segments: &[NewSegment],
+    ) -> Vec<String> {
         let window = NewWindow {
             track_id: track_id.to_string(),
             seq: 0,
@@ -630,7 +704,11 @@ mod tests {
     }
 
     /// `(id, suppressed_reason)` of every segment of the run.
-    fn reasons(conn: &Connection, f: &Fixture, run_id: &str) -> Vec<(String, Option<SuppressedReason>)> {
+    fn reasons(
+        conn: &Connection,
+        f: &Fixture,
+        run_id: &str,
+    ) -> Vec<(String, Option<SuppressedReason>)> {
         store::list_segments(conn, &f.meeting_id, Some(run_id))
             .unwrap()
             .into_iter()
@@ -639,7 +717,10 @@ mod tests {
     }
 
     fn reason_of(conn: &Connection, segment_id: &str) -> Option<SuppressedReason> {
-        store::get_segment(conn, segment_id).unwrap().unwrap().suppressed_reason
+        store::get_segment(conn, segment_id)
+            .unwrap()
+            .unwrap()
+            .suppressed_reason
     }
 
     const ROADMAP: &str = "First we look at the roadmap for the next quarter.";
@@ -654,20 +735,33 @@ mod tests {
             &conn,
             &run_id,
             &f.system,
-            &[new_segment(0, ROADMAP, None), new_segment(10_000, HIRING, None)],
+            &[
+                new_segment(0, ROADMAP, None),
+                new_segment(10_000, HIRING, None),
+            ],
         );
         let mic = decode(
             &conn,
             &run_id,
             &f.mic,
             &[
-                new_segment(200, "first we look at the roadmap for the next quarter", None),
+                new_segment(
+                    200,
+                    "first we look at the roadmap for the next quarter",
+                    None,
+                ),
                 new_segment(5_000, "Sounds good, I have two questions about that.", None),
             ],
         );
 
         let outcome = apply_echo_flags(&conn, &f.meeting_id, &run_id).unwrap();
-        assert_eq!(outcome, EchoOutcome { examined: 2, flagged: 1 });
+        assert_eq!(
+            outcome,
+            EchoOutcome {
+                examined: 2,
+                flagged: 1
+            }
+        );
 
         assert_eq!(reason_of(&conn, &mic[0]), Some(SuppressedReason::Echo));
         assert_eq!(reason_of(&conn, &mic[1]), None);
@@ -689,7 +783,10 @@ mod tests {
             &conn,
             &run_id,
             &f.mic,
-            &[new_segment(100, ROADMAP, None), new_segment(6_000, "I can take that one.", None)],
+            &[
+                new_segment(100, ROADMAP, None),
+                new_segment(6_000, "I can take that one.", None),
+            ],
         );
 
         let first = apply_echo_flags(&conn, &f.meeting_id, &run_id).unwrap();
@@ -716,7 +813,13 @@ mod tests {
         );
 
         let outcome = apply_echo_flags(&conn, &f.meeting_id, &run_id).unwrap();
-        assert_eq!(outcome, EchoOutcome { examined: 0, flagged: 0 });
+        assert_eq!(
+            outcome,
+            EchoOutcome {
+                examined: 0,
+                flagged: 0
+            }
+        );
         assert_eq!(reason_of(&conn, &mic[0]), Some(SuppressedReason::Repeat));
     }
 
@@ -745,21 +848,53 @@ mod tests {
         let f = fixture(&conn);
 
         let first_run = new_run(&conn, &f.meeting_id);
-        decode(&conn, &first_run, &f.system, &[new_segment(0, ROADMAP, None)]);
-        let first_mic = decode(&conn, &first_run, &f.mic, &[new_segment(100, ROADMAP, None)]);
+        decode(
+            &conn,
+            &first_run,
+            &f.system,
+            &[new_segment(0, ROADMAP, None)],
+        );
+        let first_mic = decode(
+            &conn,
+            &first_run,
+            &f.mic,
+            &[new_segment(100, ROADMAP, None)],
+        );
         apply_echo_flags(&conn, &f.meeting_id, &first_run).unwrap();
-        assert_eq!(reason_of(&conn, &first_mic[0]), Some(SuppressedReason::Echo));
+        assert_eq!(
+            reason_of(&conn, &first_mic[0]),
+            Some(SuppressedReason::Echo)
+        );
 
         // The second run hears the mic differently: no echo this time. The
         // first run's system segment must not be held against it.
         let second_run = new_run(&conn, &f.meeting_id);
-        decode(&conn, &second_run, &f.system, &[new_segment(10_000, HIRING, None)]);
-        let second_mic = decode(&conn, &second_run, &f.mic, &[new_segment(100, ROADMAP, None)]);
+        decode(
+            &conn,
+            &second_run,
+            &f.system,
+            &[new_segment(10_000, HIRING, None)],
+        );
+        let second_mic = decode(
+            &conn,
+            &second_run,
+            &f.mic,
+            &[new_segment(100, ROADMAP, None)],
+        );
         let outcome = apply_echo_flags(&conn, &f.meeting_id, &second_run).unwrap();
-        assert_eq!(outcome, EchoOutcome { examined: 1, flagged: 0 });
+        assert_eq!(
+            outcome,
+            EchoOutcome {
+                examined: 1,
+                flagged: 0
+            }
+        );
         assert_eq!(reason_of(&conn, &second_mic[0]), None);
         // And the first run keeps its flags.
-        assert_eq!(reason_of(&conn, &first_mic[0]), Some(SuppressedReason::Echo));
+        assert_eq!(
+            reason_of(&conn, &first_mic[0]),
+            Some(SuppressedReason::Echo)
+        );
     }
 
     #[test]
@@ -769,7 +904,12 @@ mod tests {
         let run_id = new_run(&conn, &f.meeting_id);
         decode(&conn, &run_id, &f.system, &[new_segment(0, ROADMAP, None)]);
         let mic = decode(&conn, &run_id, &f.mic, &[new_segment(100, ROADMAP, None)]);
-        store::set_segment_text(&conn, &mic[0], Some("Something else entirely, typed by hand.")).unwrap();
+        store::set_segment_text(
+            &conn,
+            &mic[0],
+            Some("Something else entirely, typed by hand."),
+        )
+        .unwrap();
 
         apply_echo_flags(&conn, &f.meeting_id, &run_id).unwrap();
         assert_eq!(reason_of(&conn, &mic[0]), Some(SuppressedReason::Echo));
@@ -791,7 +931,13 @@ mod tests {
         let run_id = new_run(&conn, &f.meeting_id);
         decode(&conn, &run_id, &f.mic, &[new_segment(100, ROADMAP, None)]);
         let outcome = apply_echo_flags(&conn, &f.meeting_id, &run_id).unwrap();
-        assert_eq!(outcome, EchoOutcome { examined: 1, flagged: 0 });
+        assert_eq!(
+            outcome,
+            EchoOutcome {
+                examined: 1,
+                flagged: 0
+            }
+        );
     }
 
     // --- Echo risk -------------------------------------------------------------------
@@ -801,7 +947,10 @@ mod tests {
         let internal_speakers = Some(four_cc(b"ispk"));
         assert!(output_has_echo_risk(TRANSPORT_BUILT_IN, internal_speakers));
         // Headphones in the jack of the same built-in device.
-        assert!(!output_has_echo_risk(TRANSPORT_BUILT_IN, Some(DATA_SOURCE_HEADPHONES)));
+        assert!(!output_has_echo_risk(
+            TRANSPORT_BUILT_IN,
+            Some(DATA_SOURCE_HEADPHONES)
+        ));
         // A built-in output that does not name its data source: assume speakers.
         assert!(output_has_echo_risk(TRANSPORT_BUILT_IN, None));
         // Bluetooth, USB: headsets as far as we can tell.

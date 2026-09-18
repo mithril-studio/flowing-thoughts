@@ -39,11 +39,13 @@ pub fn parse(script: &str) -> Result<Vec<Prompt>, String> {
         let id = fields.next().unwrap_or("").to_string();
         let text = fields.next().unwrap_or("").to_string();
         if id.is_empty() || text.is_empty() || id.contains(char::is_whitespace) {
-            return Err(format!("prompt script line {line_no}: expected `<id> | <text>`"));
+            return Err(format!(
+                "prompt script line {line_no}: expected `<id> | <text>`"
+            ));
         }
-        let category = category
-            .clone()
-            .ok_or_else(|| format!("prompt script line {line_no}: prompt before any `## category:`"))?;
+        let category = category.clone().ok_or_else(|| {
+            format!("prompt script line {line_no}: prompt before any `## category:`")
+        })?;
         if prompts.iter().any(|p| p.id == id) {
             return Err(format!("prompt script line {line_no}: duplicate id {id}"));
         }
@@ -63,7 +65,9 @@ pub fn parse(script: &str) -> Result<Vec<Prompt>, String> {
                 "numbers" => entities.numbers = values,
                 "terms" => entities.terms = values,
                 other => {
-                    return Err(format!("prompt script line {line_no}: unknown field {other:?}"))
+                    return Err(format!(
+                        "prompt script line {line_no}: unknown field {other:?}"
+                    ))
                 }
             }
         }
@@ -100,8 +104,12 @@ mod tests {
     #[test]
     fn rejects_malformed_scripts() {
         assert!(parse("short-001 | Ja.").unwrap_err().contains("before any"));
-        assert!(parse("## category: a\nx-1 | Ja.\nx-1 | Nee.").unwrap_err().contains("duplicate"));
-        assert!(parse("## category: a\nx-1 | Ja. | bogus: 1").unwrap_err().contains("unknown field"));
+        assert!(parse("## category: a\nx-1 | Ja.\nx-1 | Nee.")
+            .unwrap_err()
+            .contains("duplicate"));
+        assert!(parse("## category: a\nx-1 | Ja. | bogus: 1")
+            .unwrap_err()
+            .contains("unknown field"));
         assert!(parse("## category: a\njust text").is_err());
     }
 
@@ -112,15 +120,28 @@ mod tests {
         for p in &prompts {
             // An entity the reference itself does not contain can never be hit.
             let reference = crate::eval::normalize::normalize(&p.text);
-            for e in p.entities.names.iter().chain(&p.entities.numbers).chain(&p.entities.terms) {
-                assert!(entity_found(e, &reference), "{}: entity {e:?} not in its own text", p.id);
+            for e in p
+                .entities
+                .names
+                .iter()
+                .chain(&p.entities.numbers)
+                .chain(&p.entities.terms)
+            {
+                assert!(
+                    entity_found(e, &reference),
+                    "{}: entity {e:?} not in its own text",
+                    p.id
+                );
             }
         }
         let short = prompts.iter().filter(|p| p.category == "short_reply");
         let under_floor = short
             .filter(|p| p.text.split_whitespace().count() < crate::pipeline::MIN_INJECT_WORDS)
             .count();
-        assert!(under_floor >= 25, "need short replies under the five-word floor");
+        assert!(
+            under_floor >= 25,
+            "need short replies under the five-word floor"
+        );
     }
 
     /// The hash split is only stratified in expectation. This pins that the

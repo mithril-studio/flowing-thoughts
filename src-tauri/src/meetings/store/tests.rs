@@ -28,7 +28,8 @@ fn migrate(conn: &Connection) {
     while let Some(start) = rest.find("\"BEGIN;") {
         let batch = &rest[start + 1..];
         let end = batch.find("COMMIT;\"").expect("end of migration batch") + "COMMIT;".len();
-        conn.execute_batch(&batch[..end]).expect("run migration batch");
+        conn.execute_batch(&batch[..end])
+            .expect("run migration batch");
         rest = &batch[end..];
     }
     let version: i64 = conn
@@ -38,8 +39,10 @@ fn migrate(conn: &Connection) {
 }
 
 fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
-        .unwrap()
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .unwrap()
 }
 
 struct Fixture {
@@ -70,7 +73,10 @@ fn new_track(conn: &Connection, meeting_id: &str, kind: TrackKind) -> String {
             meeting_id: meeting_id.to_string(),
             kind,
             device_name: Some("MacBook Pro Microphone".to_string()),
-            format: Some(SourceFormat { sample_rate: 48_000, channels: 1 }),
+            format: Some(SourceFormat {
+                sample_rate: 48_000,
+                channels: 1,
+            }),
         },
     )
     .unwrap()
@@ -97,7 +103,12 @@ fn fixture(conn: &Connection) -> Fixture {
     seed_track_speakers(conn, &meeting_id).unwrap();
     let run_id = new_run(conn, &meeting_id);
     set_active_run(conn, &meeting_id, &run_id).unwrap();
-    Fixture { meeting_id, mic, system, run_id }
+    Fixture {
+        meeting_id,
+        mic,
+        system,
+        run_id,
+    }
 }
 
 fn segment(start_ms: u64, text: &str) -> NewSegment {
@@ -175,8 +186,14 @@ fn deleting_a_meeting_cascades_to_every_table() {
     insert_chunk(&conn, &chunk(&f.mic, 0, 0)).unwrap();
     let segments = decode(&conn, &f.run_id, &f.mic, 0, &[segment(0, "Goedemorgen")]);
     set_segment_text(&conn, &segments[0], Some("Goedemorgen allemaal")).unwrap();
-    let speaker = add_speaker(&conn, &f.meeting_id, Some(&f.system), "Speaker 2", SpeakerSource::Diarization)
-        .unwrap();
+    let speaker = add_speaker(
+        &conn,
+        &f.meeting_id,
+        Some(&f.system),
+        "Speaker 2",
+        SpeakerSource::Diarization,
+    )
+    .unwrap();
     add_speaker_turns(&conn, &speaker.id, &f.system, &[(0, 1_500)]).unwrap();
     assign_segment_speaker(&conn, &segments[0], &speaker.id, Some(0.9)).unwrap();
     let anna = add_participant(
@@ -200,12 +217,20 @@ fn deleting_a_meeting_cascades_to_every_table() {
         },
     )
     .unwrap();
-    complete_summary(&conn, &summary_id, "Overview", &[summary_item("Do it", &[&segments[0]])])
-        .unwrap();
+    complete_summary(
+        &conn,
+        &summary_id,
+        "Overview",
+        &[summary_item("Do it", &[&segments[0]])],
+    )
+    .unwrap();
     insert_job(&conn, &transcribe_job(&f.meeting_id, 0)).unwrap();
 
     assert!(delete_meeting(&conn, &f.meeting_id).unwrap());
-    assert!(!delete_meeting(&conn, &f.meeting_id).unwrap(), "second delete finds nothing");
+    assert!(
+        !delete_meeting(&conn, &f.meeting_id).unwrap(),
+        "second delete finds nothing"
+    );
 
     // Only the other meeting's rows are left: its two tracks, two speakers and run.
     assert_eq!(count(&conn, "meetings"), 1);
@@ -228,7 +253,11 @@ fn deleting_a_meeting_cascades_to_every_table() {
     ] {
         assert_eq!(count(&conn, table), 0, "{table} should be empty");
     }
-    assert_eq!(count(&conn, "people"), 1, "people are shared between meetings");
+    assert_eq!(
+        count(&conn, "people"),
+        1,
+        "people are shared between meetings"
+    );
     assert!(get_meeting(&conn, &f.meeting_id).unwrap().is_none());
     assert!(get_meeting(&conn, &keep.meeting_id).unwrap().is_some());
 }
@@ -246,7 +275,13 @@ fn meetings_list_newest_first_with_job_audio_and_summary_state() {
 
     insert_chunk(&conn, &chunk(&older.mic, 0, 0)).unwrap();
     close_chunk(&conn, &format!("{}-chunk-0", older.mic), 16_000 * 60).unwrap();
-    finish_meeting(&conn, &older.meeting_id, "2026-09-16T09:01:00+00:00", 60_000).unwrap();
+    finish_meeting(
+        &conn,
+        &older.meeting_id,
+        "2026-09-16T09:01:00+00:00",
+        60_000,
+    )
+    .unwrap();
     set_meeting_status(&conn, &older.meeting_id, MeetingStatus::Queued, None).unwrap();
     set_echo_risk(&conn, &older.meeting_id, true).unwrap();
     let job = insert_job(&conn, &transcribe_job(&older.meeting_id, 0)).unwrap();
@@ -261,7 +296,10 @@ fn meetings_list_newest_first_with_job_audio_and_summary_state() {
     assert_eq!(item.duration_ms, 60_000);
     assert_eq!(item.ended_at.as_deref(), Some("2026-09-16T09:01:00+00:00"));
     assert!(item.echo_risk && item.has_audio && !item.has_summary);
-    assert_eq!(item.job.as_ref().map(|j| j.job_id.as_str()), Some(job.id.as_str()));
+    assert_eq!(
+        item.job.as_ref().map(|j| j.job_id.as_str()),
+        Some(job.id.as_str())
+    );
     assert!(!list[0].has_audio && list[0].job.is_none());
 
     let detail = get_meeting(&conn, &older.meeting_id).unwrap().unwrap();
@@ -274,11 +312,16 @@ fn meetings_list_newest_first_with_job_audio_and_summary_state() {
     assert!(detail.tracks[0].has_audio && !detail.tracks[1].has_audio);
     assert_eq!(detail.runs.len(), 1);
     assert_eq!(
-        detail.speakers.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(),
+        detail
+            .speakers
+            .iter()
+            .map(|s| s.label.as_str())
+            .collect::<Vec<_>>(),
         vec!["Me", "Them"]
     );
 
-    let waiting = list_meetings_with_status(&conn, &[MeetingStatus::Queued, MeetingStatus::Paused]).unwrap();
+    let waiting =
+        list_meetings_with_status(&conn, &[MeetingStatus::Queued, MeetingStatus::Paused]).unwrap();
     assert_eq!(waiting.len(), 1);
     assert_eq!(waiting[0].id, older.meeting_id);
     assert!(list_meetings_with_status(&conn, &[]).unwrap().is_empty());
@@ -288,14 +331,25 @@ fn meetings_list_newest_first_with_job_audio_and_summary_state() {
 fn rename_trims_and_rejects_empty_titles_and_unknown_meetings() {
     let conn = memory_db();
     let id = new_meeting(&conn, "  Standup ");
-    assert_eq!(get_meeting(&conn, &id).unwrap().unwrap().meeting.title, "Standup");
+    assert_eq!(
+        get_meeting(&conn, &id).unwrap().unwrap().meeting.title,
+        "Standup"
+    );
 
     rename_meeting(&conn, &id, "  Weekly sync  ").unwrap();
-    assert_eq!(get_meeting(&conn, &id).unwrap().unwrap().meeting.title, "Weekly sync");
+    assert_eq!(
+        get_meeting(&conn, &id).unwrap().unwrap().meeting.title,
+        "Weekly sync"
+    );
 
     assert!(rename_meeting(&conn, &id, "   ").is_err());
-    assert!(rename_meeting(&conn, "nope", "Title").unwrap_err().contains("not found"));
-    assert_eq!(get_meeting(&conn, &id).unwrap().unwrap().meeting.title, "Weekly sync");
+    assert!(rename_meeting(&conn, "nope", "Title")
+        .unwrap_err()
+        .contains("not found"));
+    assert_eq!(
+        get_meeting(&conn, &id).unwrap().unwrap().meeting.title,
+        "Weekly sync"
+    );
 }
 
 #[test]
@@ -323,30 +377,48 @@ fn chunks_open_close_recover_and_delete() {
     insert_chunk(&conn, &chunk(&f.mic, 1, 60_000)).unwrap();
     insert_chunk(&conn, &chunk(&f.mic, 0, 0)).unwrap();
     insert_chunk(&conn, &chunk(&f.system, 0, 0)).unwrap();
-    assert!(insert_chunk(&conn, &chunk(&f.mic, 0, 0)).is_err(), "one row per chunk");
+    assert!(
+        insert_chunk(&conn, &chunk(&f.mic, 0, 0)).is_err(),
+        "one row per chunk"
+    );
 
     let first = format!("{}-chunk-0", f.mic);
     close_chunk(&conn, &first, 960_000).unwrap();
-    assert!(close_chunk(&conn, &first, 1).unwrap_err().contains("not open"));
+    assert!(close_chunk(&conn, &first, 1)
+        .unwrap_err()
+        .contains("not open"));
     assert!(close_chunk(&conn, "nope", 1).is_err());
 
     let listed = list_chunks(&conn, &f.mic).unwrap();
     assert_eq!(listed.iter().map(|c| c.seq).collect::<Vec<_>>(), vec![0, 1]);
     assert_eq!(listed[0].status, ChunkStatus::Closed);
     assert_eq!(listed[0].n_frames, 960_000);
-    assert_eq!(listed[1], chunk(&f.mic, 1, 60_000), "an open chunk reads back as written");
+    assert_eq!(
+        listed[1],
+        chunk(&f.mic, 1, 60_000),
+        "an open chunk reads back as written"
+    );
 
     // What a crash leaves behind: the two chunks that were still open.
     let open = list_open_chunks(&conn).unwrap();
     assert_eq!(open.len(), 2);
     for c in &open {
-        assert_eq!(track_meeting_id(&conn, &c.track_id).unwrap().as_deref(), Some(f.meeting_id.as_str()));
+        assert_eq!(
+            track_meeting_id(&conn, &c.track_id).unwrap().as_deref(),
+            Some(f.meeting_id.as_str())
+        );
         mark_chunk_recovered(&conn, &c.id, 8_000).unwrap();
     }
     assert!(list_open_chunks(&conn).unwrap().is_empty());
-    assert_eq!(list_chunks(&conn, &f.mic).unwrap()[1].status, ChunkStatus::Recovered);
+    assert_eq!(
+        list_chunks(&conn, &f.mic).unwrap()[1].status,
+        ChunkStatus::Recovered
+    );
     // 60 s in, plus 8 000 frames at 16 kHz.
-    assert_eq!(list_tracks(&conn, &f.meeting_id).unwrap()[0].duration_ms, 60_500);
+    assert_eq!(
+        list_tracks(&conn, &f.meeting_id).unwrap()[0].duration_ms,
+        60_500
+    );
 
     mark_audio_deleted(&conn, &f.meeting_id).unwrap();
     let detail = get_meeting(&conn, &f.meeting_id).unwrap().unwrap();
@@ -366,7 +438,12 @@ fn track_device_and_overflow_updates() {
     assert!(
         insert_track(
             &conn,
-            &NewTrack { meeting_id: f.meeting_id.clone(), kind: TrackKind::Mic, device_name: None, format: None }
+            &NewTrack {
+                meeting_id: f.meeting_id.clone(),
+                kind: TrackKind::Mic,
+                device_name: None,
+                format: None
+            }
         )
         .is_err(),
         "one track per kind"
@@ -374,8 +451,16 @@ fn track_device_and_overflow_updates() {
 
     add_track_overflow(&conn, &f.mic, 100).unwrap();
     add_track_overflow(&conn, &f.mic, 28).unwrap();
-    set_track_device(&conn, &f.mic, Some("AirPods Pro"), Some(SourceFormat { sample_rate: 24_000, channels: 1 }))
-        .unwrap();
+    set_track_device(
+        &conn,
+        &f.mic,
+        Some("AirPods Pro"),
+        Some(SourceFormat {
+            sample_rate: 24_000,
+            channels: 1,
+        }),
+    )
+    .unwrap();
     let mic = &list_tracks(&conn, &f.meeting_id).unwrap()[0];
     assert_eq!(mic.overflow_frames, 128);
     assert_eq!(mic.device_name.as_deref(), Some("AirPods Pro"));
@@ -415,17 +500,26 @@ fn a_meeting_has_exactly_one_active_run() {
         .unwrap();
     assert_eq!(active, 1);
     // The old run is kept and still readable by id.
-    assert_eq!(list_segments(&conn, &f.meeting_id, Some(&f.run_id)).unwrap()[0].text, "eerste run");
+    assert_eq!(
+        list_segments(&conn, &f.meeting_id, Some(&f.run_id)).unwrap()[0].text,
+        "eerste run"
+    );
     assert_eq!(list_runs(&conn, &f.meeting_id).unwrap().len(), 2);
 
     // A run of another meeting is refused and changes nothing.
     assert!(set_active_run(&conn, &f.meeting_id, &other.run_id).is_err());
     assert!(set_active_run(&conn, &f.meeting_id, "nope").is_err());
     assert_eq!(
-        get_meeting(&conn, &f.meeting_id).unwrap().unwrap().active_run_id.as_deref(),
+        get_meeting(&conn, &f.meeting_id)
+            .unwrap()
+            .unwrap()
+            .active_run_id
+            .as_deref(),
         Some(second.as_str())
     );
-    assert!(list_segments(&conn, &f.meeting_id, Some(&other.run_id)).unwrap().is_empty());
+    assert!(list_segments(&conn, &f.meeting_id, Some(&other.run_id))
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -438,7 +532,12 @@ fn a_meeting_without_an_active_run_has_no_segments() {
 
     assert!(list_segments(&conn, &meeting_id, None).unwrap().is_empty());
     assert_eq!(count_segments(&conn, &meeting_id, None).unwrap(), 0);
-    assert_eq!(list_segments(&conn, &meeting_id, Some(&run_id)).unwrap().len(), 1);
+    assert_eq!(
+        list_segments(&conn, &meeting_id, Some(&run_id))
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -448,10 +547,17 @@ fn run_status_stamps_started_and_finished() {
     let run = get_run(&conn, &f.run_id).unwrap().unwrap();
     assert_eq!(run.status, RunStatus::Queued);
     assert_eq!(run.language, MeetingLanguage::Nl);
-    assert_eq!(get_run_params(&conn, &f.run_id).unwrap().as_deref(), Some("{}"));
+    assert_eq!(
+        get_run_params(&conn, &f.run_id).unwrap().as_deref(),
+        Some("{}")
+    );
 
     set_run_status(&conn, &f.run_id, RunStatus::Running, None).unwrap();
-    assert!(get_run(&conn, &f.run_id).unwrap().unwrap().finished_at.is_none());
+    assert!(get_run(&conn, &f.run_id)
+        .unwrap()
+        .unwrap()
+        .finished_at
+        .is_none());
     set_run_status(&conn, &f.run_id, RunStatus::Failed, Some("boom")).unwrap();
     let run = get_run(&conn, &f.run_id).unwrap().unwrap();
     assert_eq!(run.error.as_deref(), Some("boom"));
@@ -466,7 +572,12 @@ fn a_failing_segment_insert_leaves_the_window_pending() {
     let ids = insert_windows(
         &conn,
         &f.run_id,
-        &[NewWindow { track_id: f.mic.clone(), seq: 0, start_ms: 0, end_ms: 28_000 }],
+        &[NewWindow {
+            track_id: f.mic.clone(),
+            seq: 0,
+            start_ms: 0,
+            end_ms: 28_000,
+        }],
     )
     .unwrap();
     let window_id = &ids[0];
@@ -478,15 +589,24 @@ fn a_failing_segment_insert_leaves_the_window_pending() {
          BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
     )
     .unwrap();
-    let error = complete_window(&conn, window_id, Some("nl"), &[segment(0, "prima"), segment(1_000, "boom")])
-        .unwrap_err();
+    let error = complete_window(
+        &conn,
+        window_id,
+        Some("nl"),
+        &[segment(0, "prima"), segment(1_000, "boom")],
+    )
+    .unwrap_err();
     assert!(error.contains("disk full"), "{error}");
 
     let window = &list_windows(&conn, &f.run_id).unwrap()[0];
     assert_eq!(window.status, WindowStatus::Pending);
     assert_eq!(window.attempts, 0);
     assert!(window.language.is_none());
-    assert_eq!(count(&conn, "transcript_segments"), 0, "the first segment is rolled back too");
+    assert_eq!(
+        count(&conn, "transcript_segments"),
+        0,
+        "the first segment is rolled back too"
+    );
     assert!(conn.is_autocommit(), "no transaction is left open");
     assert_eq!(
         next_pending_window(&conn, &f.run_id).unwrap().map(|w| w.id),
@@ -496,8 +616,13 @@ fn a_failing_segment_insert_leaves_the_window_pending() {
 
     // The retry goes through, and only once.
     conn.execute_batch("DROP TRIGGER fail_segment").unwrap();
-    let segments = complete_window(&conn, window_id, Some("nl"), &[segment(0, "prima"), segment(1_000, "ook goed")])
-        .unwrap();
+    let segments = complete_window(
+        &conn,
+        window_id,
+        Some("nl"),
+        &[segment(0, "prima"), segment(1_000, "ook goed")],
+    )
+    .unwrap();
     assert_eq!(segments.len(), 2);
     let window = &list_windows(&conn, &f.run_id).unwrap()[0];
     assert_eq!((window.status, window.attempts), (WindowStatus::Done, 1));
@@ -522,30 +647,64 @@ fn windows_are_planned_atomically_and_decoded_in_timeline_order() {
     let bad = [window(&f.mic, 0, 0), window(&f.mic, 0, 30_000)];
     assert!(insert_windows(&conn, &f.run_id, &bad).is_err());
     assert_eq!(count(&conn, "transcript_windows"), 0);
-    assert!(window_counts(&conn, &f.run_id).unwrap().is_settled(), "no speech, nothing to do");
+    assert!(
+        window_counts(&conn, &f.run_id).unwrap().is_settled(),
+        "no speech, nothing to do"
+    );
 
-    let plan = [window(&f.system, 0, 5_000), window(&f.mic, 0, 0), window(&f.mic, 1, 40_000)];
+    let plan = [
+        window(&f.system, 0, 5_000),
+        window(&f.mic, 0, 0),
+        window(&f.mic, 1, 40_000),
+    ];
     let ids = insert_windows(&conn, &f.run_id, &plan).unwrap();
     let pending = list_pending_windows(&conn, &f.run_id).unwrap();
-    assert_eq!(pending.iter().map(|w| w.start_ms).collect::<Vec<_>>(), vec![0, 5_000, 40_000]);
+    assert_eq!(
+        pending.iter().map(|w| w.start_ms).collect::<Vec<_>>(),
+        vec![0, 5_000, 40_000]
+    );
     assert_eq!(pending[1].track_kind, TrackKind::System);
 
     // Detection is resumable: the language is read back from a done window.
     assert!(track_language(&conn, &f.run_id, &f.mic).unwrap().is_none());
     complete_window(&conn, &ids[1], Some("nl"), &[]).unwrap();
-    assert_eq!(track_language(&conn, &f.run_id, &f.mic).unwrap().as_deref(), Some("nl"));
-    assert!(track_language(&conn, &f.run_id, &f.system).unwrap().is_none());
+    assert_eq!(
+        track_language(&conn, &f.run_id, &f.mic).unwrap().as_deref(),
+        Some("nl")
+    );
+    assert!(track_language(&conn, &f.run_id, &f.system)
+        .unwrap()
+        .is_none());
 
     // One retry, then the window fails for good.
-    assert_eq!(fail_window(&conn, &ids[0], "decode error", 2).unwrap(), WindowStatus::Pending);
-    assert_eq!(next_pending_window(&conn, &f.run_id).unwrap().unwrap().id, ids[0]);
-    assert_eq!(fail_window(&conn, &ids[0], "decode error", 2).unwrap(), WindowStatus::Failed);
+    assert_eq!(
+        fail_window(&conn, &ids[0], "decode error", 2).unwrap(),
+        WindowStatus::Pending
+    );
+    assert_eq!(
+        next_pending_window(&conn, &f.run_id).unwrap().unwrap().id,
+        ids[0]
+    );
+    assert_eq!(
+        fail_window(&conn, &ids[0], "decode error", 2).unwrap(),
+        WindowStatus::Failed
+    );
     assert!(fail_window(&conn, &ids[0], "again", 2).is_err());
 
     let counts = window_counts(&conn, &f.run_id).unwrap();
-    assert_eq!(counts, WindowCounts { done: 1, failed: 1, total: 3 });
+    assert_eq!(
+        counts,
+        WindowCounts {
+            done: 1,
+            failed: 1,
+            total: 3
+        }
+    );
     assert!(!counts.is_settled());
-    assert_eq!(next_pending_window(&conn, &f.run_id).unwrap().unwrap().id, ids[2]);
+    assert_eq!(
+        next_pending_window(&conn, &f.run_id).unwrap().unwrap().id,
+        ids[2]
+    );
 }
 
 #[test]
@@ -554,12 +713,27 @@ fn segments_interleave_tracks_and_respect_the_edit_layer() {
     let f = fixture(&conn);
     let mut flagged = segment(4_000, "Ondertiteling door de NPO");
     flagged.suppressed_reason = Some(SuppressedReason::PromptEcho);
-    let mic = decode(&conn, &f.run_id, &f.mic, 0, &[segment(0, "Goedemorgen"), flagged]);
-    let system = decode(&conn, &f.run_id, &f.system, 0, &[segment(2_000, "Hoi Joost")]);
+    let mic = decode(
+        &conn,
+        &f.run_id,
+        &f.mic,
+        0,
+        &[segment(0, "Goedemorgen"), flagged],
+    );
+    let system = decode(
+        &conn,
+        &f.run_id,
+        &f.system,
+        0,
+        &[segment(2_000, "Hoi Joost")],
+    );
 
     let listed = list_segments(&conn, &f.meeting_id, None).unwrap();
     assert_eq!(
-        listed.iter().map(|s| (s.start_ms, s.speaker_label.as_str())).collect::<Vec<_>>(),
+        listed
+            .iter()
+            .map(|s| (s.start_ms, s.speaker_label.as_str()))
+            .collect::<Vec<_>>(),
         vec![(0, "Me"), (2_000, "Them"), (4_000, "Me")]
     );
     assert_eq!(listed[1].track_kind, TrackKind::System);
@@ -567,7 +741,10 @@ fn segments_interleave_tracks_and_respect_the_edit_layer() {
     assert!(listed[0].speaker_id.is_some());
     assert!(listed[0].original_text.is_none() && !listed[0].hidden);
     // Flagged by the pipeline: hidden by default, still listed.
-    assert_eq!(listed[2].suppressed_reason, Some(SuppressedReason::PromptEcho));
+    assert_eq!(
+        listed[2].suppressed_reason,
+        Some(SuppressedReason::PromptEcho)
+    );
     assert!(listed[2].hidden);
     assert_eq!(count_segments(&conn, &f.meeting_id, None).unwrap(), 2);
 
@@ -576,10 +753,17 @@ fn segments_interleave_tracks_and_respect_the_edit_layer() {
     assert_eq!(edited.text, "Goedemorgen allemaal");
     assert_eq!(edited.original_text.as_deref(), Some("Goedemorgen"));
     let raw: String = conn
-        .query_row("SELECT text FROM transcript_segments WHERE id = ?1", params![mic[0]], |r| r.get(0))
+        .query_row(
+            "SELECT text FROM transcript_segments WHERE id = ?1",
+            params![mic[0]],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(raw, "Goedemorgen");
-    assert_eq!(list_segments(&conn, &f.meeting_id, None).unwrap()[0].text, "Goedemorgen allemaal");
+    assert_eq!(
+        list_segments(&conn, &f.meeting_id, None).unwrap()[0].text,
+        "Goedemorgen allemaal"
+    );
 
     // The user's hidden choice wins both ways and survives a text change.
     assert!(set_segment_hidden(&conn, &mic[0], true).unwrap().hidden);
@@ -589,13 +773,21 @@ fn segments_interleave_tracks_and_respect_the_edit_layer() {
     assert!(cleared.original_text.is_none() && cleared.hidden);
     assert_eq!(count(&conn, "segment_edits"), 2);
 
-
     // Typing the decoded text back is not an edit.
     set_segment_text(&conn, &system[0], Some("Hoi")).unwrap();
-    assert!(set_segment_text(&conn, &system[0], Some("Hoi Joost")).unwrap().original_text.is_none());
-    assert_eq!(count(&conn, "segment_edits"), 2, "only the two hidden choices above are left");
+    assert!(set_segment_text(&conn, &system[0], Some("Hoi Joost"))
+        .unwrap()
+        .original_text
+        .is_none());
+    assert_eq!(
+        count(&conn, "segment_edits"),
+        2,
+        "only the two hidden choices above are left"
+    );
 
-    assert!(set_segment_text(&conn, "nope", Some("x")).unwrap_err().contains("not found"));
+    assert!(set_segment_text(&conn, "nope", Some("x"))
+        .unwrap_err()
+        .contains("not found"));
     assert!(set_segment_hidden(&conn, "nope", true).is_err());
 }
 
@@ -605,14 +797,30 @@ fn suppressed_reason_is_the_only_mutable_segment_column() {
     let f = fixture(&conn);
     let mut already = segment(2_000, "stilte");
     already.suppressed_reason = Some(SuppressedReason::NoSpeech);
-    let ids = decode(&conn, &f.run_id, &f.mic, 0, &[segment(0, "Hoi Joost"), already, segment(4_000, "ja")]);
+    let ids = decode(
+        &conn,
+        &f.run_id,
+        &f.mic,
+        0,
+        &[segment(0, "Hoi Joost"), already, segment(4_000, "ja")],
+    );
 
-    let flagged = flag_segments(&conn, &[ids[0].clone(), ids[1].clone(), "nope".to_string()], SuppressedReason::Echo)
-        .unwrap();
-    assert_eq!(flagged, 1, "an earlier finding is kept, an unknown id is skipped");
+    let flagged = flag_segments(
+        &conn,
+        &[ids[0].clone(), ids[1].clone(), "nope".to_string()],
+        SuppressedReason::Echo,
+    )
+    .unwrap();
+    assert_eq!(
+        flagged, 1,
+        "an earlier finding is kept, an unknown id is skipped"
+    );
     let listed = list_segments(&conn, &f.meeting_id, None).unwrap();
     assert_eq!(listed[0].suppressed_reason, Some(SuppressedReason::Echo));
-    assert_eq!(listed[1].suppressed_reason, Some(SuppressedReason::NoSpeech));
+    assert_eq!(
+        listed[1].suppressed_reason,
+        Some(SuppressedReason::NoSpeech)
+    );
     assert!(listed[0].hidden && !listed[2].hidden);
     assert_eq!(listed[0].text, "Hoi Joost");
 }
@@ -636,10 +844,20 @@ fn seeding_is_idempotent_and_follows_the_tracks() {
     let labels = |speakers: Vec<crate::meetings::types::Speaker>| {
         speakers.into_iter().map(|s| s.label).collect::<Vec<_>>()
     };
-    assert_eq!(labels(seed_track_speakers(&conn, &meeting_id).unwrap()), vec!["Me", "Them"]);
-    assert_eq!(labels(seed_track_speakers(&conn, &meeting_id).unwrap()), vec!["Me", "Them"]);
+    assert_eq!(
+        labels(seed_track_speakers(&conn, &meeting_id).unwrap()),
+        vec!["Me", "Them"]
+    );
+    assert_eq!(
+        labels(seed_track_speakers(&conn, &meeting_id).unwrap()),
+        vec!["Me", "Them"]
+    );
     assert_eq!(count(&conn, "speakers"), 2);
-    assert_eq!(count(&conn, "segment_speakers"), 0, "track labels need no per-segment rows");
+    assert_eq!(
+        count(&conn, "segment_speakers"),
+        0,
+        "track labels need no per-segment rows"
+    );
 }
 
 #[test]
@@ -664,16 +882,40 @@ fn merging_speakers_moves_segments_turns_and_assignments() {
         &f.run_id,
         &f.system,
         0,
-        &[segment(0, "een"), segment(2_000, "twee"), segment(4_000, "drie")],
+        &[
+            segment(0, "een"),
+            segment(2_000, "twee"),
+            segment(4_000, "drie"),
+        ],
     );
-    let two = add_speaker(&conn, &f.meeting_id, Some(&f.system), "Speaker 2", SpeakerSource::Diarization).unwrap();
-    let three = add_speaker(&conn, &f.meeting_id, Some(&f.system), " Speaker 3 ", SpeakerSource::Diarization).unwrap();
+    let two = add_speaker(
+        &conn,
+        &f.meeting_id,
+        Some(&f.system),
+        "Speaker 2",
+        SpeakerSource::Diarization,
+    )
+    .unwrap();
+    let three = add_speaker(
+        &conn,
+        &f.meeting_id,
+        Some(&f.system),
+        " Speaker 3 ",
+        SpeakerSource::Diarization,
+    )
+    .unwrap();
     assert_eq!(three.label, "Speaker 3");
 
     assign_segment_speaker(&conn, &ids[0], &two.id, Some(0.8)).unwrap();
     assign_segment_speaker(&conn, &ids[1], &three.id, Some(0.7)).unwrap();
     add_speaker_turns(&conn, &two.id, &f.system, &[(0, 1_000)]).unwrap();
-    add_speaker_turns(&conn, &three.id, &f.system, &[(2_000, 3_000), (6_000, 7_000)]).unwrap();
+    add_speaker_turns(
+        &conn,
+        &three.id,
+        &f.system,
+        &[(2_000, 3_000), (6_000, 7_000)],
+    )
+    .unwrap();
     let anna = add_participant(
         &conn,
         &NewParticipant {
@@ -695,7 +937,10 @@ fn merging_speakers_moves_segments_turns_and_assignments() {
     // The assignment came along, so both segments now carry Anna's name.
     assert_eq!(listed[0].speaker_label, "Anna");
     assert_eq!(listed[1].speaker_label, "Anna");
-    assert_eq!(listed[2].speaker_label, "Them", "untouched segments stay with the track speaker");
+    assert_eq!(
+        listed[2].speaker_label, "Them",
+        "untouched segments stay with the track speaker"
+    );
     let turns = list_speaker_turns(&conn, &f.meeting_id).unwrap();
     assert_eq!(turns.len(), 3);
     assert!(turns.iter().all(|t| t.speaker_id == two.id));
@@ -710,7 +955,14 @@ fn merging_speakers_moves_segments_turns_and_assignments() {
 
     // Refused: itself, an unknown speaker, another meeting, a track speaker.
     let other = fixture(&conn);
-    let stranger = add_speaker(&conn, &other.meeting_id, None, "Speaker 2", SpeakerSource::Manual).unwrap();
+    let stranger = add_speaker(
+        &conn,
+        &other.meeting_id,
+        None,
+        "Speaker 2",
+        SpeakerSource::Manual,
+    )
+    .unwrap();
     let them = list_speakers(&conn, &f.meeting_id).unwrap().remove(1);
     assert_eq!(them.source, SpeakerSource::Track);
     assert!(merge_speakers(&conn, &two.id, &two.id).is_err());
@@ -725,8 +977,22 @@ fn merging_keeps_the_targets_own_assignment_and_shared_segments() {
     let conn = memory_db();
     let f = fixture(&conn);
     let ids = decode(&conn, &f.run_id, &f.system, 0, &[segment(0, "een")]);
-    let two = add_speaker(&conn, &f.meeting_id, None, "Speaker 2", SpeakerSource::Diarization).unwrap();
-    let three = add_speaker(&conn, &f.meeting_id, None, "Speaker 3", SpeakerSource::Diarization).unwrap();
+    let two = add_speaker(
+        &conn,
+        &f.meeting_id,
+        None,
+        "Speaker 2",
+        SpeakerSource::Diarization,
+    )
+    .unwrap();
+    let three = add_speaker(
+        &conn,
+        &f.meeting_id,
+        None,
+        "Speaker 3",
+        SpeakerSource::Diarization,
+    )
+    .unwrap();
     let participant = |name: &str| {
         add_participant(
             &conn,
@@ -739,8 +1005,20 @@ fn merging_keeps_the_targets_own_assignment_and_shared_segments() {
         )
         .unwrap()
     };
-    assign_speaker(&conn, &two.id, &participant("Anna").id, AssignmentSource::Manual).unwrap();
-    assign_speaker(&conn, &three.id, &participant("Bram").id, AssignmentSource::Manual).unwrap();
+    assign_speaker(
+        &conn,
+        &two.id,
+        &participant("Anna").id,
+        AssignmentSource::Manual,
+    )
+    .unwrap();
+    assign_speaker(
+        &conn,
+        &three.id,
+        &participant("Bram").id,
+        AssignmentSource::Manual,
+    )
+    .unwrap();
     // Diarization was unsure: the segment has a row for each of them.
     conn.execute(
         "INSERT INTO segment_speakers (segment_id, speaker_id, confidence) VALUES (?1, ?2, 0.6), (?1, ?3, 0.4)",
@@ -752,7 +1030,10 @@ fn merging_keeps_the_targets_own_assignment_and_shared_segments() {
 
     assert_eq!(count(&conn, "segment_speakers"), 1);
     assert_eq!(count(&conn, "speaker_assignments"), 1);
-    assert_eq!(list_segments(&conn, &f.meeting_id, None).unwrap()[0].speaker_label, "Anna");
+    assert_eq!(
+        list_segments(&conn, &f.meeting_id, None).unwrap()[0].speaker_label,
+        "Anna"
+    );
 }
 
 #[test]
@@ -760,25 +1041,64 @@ fn a_segment_can_be_reassigned_by_hand() {
     let conn = memory_db();
     let f = fixture(&conn);
     let ids = decode(&conn, &f.run_id, &f.system, 0, &[segment(0, "een")]);
-    let two = add_speaker(&conn, &f.meeting_id, Some(&f.system), "Speaker 2", SpeakerSource::Diarization).unwrap();
-    let three = add_speaker(&conn, &f.meeting_id, Some(&f.system), "Speaker 3", SpeakerSource::Manual).unwrap();
+    let two = add_speaker(
+        &conn,
+        &f.meeting_id,
+        Some(&f.system),
+        "Speaker 2",
+        SpeakerSource::Diarization,
+    )
+    .unwrap();
+    let three = add_speaker(
+        &conn,
+        &f.meeting_id,
+        Some(&f.system),
+        "Speaker 3",
+        SpeakerSource::Manual,
+    )
+    .unwrap();
 
-    assert_eq!(assign_segment_speaker(&conn, &ids[0], &two.id, Some(0.9)).unwrap().speaker_label, "Speaker 2");
+    assert_eq!(
+        assign_segment_speaker(&conn, &ids[0], &two.id, Some(0.9))
+            .unwrap()
+            .speaker_label,
+        "Speaker 2"
+    );
     let moved = assign_segment_speaker(&conn, &ids[0], &three.id, None).unwrap();
     assert_eq!(moved.speaker_label, "Speaker 3");
     assert_eq!(count(&conn, "segment_speakers"), 1, "reassigning replaces");
 
     rename_speaker(&conn, &three.id, "  Bram ").unwrap();
-    assert_eq!(get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label, "Bram");
+    assert_eq!(
+        get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label,
+        "Bram"
+    );
     assert!(rename_speaker(&conn, &three.id, " ").is_err());
 
     clear_segment_speaker(&conn, &ids[0]).unwrap();
-    assert_eq!(get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label, "Them");
+    assert_eq!(
+        get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label,
+        "Them"
+    );
 
     let other = fixture(&conn);
-    let stranger = add_speaker(&conn, &other.meeting_id, None, "Speaker 2", SpeakerSource::Manual).unwrap();
+    let stranger = add_speaker(
+        &conn,
+        &other.meeting_id,
+        None,
+        "Speaker 2",
+        SpeakerSource::Manual,
+    )
+    .unwrap();
     assert!(assign_segment_speaker(&conn, &ids[0], &stranger.id, None).is_err());
-    assert!(add_speaker(&conn, &f.meeting_id, Some(&other.mic), "Speaker 4", SpeakerSource::Manual).is_err());
+    assert!(add_speaker(
+        &conn,
+        &f.meeting_id,
+        Some(&other.mic),
+        "Speaker 4",
+        SpeakerSource::Manual
+    )
+    .is_err());
     assert!(add_speaker_turns(&conn, &two.id, &f.system, &[(2_000, 1_000)]).is_err());
 }
 
@@ -791,7 +1111,11 @@ fn people_are_upserted_by_email_case_insensitively() {
     let again = upsert_person(&conn, "  anna@example.COM ", None).unwrap();
     assert_eq!(first.id, again.id);
     assert_eq!(again.email, "anna@example.com");
-    assert_eq!(again.display_name.as_deref(), Some("Anna"), "no name keeps the old one");
+    assert_eq!(
+        again.display_name.as_deref(),
+        Some("Anna"),
+        "no name keeps the old one"
+    );
 
     let renamed = upsert_person(&conn, "ANNA@EXAMPLE.COM", Some("Anna de Vries")).unwrap();
     assert_eq!(renamed.id, first.id);
@@ -825,13 +1149,19 @@ fn participants_link_to_people_and_name_their_speaker() {
     let guest = add_participant(&conn, &attendee(Some("Gast"), None)).unwrap();
     assert!(guest.person_id.is_none());
     assert!(add_participant(&conn, &attendee(Some(" "), None)).is_err());
-    assert_eq!(list_participants(&conn, &f.meeting_id).unwrap(), vec![again.clone(), guest.clone()]);
+    assert_eq!(
+        list_participants(&conn, &f.meeting_id).unwrap(),
+        vec![again.clone(), guest.clone()]
+    );
 
     // A person met in two meetings is one person.
     let other = fixture(&conn);
     let elsewhere = add_participant(
         &conn,
-        &NewParticipant { meeting_id: other.meeting_id.clone(), ..attendee(None, Some("ANNA@example.com")) },
+        &NewParticipant {
+            meeting_id: other.meeting_id.clone(),
+            ..attendee(None, Some("ANNA@example.com"))
+        },
     )
     .unwrap();
     assert_eq!(elsewhere.person_id, anna.person_id);
@@ -841,15 +1171,29 @@ fn participants_link_to_people_and_name_their_speaker() {
     let them = list_speakers(&conn, &f.meeting_id).unwrap().remove(1);
     // A suggestion is stored but never applied to a label.
     assign_speaker(&conn, &them.id, &anna.id, AssignmentSource::Suggested).unwrap();
-    assert_eq!(get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label, "Them");
-    assert!(!list_speaker_assignments(&conn, &f.meeting_id).unwrap()[0].source.is_confirmed());
+    assert_eq!(
+        get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label,
+        "Them"
+    );
+    assert!(!list_speaker_assignments(&conn, &f.meeting_id).unwrap()[0]
+        .source
+        .is_confirmed());
     // Confirmed, the participant's name wins over the speaker's label.
     assign_speaker(&conn, &them.id, &anna.id, AssignmentSource::Manual).unwrap();
-    assert_eq!(get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label, "Anna");
-    assert_eq!(list_speakers(&conn, &f.meeting_id).unwrap()[1].label, "Anna");
+    assert_eq!(
+        get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label,
+        "Anna"
+    );
+    assert_eq!(
+        list_speakers(&conn, &f.meeting_id).unwrap()[1].label,
+        "Anna"
+    );
     // One assignment per speaker: a new one replaces the old.
     assign_speaker(&conn, &them.id, &guest.id, AssignmentSource::Manual).unwrap();
-    assert_eq!(get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label, "Gast");
+    assert_eq!(
+        get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label,
+        "Gast"
+    );
     assert_eq!(count(&conn, "speaker_assignments"), 1);
 
     assert!(assign_speaker(&conn, &them.id, &elsewhere.id, AssignmentSource::Manual).is_err());
@@ -858,7 +1202,10 @@ fn participants_link_to_people_and_name_their_speaker() {
     // Removing the participant takes the assignment along; the person stays.
     assert!(remove_participant(&conn, &guest.id).unwrap());
     assert!(!remove_participant(&conn, &guest.id).unwrap());
-    assert_eq!(get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label, "Them");
+    assert_eq!(
+        get_segment(&conn, &ids[0]).unwrap().unwrap().speaker_label,
+        "Them"
+    );
     assign_speaker(&conn, &them.id, &anna.id, AssignmentSource::Manual).unwrap();
     assert!(unassign_speaker(&conn, &them.id).unwrap());
     assert!(!unassign_speaker(&conn, &them.id).unwrap());
@@ -871,7 +1218,13 @@ fn participants_link_to_people_and_name_their_speaker() {
 fn a_summary_is_written_with_its_items_and_sources_or_not_at_all() {
     let conn = memory_db();
     let f = fixture(&conn);
-    let ids = decode(&conn, &f.run_id, &f.mic, 0, &[segment(0, "een"), segment(2_000, "twee")]);
+    let ids = decode(
+        &conn,
+        &f.run_id,
+        &f.mic,
+        0,
+        &[segment(0, "een"), segment(2_000, "twee")],
+    );
     let new_summary = NewSummary {
         meeting_id: f.meeting_id.clone(),
         run_id: f.run_id.clone(),
@@ -882,15 +1235,27 @@ fn a_summary_is_written_with_its_items_and_sources_or_not_at_all() {
 
     let first = insert_summary(&conn, &new_summary).unwrap();
     let pending = latest_summary(&conn, &f.meeting_id).unwrap().unwrap();
-    assert_eq!((pending.status, pending.items.len()), (SummaryStatus::Pending, 0));
+    assert_eq!(
+        (pending.status, pending.items.len()),
+        (SummaryStatus::Pending, 0)
+    );
     assert!(!list_meetings(&conn).unwrap()[0].has_summary);
 
     // An item without a source, or citing a segment that does not exist,
     // rolls the whole completion back.
-    let uncited = [summary_item("Goed", &[&ids[0]]), summary_item("Verzonnen", &[])];
+    let uncited = [
+        summary_item("Goed", &[&ids[0]]),
+        summary_item("Verzonnen", &[]),
+    ];
     assert!(complete_summary(&conn, &first, "Overview", &uncited).is_err());
     let ghost = "nope".to_string();
-    assert!(complete_summary(&conn, &first, "Overview", &[summary_item("Spook", &[&ghost])]).is_err());
+    assert!(complete_summary(
+        &conn,
+        &first,
+        "Overview",
+        &[summary_item("Spook", &[&ghost])]
+    )
+    .is_err());
     let still = get_summary(&conn, &first).unwrap().unwrap();
     assert_eq!(still.status, SummaryStatus::Pending);
     assert!(still.overview.is_none());
@@ -902,28 +1267,60 @@ fn a_summary_is_written_with_its_items_and_sources_or_not_at_all() {
     action.due_date = Some("2026-09-24".to_string());
     let mut topic = summary_item("Planning", &[&ids[0]]);
     topic.kind = SummaryItemKind::Topic;
-    complete_summary(&conn, &first, "We spraken over de planning.", &[action, topic]).unwrap();
+    complete_summary(
+        &conn,
+        &first,
+        "We spraken over de planning.",
+        &[action, topic],
+    )
+    .unwrap();
 
     let done = latest_summary(&conn, &f.meeting_id).unwrap().unwrap();
     assert_eq!(done.status, SummaryStatus::Done);
-    assert_eq!(done.overview.as_deref(), Some("We spraken over de planning."));
-    assert_eq!(done.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), vec!["Stuur de offerte", "Planning"]);
+    assert_eq!(
+        done.overview.as_deref(),
+        Some("We spraken over de planning.")
+    );
+    assert_eq!(
+        done.items
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Stuur de offerte", "Planning"]
+    );
     assert_eq!(done.items[0].kind, SummaryItemKind::Action);
     assert_eq!(done.items[0].owner.as_deref(), Some("Anna"));
     assert_eq!(done.items[0].due_date.as_deref(), Some("2026-09-24"));
-    assert_eq!(done.items[0].source_segment_ids, vec![ids[0].clone(), ids[1].clone()], "deduplicated, in transcript order");
+    assert_eq!(
+        done.items[0].source_segment_ids,
+        vec![ids[0].clone(), ids[1].clone()],
+        "deduplicated, in transcript order"
+    );
     assert!(done.items[1].owner.is_none() && done.items[1].due_date.is_none());
     assert!(list_meetings(&conn).unwrap()[0].has_summary);
 
     // More items append after the existing ones.
     add_summary_items(&conn, &first, &[summary_item("Nog iets", &[&ids[0]])]).unwrap();
-    assert_eq!(get_summary(&conn, &first).unwrap().unwrap().items[2].text, "Nog iets");
+    assert_eq!(
+        get_summary(&conn, &first).unwrap().unwrap().items[2].text,
+        "Nog iets"
+    );
 
     // A failed retry does not hide the summary the user already had.
     let retry = insert_summary(&conn, &new_summary).unwrap();
     fail_summary(&conn, &retry, "HTTP 500").unwrap();
-    assert_eq!(latest_summary(&conn, &f.meeting_id).unwrap().unwrap().id, first);
-    assert_eq!(get_summary(&conn, &retry).unwrap().unwrap().error.as_deref(), Some("HTTP 500"));
+    assert_eq!(
+        latest_summary(&conn, &f.meeting_id).unwrap().unwrap().id,
+        first
+    );
+    assert_eq!(
+        get_summary(&conn, &retry)
+            .unwrap()
+            .unwrap()
+            .error
+            .as_deref(),
+        Some("HTTP 500")
+    );
     assert!(fail_summary(&conn, "nope", "x").is_err());
     assert!(complete_summary(&conn, "nope", "x", &[]).is_err());
 }
@@ -939,12 +1336,22 @@ fn jobs_are_claimed_by_priority_then_age() {
 
     let old = insert_job(&conn, &transcribe_job(&f.meeting_id, 0)).unwrap();
     let new = insert_job(&conn, &transcribe_job(&other.meeting_id, 0)).unwrap();
-    let urgent = insert_job(&conn, &NewJob { run_id: Some(f.run_id.clone()), ..transcribe_job(&f.meeting_id, 5) })
-        .unwrap();
+    let urgent = insert_job(
+        &conn,
+        &NewJob {
+            run_id: Some(f.run_id.clone()),
+            ..transcribe_job(&f.meeting_id, 5)
+        },
+    )
+    .unwrap();
     assert_eq!((old.status, old.attempts), (JobStatus::Queued, 0));
     assert_eq!(old.payload_json, "{}");
 
-    assert_eq!(next_queued_job(&conn).unwrap().unwrap().id, urgent.id, "peeking claims nothing");
+    assert_eq!(
+        next_queued_job(&conn).unwrap().unwrap().id,
+        urgent.id,
+        "peeking claims nothing"
+    );
     let first = claim_next_job(&conn).unwrap().unwrap();
     assert_eq!(first.id, urgent.id);
     assert_eq!((first.status, first.attempts), (JobStatus::Running, 1));
@@ -969,7 +1376,10 @@ fn running_jobs_are_requeued_at_launch_and_keep_their_place() {
     let claimed = claim_next_job(&conn).unwrap().unwrap();
     assert!(set_job_progress(&conn, &claimed.id, 3, 10).unwrap());
     let shown = job_progress(&conn, &f.meeting_id).unwrap().unwrap();
-    assert_eq!((shown.status, shown.done, shown.total), (JobStatus::Running, 3, 10));
+    assert_eq!(
+        (shown.status, shown.done, shown.total),
+        (JobStatus::Running, 3, 10)
+    );
 
     // The app dies here. At the next launch:
     assert_eq!(requeue_running_jobs(&conn).unwrap(), 1);
@@ -977,13 +1387,20 @@ fn running_jobs_are_requeued_at_launch_and_keep_their_place() {
     let requeued = get_job(&conn, &first.id).unwrap().unwrap();
     assert_eq!(requeued.status, JobStatus::Queued);
     assert!(requeued.started_at.is_none());
-    assert_eq!((requeued.progress_done, requeued.progress_total), (3, 10), "progress survives");
+    assert_eq!(
+        (requeued.progress_done, requeued.progress_total),
+        (3, 10),
+        "progress survives"
+    );
 
     // Older than the job that was never started, so it is claimed first again.
     let again = claim_next_job(&conn).unwrap().unwrap();
     assert_eq!((again.id.as_str(), again.attempts), (first.id.as_str(), 2));
     assert!(finish_job(&conn, &again.id).unwrap());
-    assert!(job_progress(&conn, &f.meeting_id).unwrap().is_none(), "a done job is not unfinished");
+    assert!(
+        job_progress(&conn, &f.meeting_id).unwrap().is_none(),
+        "a done job is not unfinished"
+    );
     assert_eq!(claim_next_job(&conn).unwrap().unwrap().id, second.id);
 }
 
@@ -992,7 +1409,10 @@ fn the_worker_cannot_resurrect_a_cancelled_job() {
     let conn = memory_db();
     let f = fixture(&conn);
     let job = insert_job(&conn, &transcribe_job(&f.meeting_id, 0)).unwrap();
-    assert!(!heartbeat_job(&conn, &job.id).unwrap(), "only a running job has a heartbeat");
+    assert!(
+        !heartbeat_job(&conn, &job.id).unwrap(),
+        "only a running job has a heartbeat"
+    );
 
     let job = claim_next_job(&conn).unwrap().unwrap();
     assert!(heartbeat_job(&conn, &job.id).unwrap());
@@ -1013,10 +1433,16 @@ fn the_worker_cannot_resurrect_a_cancelled_job() {
     claim_next_job(&conn).unwrap().unwrap();
     assert!(fail_job(&conn, &retry.id, "model missing").unwrap());
     let failed = get_job(&conn, &retry.id).unwrap().unwrap();
-    assert_eq!((failed.status, failed.error.as_deref()), (JobStatus::Failed, Some("model missing")));
+    assert_eq!(
+        (failed.status, failed.error.as_deref()),
+        (JobStatus::Failed, Some("model missing"))
+    );
 
     let listed = list_jobs(&conn, &f.meeting_id).unwrap();
-    assert_eq!(listed.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec![retry.id.as_str(), job.id.as_str()]);
+    assert_eq!(
+        listed.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
+        vec![retry.id.as_str(), job.id.as_str()]
+    );
 }
 
 #[test]
@@ -1049,11 +1475,25 @@ fn the_ui_and_worker_connections_share_one_queue() {
     let windows = insert_windows(
         &worker,
         &f.run_id,
-        &[NewWindow { track_id: f.mic.clone(), seq: 0, start_ms: 0, end_ms: 28_000 }],
+        &[NewWindow {
+            track_id: f.mic.clone(),
+            seq: 0,
+            start_ms: 0,
+            end_ms: 28_000,
+        }],
     )
     .unwrap();
-    complete_window(&worker, &windows[0], Some("nl"), &[segment(0, "Goedemorgen")]).unwrap();
-    assert_eq!(list_segments(&ui, &f.meeting_id, None).unwrap()[0].text, "Goedemorgen");
+    complete_window(
+        &worker,
+        &windows[0],
+        Some("nl"),
+        &[segment(0, "Goedemorgen")],
+    )
+    .unwrap();
+    assert_eq!(
+        list_segments(&ui, &f.meeting_id, None).unwrap()[0].text,
+        "Goedemorgen"
+    );
     assert_eq!(cancel_unfinished_jobs(&ui, &f.meeting_id).unwrap(), 2);
     assert!(!finish_job(&worker, &first.id).unwrap());
 
@@ -1077,7 +1517,10 @@ fn transactions_nest_and_roll_back_as_a_whole() {
     });
     assert_eq!(result.unwrap_err(), "capture failed to start");
     assert!(conn.is_autocommit());
-    assert_eq!(count(&conn, "meetings") + count(&conn, "meeting_tracks") + count(&conn, "speakers"), 0);
+    assert_eq!(
+        count(&conn, "meetings") + count(&conn, "meeting_tracks") + count(&conn, "speakers"),
+        0
+    );
 
     // An inner failure the caller handles leaves the outer work intact.
     let meeting_id = transaction(&conn, || {

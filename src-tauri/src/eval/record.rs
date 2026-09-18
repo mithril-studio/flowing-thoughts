@@ -78,7 +78,11 @@ pub fn pending_prompts<'a>(
         .collect()
 }
 
-pub fn run_recorder(data_dir: &Path, prompts: &[Prompt], options: &RecordOptions) -> Result<(), String> {
+pub fn run_recorder(
+    data_dir: &Path,
+    prompts: &[Prompt],
+    options: &RecordOptions,
+) -> Result<(), String> {
     manifest::ensure_layout(data_dir)?;
     let existing = manifest::load(data_dir)?;
     let pending = pending_prompts(prompts, &existing, options);
@@ -140,8 +144,10 @@ pub fn run_recorder(data_dir: &Path, prompts: &[Prompt], options: &RecordOptions
             let stats = manifest::wav_stats(&capture.wav_path)?;
 
             loop {
-                let warning = if crate::pipeline::is_capture_discarded(stats.duration_ms, stats.peak_amplitude)
-                    && !prompt.is_non_speech()
+                let warning = if crate::pipeline::is_capture_discarded(
+                    stats.duration_ms,
+                    stats.peak_amplitude,
+                ) && !prompt.is_non_speech()
                 {
                     " — WARNING: too short/quiet, the app would discard this capture"
                 } else if stats.peak_amplitude >= 0.999 && options.condition != "clipping" {
@@ -269,7 +275,8 @@ fn retain_present(entities: &Entities, reference: &str) -> Entities {
 /// Rename, falling back to copy + delete when the temp dir is another volume.
 pub fn move_file(from: &Path, to: &Path) -> Result<(), String> {
     if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
     }
     if std::fs::rename(from, to).is_ok() {
         return Ok(());
@@ -284,7 +291,11 @@ pub fn move_file(from: &Path, to: &Path) -> Result<(), String> {
 pub fn run_verify(data_dir: &Path) -> Result<(), String> {
     let mut clips = manifest::load(data_dir)?;
     let todo: Vec<usize> = (0..clips.len()).filter(|&i| !clips[i].verified).collect();
-    say(&format!("{} unverified clip(s) in {}\n", todo.len(), data_dir.display()));
+    say(&format!(
+        "{} unverified clip(s) in {}\n",
+        todo.len(),
+        data_dir.display()
+    ));
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
     let mut deleted: Vec<usize> = Vec::new();
@@ -344,7 +355,10 @@ pub fn run_verify(data_dir: &Path) -> Result<(), String> {
         .map(|(_, c)| c)
         .collect();
     manifest::rewrite(data_dir, &remaining)?;
-    say(&format!("\nVerified {verified}, deleted {}.", deleted.len()));
+    say(&format!(
+        "\nVerified {verified}, deleted {}.",
+        deleted.len()
+    ));
     Ok(())
 }
 
@@ -406,13 +420,37 @@ mod tests {
         };
         let mut quiet = options(None);
         quiet.condition = "quiet".into();
-        let normal = build_clip(&prompts[0], &prompts[0].text, &options(None), "mic", "a".into(), "audio/a.wav".into(), stats);
-        let variant = build_clip(&prompts[0], &prompts[0].text, &quiet, "mic", "b".into(), "audio/b.wav".into(), stats);
+        let normal = build_clip(
+            &prompts[0],
+            &prompts[0].text,
+            &options(None),
+            "mic",
+            "a".into(),
+            "audio/a.wav".into(),
+            stats,
+        );
+        let variant = build_clip(
+            &prompts[0],
+            &prompts[0].text,
+            &quiet,
+            "mic",
+            "b".into(),
+            "audio/b.wav".into(),
+            stats,
+        );
         assert_eq!(normal.split, variant.split);
         assert_eq!(normal.entities.numbers, ["25"]);
         assert!(normal.verified);
 
-        let silence = build_clip(&prompts[1], "", &options(None), "mic", "c".into(), "audio/c.wav".into(), stats);
+        let silence = build_clip(
+            &prompts[1],
+            "",
+            &options(None),
+            "mic",
+            "c".into(),
+            "audio/c.wav".into(),
+            stats,
+        );
         assert_eq!(silence.expected, Expected::NonSpeech);
         assert!(silence.reference.is_empty());
     }

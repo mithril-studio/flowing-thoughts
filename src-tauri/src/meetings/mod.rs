@@ -49,10 +49,12 @@ pub type PersistedHandle = Arc<Mutex<crate::storage::PersistedState>>;
 /// recovery is logged and never keeps the worker, or the app, from starting.
 pub fn init(app: &tauri::AppHandle) {
     if let Err(e) = session::init(app) {
-        let _ = crate::storage::append_log("ERROR", &format!("Meetings: launch recovery failed: {e}"));
+        let _ =
+            crate::storage::append_log("ERROR", &format!("Meetings: launch recovery failed: {e}"));
     }
     if let Err(e) = worker::start(app) {
-        let _ = crate::storage::append_log("ERROR", &format!("Meetings: worker failed to start: {e}"));
+        let _ =
+            crate::storage::append_log("ERROR", &format!("Meetings: worker failed to start: {e}"));
     }
 }
 

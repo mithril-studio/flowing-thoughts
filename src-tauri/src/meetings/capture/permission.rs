@@ -36,7 +36,9 @@ pub fn check() -> PermissionStatus {
     if let Err(reason) = super::support() {
         return PermissionStatus {
             state: PermissionState::Unsupported,
-            detail: Some(format!("Recording system audio needs macOS 14.4 or later ({reason}).")),
+            detail: Some(format!(
+                "Recording system audio needs macOS 14.4 or later ({reason})."
+            )),
         };
     }
     map_preflight(&preflight_audio_capture())
@@ -57,11 +59,16 @@ pub fn map_preflight(result: &PreflightResult) -> PermissionStatus {
         ),
         Ok(_) => (
             PermissionState::Unknown,
-            Some("macOS asks for permission the first time a meeting records system audio.".to_string()),
+            Some(
+                "macOS asks for permission the first time a meeting records system audio."
+                    .to_string(),
+            ),
         ),
         Err(reason) => (
             PermissionState::Unknown,
-            Some(format!("The permission cannot be checked ahead of a recording ({reason}).")),
+            Some(format!(
+                "The permission cannot be checked ahead of a recording ({reason})."
+            )),
         ),
     };
     PermissionStatus { state, detail }
@@ -99,7 +106,12 @@ pub fn preflight_audio_capture() -> PreflightResult {
         .clone()?;
     let service = CFString::from_str("kTCCServiceAudioCapture");
     // SAFETY: `Boolean TCCAccessPreflight(CFStringRef service, CFDictionaryRef options)`.
-    Ok(unsafe { preflight(&*service as *const CFString as *const c_void, std::ptr::null()) })
+    Ok(unsafe {
+        preflight(
+            &*service as *const CFString as *const c_void,
+            std::ptr::null(),
+        )
+    })
 }
 
 #[cfg(not(all(target_os = "macos", feature = "private-tcc")))]
@@ -223,7 +235,12 @@ impl SilenceDetector {
     }
 
     pub fn observe(&mut self, now: Instant, observation: Observation) -> SystemAudioNotice {
-        let Observation { delivering, heard_audio, output_running, permission } = observation;
+        let Observation {
+            delivering,
+            heard_audio,
+            output_running,
+            permission,
+        } = observation;
         if delivering && heard_audio {
             self.zeros_while_playing_since = None;
             self.not_delivering_since = None;
@@ -294,11 +311,22 @@ mod tests {
     }
 
     fn obs(delivering: bool, heard_audio: bool, output_running: Option<bool>) -> Observation {
-        Observation { delivering, heard_audio, output_running, permission: PermissionState::Unknown }
+        Observation {
+            delivering,
+            heard_audio,
+            output_running,
+            permission: PermissionState::Unknown,
+        }
     }
 
     /// Feeds the same observation once a second for `secs` seconds.
-    fn feed(detector: &mut SilenceDetector, t0: Instant, from: u64, secs: u64, o: Observation) -> SystemAudioNotice {
+    fn feed(
+        detector: &mut SilenceDetector,
+        t0: Instant,
+        from: u64,
+        secs: u64,
+        o: Observation,
+    ) -> SystemAudioNotice {
         let mut last = detector.notice();
         for s in from..=from + secs {
             last = detector.observe(t0 + Duration::from_secs(s), o);
@@ -312,16 +340,25 @@ mod tests {
     fn zeros_with_nothing_playing_are_normal() {
         let t0 = Instant::now();
         let mut detector = SilenceDetector::default();
-        assert_eq!(feed(&mut detector, t0, 0, 3_600, obs(true, false, Some(false))), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 0, 3_600, obs(true, false, Some(false))),
+            SystemAudioNotice::None
+        );
         // Nor when the HAL cannot say whether anything is playing.
-        assert_eq!(feed(&mut detector, t0, 3_601, 3_600, obs(true, false, None)), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 3_601, 3_600, obs(true, false, None)),
+            SystemAudioNotice::None
+        );
     }
 
     #[test]
     fn zeros_while_another_app_plays_raise_the_notice_after_twenty_seconds() {
         let t0 = Instant::now();
         let mut detector = SilenceDetector::default();
-        assert_eq!(feed(&mut detector, t0, 0, 19, obs(true, false, Some(true))), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 0, 19, obs(true, false, Some(true))),
+            SystemAudioNotice::None
+        );
         assert_eq!(
             detector.observe(t0 + Duration::from_secs(20), obs(true, false, Some(true))),
             SystemAudioNotice::NoAudioDetected
@@ -336,10 +373,16 @@ mod tests {
         feed(&mut detector, t0, 0, 15, obs(true, false, Some(true)));
         // The other app stops playing: the count starts over.
         detector.observe(t0 + Duration::from_secs(16), obs(true, false, Some(false)));
-        assert_eq!(feed(&mut detector, t0, 17, 15, obs(true, false, Some(true))), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 17, 15, obs(true, false, Some(true))),
+            SystemAudioNotice::None
+        );
         // So does hearing something.
         detector.observe(t0 + Duration::from_secs(33), obs(true, true, Some(true)));
-        assert_eq!(feed(&mut detector, t0, 34, 19, obs(true, false, Some(true))), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 34, 19, obs(true, false, Some(true))),
+            SystemAudioNotice::None
+        );
     }
 
     #[test]
@@ -362,12 +405,24 @@ mod tests {
     fn a_denied_preflight_raises_the_notice_at_once_but_audio_wins() {
         let t0 = Instant::now();
         let mut detector = SilenceDetector::default();
-        let denied = Observation { permission: PermissionState::Denied, ..obs(true, false, Some(false)) };
-        assert_eq!(detector.observe(t0, denied), SystemAudioNotice::PermissionDenied);
+        let denied = Observation {
+            permission: PermissionState::Denied,
+            ..obs(true, false, Some(false))
+        };
+        assert_eq!(
+            detector.observe(t0, denied),
+            SystemAudioNotice::PermissionDenied
+        );
         // Preflight is best effort (the spike once heard audio while it said
         // "undetermined"): real audio always clears the notice.
-        let heard = Observation { heard_audio: true, ..denied };
-        assert_eq!(detector.observe(t0 + Duration::from_secs(1), heard), SystemAudioNotice::None);
+        let heard = Observation {
+            heard_audio: true,
+            ..denied
+        };
+        assert_eq!(
+            detector.observe(t0 + Duration::from_secs(1), heard),
+            SystemAudioNotice::None
+        );
     }
 
     /// Found on hardware: on the built-in speakers the IOProc does not fire
@@ -376,12 +431,21 @@ mod tests {
     fn no_callbacks_with_nothing_playing_are_normal() {
         let t0 = Instant::now();
         let mut detector = SilenceDetector::default();
-        assert_eq!(feed(&mut detector, t0, 0, 3_600, obs(false, false, Some(false))), SystemAudioNotice::None);
-        assert_eq!(feed(&mut detector, t0, 3_601, 600, obs(false, false, None)), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 0, 3_600, obs(false, false, Some(false))),
+            SystemAudioNotice::None
+        );
+        assert_eq!(
+            feed(&mut detector, t0, 3_601, 600, obs(false, false, None)),
+            SystemAudioNotice::None
+        );
         // Something plays for two seconds and the callbacks have not started
         // yet, then it stops: still nothing to report.
         feed(&mut detector, t0, 4_300, 2, obs(false, false, Some(true)));
-        assert_eq!(feed(&mut detector, t0, 4_303, 60, obs(false, false, Some(false))), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 4_303, 60, obs(false, false, Some(false))),
+            SystemAudioNotice::None
+        );
     }
 
     /// Finding F5: while undetermined the IOProc may not fire at all.
@@ -389,7 +453,10 @@ mod tests {
     fn no_callbacks_raise_not_delivering_after_three_seconds_and_clear_when_they_return() {
         let t0 = Instant::now();
         let mut detector = SilenceDetector::default();
-        assert_eq!(feed(&mut detector, t0, 0, 2, obs(false, false, Some(true))), SystemAudioNotice::None);
+        assert_eq!(
+            feed(&mut detector, t0, 0, 2, obs(false, false, Some(true))),
+            SystemAudioNotice::None
+        );
         assert_eq!(
             detector.observe(t0 + Duration::from_secs(3), obs(false, false, Some(true))),
             SystemAudioNotice::NotDelivering

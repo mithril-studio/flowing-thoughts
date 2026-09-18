@@ -25,7 +25,10 @@ pub fn timebase() -> Timebase {
         if info.denom == 0 {
             Timebase { numer: 1, denom: 1 }
         } else {
-            Timebase { numer: info.numer, denom: info.denom }
+            Timebase {
+                numer: info.numer,
+                denom: info.denom,
+            }
         }
     })
 }
@@ -81,11 +84,17 @@ mod tests {
 
     #[test]
     fn ticks_convert_with_the_apple_silicon_timebase() {
-        let timebase = Timebase { numer: 125, denom: 3 };
+        let timebase = Timebase {
+            numer: 125,
+            denom: 3,
+        };
         assert_eq!(ticks_to_ns(timebase, 24), 1_000);
         // A week of uptime must not overflow.
         let week_ticks = 7 * 24 * 3_600 * 24_000_000_u64;
-        assert_eq!(ticks_to_ns(timebase, week_ticks), 7 * 24 * 3_600 * 1_000_000_000);
+        assert_eq!(
+            ticks_to_ns(timebase, week_ticks),
+            7 * 24 * 3_600 * 1_000_000_000
+        );
         assert_eq!(ticks_to_ns(Timebase { numer: 1, denom: 0 }, 5), 5);
     }
 

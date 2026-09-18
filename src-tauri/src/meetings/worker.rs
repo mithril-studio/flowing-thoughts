@@ -79,7 +79,10 @@ struct WakeSignal {
 
 impl WakeSignal {
     const fn new() -> Self {
-        Self { pending: Mutex::new(false), signal: Condvar::new() }
+        Self {
+            pending: Mutex::new(false),
+            signal: Condvar::new(),
+        }
     }
 
     fn wake(&self) {
@@ -123,7 +126,10 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         let conn = crate::db::open_connection()?;
         let requeued = jobs::recover_at_launch(&conn)?;
         if requeued > 0 {
-            log("INFO", &format!("Meetings: requeued {requeued} interrupted job(s)"));
+            log(
+                "INFO",
+                &format!("Meetings: requeued {requeued} interrupted job(s)"),
+            );
         }
         let worker = Worker::new(conn, TauriHost { app: app.clone() });
         std::thread::Builder::new()
@@ -189,7 +195,10 @@ impl Host for TauriHost {
         track: &MeetingTrack,
     ) -> Result<Box<dyn TrackAudio>, String> {
         let chunks = store::list_chunks(conn, &track.id)?;
-        Ok(Box::new(ChunkTrackAudio::new(recording::meetings_root()?, chunks)))
+        Ok(Box::new(ChunkTrackAudio::new(
+            recording::meetings_root()?,
+            chunks,
+        )))
     }
 
     fn job_progress(&mut self, progress: &JobProgress) {
@@ -204,7 +213,11 @@ impl Host for TauriHost {
         self.app
             .try_state::<PersistedHandle>()
             .and_then(|state| {
-                state.inner().lock().ok().map(|s| s.settings.meetings.auto_delete_audio_days)
+                state
+                    .inner()
+                    .lock()
+                    .ok()
+                    .map(|s| s.settings.meetings.auto_delete_audio_days)
             })
             .unwrap_or(0)
     }
@@ -264,7 +277,10 @@ impl Throttle {
     }
 
     fn ready(&mut self, now: Instant) -> bool {
-        if self.last.is_some_and(|last| now.duration_since(last) < self.every) {
+        if self
+            .last
+            .is_some_and(|last| now.duration_since(last) < self.every)
+        {
             return false;
         }
         self.last = Some(now);
@@ -291,7 +307,12 @@ pub(crate) struct Worker<H: Host> {
 
 impl<H: Host> Worker<H> {
     pub(crate) fn new(conn: Connection, host: H) -> Self {
-        Self { conn, host, progress_every: PROGRESS_EVERY, transcript_every: TRANSCRIPT_EVERY }
+        Self {
+            conn,
+            host,
+            progress_every: PROGRESS_EVERY,
+            transcript_every: TRANSCRIPT_EVERY,
+        }
     }
 
     fn run_forever(mut self) {
@@ -327,7 +348,12 @@ impl<H: Host> Worker<H> {
     fn run_job(&mut self, job: &JobRow) {
         log(
             "INFO",
-            &format!("Meetings: job {} ({}) started, attempt {}", job.id, job.kind.as_str(), job.attempts),
+            &format!(
+                "Meetings: job {} ({}) started, attempt {}",
+                job.id,
+                job.kind.as_str(),
+                job.attempts
+            ),
         );
         let result = catch_unwind(AssertUnwindSafe(|| match job.kind {
             // A new kind (WP10's summary) gets its arm here.
@@ -372,7 +398,10 @@ impl<H: Host> Worker<H> {
     /// reason; so is the meeting, unless it still shows an older, finished
     /// run, which this failure takes nothing away from.
     fn fail_job(&mut self, job: &JobRow, error: &str) {
-        log("ERROR", &format!("Meetings: job {} failed: {error}", job.id));
+        log(
+            "ERROR",
+            &format!("Meetings: job {} failed: {error}", job.id),
+        );
         let conn = &self.conn;
         let settled = store::transaction(conn, || {
             if !store::fail_job(conn, &job.id, error)? {
@@ -385,7 +414,12 @@ impl<H: Host> Worker<H> {
             }
             let meeting_failed = match store::get_meeting(conn, &job.meeting_id)? {
                 Some(meeting) if !jobs::shows_finished_run(&meeting) => {
-                    store::set_meeting_status(conn, &job.meeting_id, MeetingStatus::Failed, Some(error))?;
+                    store::set_meeting_status(
+                        conn,
+                        &job.meeting_id,
+                        MeetingStatus::Failed,
+                        Some(error),
+                    )?;
                     true
                 }
                 _ => false,
@@ -400,11 +434,18 @@ impl<H: Host> Worker<H> {
                 }
                 self.host.job_progress(&progress);
                 if meeting_failed {
-                    self.host.meeting_updated(&job.meeting_id, MeetingChange::Status);
+                    self.host
+                        .meeting_updated(&job.meeting_id, MeetingChange::Status);
                 }
             }
             Ok(None) => {}
-            Err(e) => log("ERROR", &format!("Meetings: could not record the failure of job {}: {e}", job.id)),
+            Err(e) => log(
+                "ERROR",
+                &format!(
+                    "Meetings: could not record the failure of job {}: {e}",
+                    job.id
+                ),
+            ),
         }
     }
 
@@ -420,8 +461,8 @@ impl<H: Host> Worker<H> {
                 "Transcription was interrupted {MAX_JOB_ATTEMPTS} times and was given up on. Try transcribing the meeting again."
             ));
         }
-        let run = store::get_run(conn, run_id)?
-            .ok_or_else(|| format!("Run '{run_id}' not found"))?;
+        let run =
+            store::get_run(conn, run_id)?.ok_or_else(|| format!("Run '{run_id}' not found"))?;
         let Some(meeting) = store::get_meeting(conn, &job.meeting_id)? else {
             return Ok(JobEnd::TakenAway);
         };
@@ -450,11 +491,15 @@ impl<H: Host> Worker<H> {
 
         let tracks: Vec<&MeetingTrack> = meeting.tracks.iter().filter(|t| t.has_audio).collect();
         if tracks.is_empty() {
-            return Err("The audio of this meeting was deleted, so it cannot be transcribed.".to_string());
+            return Err(
+                "The audio of this meeting was deleted, so it cannot be transcribed.".to_string(),
+            );
         }
         // Before any planning: a model that cannot work fails the job now.
         let mut decoder = host.decoder(&run.model)?;
-        let mut decoder = Gated { inner: decoder.as_mut() };
+        let mut decoder = Gated {
+            inner: decoder.as_mut(),
+        };
         let mut detector = host.detector()?;
         let mut audio: HashMap<&str, Box<dyn TrackAudio>> = HashMap::new();
         for track in &tracks {
@@ -567,7 +612,11 @@ impl<H: Host> Worker<H> {
                             window.track_kind.as_str(),
                             window.seq,
                             job.id,
-                            if status == WindowStatus::Failed { "gave up" } else { "will retry" },
+                            if status == WindowStatus::Failed {
+                                "gave up"
+                            } else {
+                                "will retry"
+                            },
                         ),
                     );
                     last_error = Some(error);
@@ -606,7 +655,10 @@ impl<H: Host> Worker<H> {
             ));
         }
         let note = (counts.failed > 0).then(|| {
-            format!("{} of {} parts could not be transcribed.", counts.failed, counts.total)
+            format!(
+                "{} of {} parts could not be transcribed.",
+                counts.failed, counts.total
+            )
         });
         let mut echoes_flagged = 0;
         store::transaction(conn, || {
@@ -641,7 +693,10 @@ impl<H: Host> Worker<H> {
         let ready = match store::list_meetings_with_status(&self.conn, &[MeetingStatus::Ready]) {
             Ok(ready) => ready,
             Err(e) => {
-                log("ERROR", &format!("Meetings: audio retention could not list meetings: {e}"));
+                log(
+                    "ERROR",
+                    &format!("Meetings: audio retention could not list meetings: {e}"),
+                );
                 return Vec::new();
             }
         };
@@ -678,12 +733,25 @@ impl<H: Host> Worker<H> {
             })();
             match result {
                 Ok(true) => {
-                    log("INFO", &format!("Meetings: deleted the audio of meeting {} after {days} day(s)", item.id));
-                    self.host.meeting_updated(&item.id, MeetingChange::AudioDeleted);
+                    log(
+                        "INFO",
+                        &format!(
+                            "Meetings: deleted the audio of meeting {} after {days} day(s)",
+                            item.id
+                        ),
+                    );
+                    self.host
+                        .meeting_updated(&item.id, MeetingChange::AudioDeleted);
                     deleted.push(item.id.clone());
                 }
                 Ok(false) => {}
-                Err(e) => log("ERROR", &format!("Meetings: audio retention failed for meeting {}: {e}", item.id)),
+                Err(e) => log(
+                    "ERROR",
+                    &format!(
+                        "Meetings: audio retention failed for meeting {}: {e}",
+                        item.id
+                    ),
+                ),
             }
         }
         deleted
@@ -691,7 +759,11 @@ impl<H: Host> Worker<H> {
 }
 
 fn planned_window(window: &WindowRow) -> PlannedWindow {
-    PlannedWindow { seq: window.seq, start_ms: window.start_ms, end_ms: window.end_ms }
+    PlannedWindow {
+        seq: window.seq,
+        start_ms: window.start_ms,
+        end_ms: window.end_ms,
+    }
 }
 
 fn new_segment(segment: longform::WindowSegment) -> store::NewSegment {
@@ -708,7 +780,10 @@ fn new_segment(segment: longform::WindowSegment) -> store::NewSegment {
 
 /// The error of a window an earlier launch gave up on.
 fn planned_error(conn: &Connection, run_id: &str) -> Option<String> {
-    store::list_windows(conn, run_id).ok()?.into_iter().find_map(|w| w.error)
+    store::list_windows(conn, run_id)
+        .ok()?
+        .into_iter()
+        .find_map(|w| w.error)
 }
 
 /// The echo pass: mic segments that repeat what the system track said. Only
@@ -725,8 +800,8 @@ pub(crate) mod test_support {
 
     use rusqlite::Connection;
 
-    use crate::meetings::recording::test_support::TempDir;
     use crate::meetings::recording::chunk_rel_path;
+    use crate::meetings::recording::test_support::TempDir;
     use crate::meetings::store;
     use crate::meetings::types::{
         ChunkRecord, ChunkStatus, MeetingLanguage, MeetingStatus, TrackKind, TARGET_SAMPLE_RATE,
@@ -747,7 +822,11 @@ pub(crate) mod test_support {
             let path = dir.path().join("test.sqlite");
             let conn = open(&path);
             migrate(&conn);
-            Self { conn, path, _dir: dir }
+            Self {
+                conn,
+                path,
+                _dir: dir,
+            }
         }
 
         pub fn connect(&self) -> Connection {
@@ -759,7 +838,8 @@ pub(crate) mod test_support {
         let conn = Connection::open(path).expect("open test db");
         conn.pragma_update(None, "journal_mode", "WAL").unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        conn.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
         conn
     }
 
@@ -771,7 +851,8 @@ pub(crate) mod test_support {
         while let Some(start) = rest.find("\"BEGIN;") {
             let batch = &rest[start + 1..];
             let end = batch.find("COMMIT;\"").expect("end of migration batch") + "COMMIT;".len();
-            conn.execute_batch(&batch[..end]).expect("run migration batch");
+            conn.execute_batch(&batch[..end])
+                .expect("run migration batch");
             rest = &batch[end..];
         }
     }
@@ -810,7 +891,12 @@ pub(crate) mod test_support {
             .map(|(&(duration_ms, speech), kind)| {
                 let track_id = store::insert_track(
                     conn,
-                    &store::NewTrack { meeting_id: id.clone(), kind, device_name: None, format: None },
+                    &store::NewTrack {
+                        meeting_id: id.clone(),
+                        kind,
+                        device_name: None,
+                        format: None,
+                    },
                 )
                 .unwrap();
                 store::insert_chunk(
@@ -827,7 +913,11 @@ pub(crate) mod test_support {
                     },
                 )
                 .unwrap();
-                TestTrack { id: track_id, duration_ms, speech: speech.to_vec() }
+                TestTrack {
+                    id: track_id,
+                    duration_ms,
+                    speech: speech.to_vec(),
+                }
             })
             .collect();
         store::seed_track_speakers(conn, &id).unwrap();
@@ -844,9 +934,9 @@ mod tests {
 
     use super::test_support::{new_meeting, TestDb, TestMeeting};
     use super::*;
-    use crate::meetings::types::TrackKind;
     use crate::local_transcribe::TranscriptSegment;
     use crate::meetings::longform::{DecodeResult, LevelDetector, MemoryTrackAudio};
+    use crate::meetings::types::TrackKind;
     use crate::meetings::types::{MeetingLanguage, RetranscribeOptions};
 
     /// Three stretches of speech more than 3 s apart: three windows.
@@ -930,7 +1020,8 @@ mod tests {
         fn for_meetings(meetings: &[&TestMeeting]) -> Self {
             let mut host = Self::default();
             for track in meetings.iter().flat_map(|m| &m.tracks) {
-                host.audio.insert(track.id.clone(), (track.duration_ms, track.speech.clone()));
+                host.audio
+                    .insert(track.id.clone(), (track.duration_ms, track.speech.clone()));
             }
             host
         }
@@ -953,17 +1044,27 @@ mod tests {
             _conn: &Connection,
             track: &MeetingTrack,
         ) -> Result<Box<dyn TrackAudio>, String> {
-            let (duration_ms, speech) =
-                self.audio.get(&track.id).ok_or_else(|| "no such track".to_string())?;
-            Ok(Box::new(MemoryTrackAudio::with_speech(*duration_ms, speech)))
+            let (duration_ms, speech) = self
+                .audio
+                .get(&track.id)
+                .ok_or_else(|| "no such track".to_string())?;
+            Ok(Box::new(MemoryTrackAudio::with_speech(
+                *duration_ms,
+                speech,
+            )))
         }
 
         fn job_progress(&mut self, progress: &JobProgress) {
-            self.events.push(Event::Progress(progress.status, progress.done, progress.total));
+            self.events.push(Event::Progress(
+                progress.status,
+                progress.done,
+                progress.total,
+            ));
         }
 
         fn meeting_updated(&mut self, meeting_id: &str, change: MeetingChange) {
-            self.events.push(Event::Updated(meeting_id.to_string(), change));
+            self.events
+                .push(Event::Updated(meeting_id.to_string(), change));
         }
 
         fn auto_delete_audio_days(&mut self) -> u32 {
@@ -997,7 +1098,10 @@ mod tests {
         jobs::enqueue_transcription(
             conn,
             &meeting.id,
-            &RetranscribeOptions { model: None, language: Some(language) },
+            &RetranscribeOptions {
+                model: None,
+                language: Some(language),
+            },
         )
         .unwrap()
     }
@@ -1034,7 +1138,9 @@ mod tests {
         let segments = store::list_segments(&db.conn, &meeting.id, None).unwrap();
         let of = |kind| segments.iter().filter(|s| s.track_kind == kind).count();
         assert_eq!((of(TrackKind::Mic), of(TrackKind::System)), (3, 2));
-        assert!(segments.iter().all(|s| s.suppressed_reason.is_none() && s.lang.as_deref() == Some("nl")));
+        assert!(segments
+            .iter()
+            .all(|s| s.suppressed_reason.is_none() && s.lang.as_deref() == Some("nl")));
         // Windows were decoded in timeline order, across both tracks.
         let starts: Vec<u64> = segments.iter().map(|s| s.start_ms).collect();
         assert_eq!(starts, vec![800, 4_800, 9_800, 14_800, 19_800]);
@@ -1060,7 +1166,11 @@ mod tests {
         // One window of each track is done, so both languages were detected.
         assert_eq!(first.host.script.borrow().detections, 2);
         let row = store::get_job(&db.conn, &job.job_id).unwrap().unwrap();
-        assert_eq!(row.status, JobStatus::Running, "a quit leaves the job running");
+        assert_eq!(
+            row.status,
+            JobStatus::Running,
+            "a quit leaves the job running"
+        );
         assert_eq!((row.progress_done, row.progress_total), (2, 5));
         let windows_before = store::list_windows(&db.conn, job.run_id.as_deref().unwrap()).unwrap();
         drop(first);
@@ -1070,14 +1180,20 @@ mod tests {
         let mut second = worker(db.connect(), FakeHost::for_meetings(&[&meeting]));
         assert_eq!(second.drain(), 1);
 
-        assert_eq!(second.host.script.borrow().decodes.len(), 3, "done windows are not decoded again");
+        assert_eq!(
+            second.host.script.borrow().decodes.len(),
+            3,
+            "done windows are not decoded again"
+        );
         let windows_after = store::list_windows(&db.conn, job.run_id.as_deref().unwrap()).unwrap();
         assert_eq!(
             windows_after.iter().map(|w| &w.id).collect::<Vec<_>>(),
             windows_before.iter().map(|w| &w.id).collect::<Vec<_>>(),
             "the plan is made once"
         );
-        assert!(windows_after.iter().all(|w| w.status == WindowStatus::Done && w.attempts == 1));
+        assert!(windows_after
+            .iter()
+            .all(|w| w.status == WindowStatus::Done && w.attempts == 1));
         let segments = store::list_segments(&db.conn, &meeting.id, None).unwrap();
         assert_eq!(segments.len(), 5);
         // The languages are read back from the done windows, not detected again.
@@ -1085,7 +1201,11 @@ mod tests {
         let row = store::get_job(&db.conn, &job.job_id).unwrap().unwrap();
         assert_eq!((row.status, row.attempts), (JobStatus::Done, 2));
         assert_eq!(
-            store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap().meeting.status,
+            store::get_meeting(&db.conn, &meeting.id)
+                .unwrap()
+                .unwrap()
+                .meeting
+                .status,
             MeetingStatus::Ready
         );
     }
@@ -1098,7 +1218,13 @@ mod tests {
         let mut worker = worker(db.connect(), FakeHost::for_meetings(&[&meeting]));
         worker.drain();
         assert_eq!(worker.host.script.borrow().detections, 2);
-        assert!(worker.host.script.borrow().decodes.iter().all(|(_, lang)| lang == "nl"));
+        assert!(worker
+            .host
+            .script
+            .borrow()
+            .decodes
+            .iter()
+            .all(|(_, lang)| lang == "nl"));
     }
 
     #[test]
@@ -1115,8 +1241,15 @@ mod tests {
         let (observer, seen_in_hook, run) = (db.connect(), seen.clone(), run_id.clone());
         host.script.borrow_mut().before_decode = Some(Box::new(move |call| {
             if call == 2 {
-                let window = store::next_pending_window(&observer, &run).unwrap().unwrap();
-                seen_in_hook.borrow_mut().push((window.seq, window.track_kind, window.attempts, window.error));
+                let window = store::next_pending_window(&observer, &run)
+                    .unwrap()
+                    .unwrap();
+                seen_in_hook.borrow_mut().push((
+                    window.seq,
+                    window.track_kind,
+                    window.attempts,
+                    window.error,
+                ));
             }
         }));
         let mut worker = worker(db.connect(), host);
@@ -1128,11 +1261,27 @@ mod tests {
         assert_eq!(*seen.borrow(), vec![(0, TrackKind::System, 0, None)]);
         let script = worker.host.script.borrow();
         assert_eq!(script.decodes.len(), 6, "five windows, one of them twice");
-        assert_eq!(script.decodes[1], script.decodes[2], "the preempted window is the one retried");
+        assert_eq!(
+            script.decodes[1], script.decodes[2],
+            "the preempted window is the one retried"
+        );
         let windows = store::list_windows(&db.conn, &run_id).unwrap();
-        assert!(windows.iter().all(|w| w.status == WindowStatus::Done && w.attempts == 1));
-        assert_eq!(store::list_segments(&db.conn, &meeting.id, None).unwrap().len(), 5);
-        assert_eq!(store::get_job(&db.conn, &job.job_id).unwrap().unwrap().status, JobStatus::Done);
+        assert!(windows
+            .iter()
+            .all(|w| w.status == WindowStatus::Done && w.attempts == 1));
+        assert_eq!(
+            store::list_segments(&db.conn, &meeting.id, None)
+                .unwrap()
+                .len(),
+            5
+        );
+        assert_eq!(
+            store::get_job(&db.conn, &job.job_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Done
+        );
     }
 
     #[test]
@@ -1155,7 +1304,8 @@ mod tests {
         worker.drain();
 
         let windows = store::list_windows(&db.conn, &run_id).unwrap();
-        let summary: Vec<(WindowStatus, u32)> = windows.iter().map(|w| (w.status, w.attempts)).collect();
+        let summary: Vec<(WindowStatus, u32)> =
+            windows.iter().map(|w| (w.status, w.attempts)).collect();
         assert_eq!(
             summary,
             vec![
@@ -1172,11 +1322,23 @@ mod tests {
         let detail = store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap();
         assert_eq!(detail.meeting.status, MeetingStatus::Ready);
         assert_eq!(detail.runs[0].status, RunStatus::Done);
-        assert_eq!(detail.runs[0].error.as_deref(), Some("1 of 5 parts could not be transcribed."));
-        assert_eq!(store::list_segments(&db.conn, &meeting.id, None).unwrap().len(), 4);
+        assert_eq!(
+            detail.runs[0].error.as_deref(),
+            Some("1 of 5 parts could not be transcribed.")
+        );
+        assert_eq!(
+            store::list_segments(&db.conn, &meeting.id, None)
+                .unwrap()
+                .len(),
+            4
+        );
         let row = store::get_job(&db.conn, &job.job_id).unwrap().unwrap();
         assert_eq!(row.status, JobStatus::Done);
-        assert_eq!((row.progress_done, row.progress_total), (5, 5), "a failed window counts as handled");
+        assert_eq!(
+            (row.progress_done, row.progress_total),
+            (5, 5),
+            "a failed window counts as handled"
+        );
     }
 
     #[test]
@@ -1186,7 +1348,10 @@ mod tests {
         let job = enqueue(&db.conn, &meeting, MeetingLanguage::En);
         let host = FakeHost::for_meetings(&[&meeting]);
         for call in 0..3 {
-            host.script.borrow_mut().steps.insert(call, Step::Fail("out of memory"));
+            host.script
+                .borrow_mut()
+                .steps
+                .insert(call, Step::Fail("out of memory"));
         }
         let mut worker = worker(db.connect(), host);
 
@@ -1196,7 +1361,13 @@ mod tests {
         assert_eq!(detail.meeting.status, MeetingStatus::Failed);
         assert!(detail.error.as_deref().unwrap().contains("out of memory"));
         assert_eq!(detail.runs[0].status, RunStatus::Failed);
-        assert_eq!(store::get_job(&db.conn, &job.job_id).unwrap().unwrap().status, JobStatus::Failed);
+        assert_eq!(
+            store::get_job(&db.conn, &job.job_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Failed
+        );
     }
 
     #[test]
@@ -1224,9 +1395,20 @@ mod tests {
         );
         let updated = |change| Event::Updated(meeting.id.clone(), change);
         let events = &worker.host.events;
-        assert_eq!(events.first(), Some(&updated(MeetingChange::Status)), "transcribing comes first");
-        assert_eq!(events.last(), Some(&updated(MeetingChange::Status)), "ready comes last");
-        let transcripts = events.iter().filter(|e| **e == updated(MeetingChange::Transcript)).count();
+        assert_eq!(
+            events.first(),
+            Some(&updated(MeetingChange::Status)),
+            "transcribing comes first"
+        );
+        assert_eq!(
+            events.last(),
+            Some(&updated(MeetingChange::Status)),
+            "ready comes last"
+        );
+        let transcripts = events
+            .iter()
+            .filter(|e| **e == updated(MeetingChange::Transcript))
+            .count();
         assert_eq!(transcripts, 5, "one per window when nothing is throttled");
         // Each window's segments are announced after its progress.
         let at = |wanted: &Event| events.iter().position(|e| e == wanted).unwrap();
@@ -1255,7 +1437,10 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, Event::Updated(_, MeetingChange::Transcript)))
             .count();
-        assert_eq!(transcripts, 2, "the first window, then what was held back at the end");
+        assert_eq!(
+            transcripts, 2,
+            "the first window, then what was held back at the end"
+        );
 
         let mut throttle = Throttle::new(Duration::from_millis(300));
         let start = Instant::now();
@@ -1277,7 +1462,11 @@ mod tests {
         let second_run = second.run_id.clone().unwrap();
         assert_ne!(first_run, second_run);
         let queued = store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap();
-        assert_eq!(queued.meeting.status, MeetingStatus::Ready, "the old transcript stays on show");
+        assert_eq!(
+            queued.meeting.status,
+            MeetingStatus::Ready,
+            "the old transcript stays on show"
+        );
         assert_eq!(queued.active_run_id.as_deref(), Some(first_run.as_str()));
 
         let host = FakeHost::for_meetings(&[&meeting]);
@@ -1285,15 +1474,19 @@ mod tests {
         let (observer, seen_in_hook, meeting_id) = (db.connect(), seen.clone(), meeting.id.clone());
         host.script.borrow_mut().before_decode = Some(Box::new(move |_call| {
             let detail = store::get_meeting(&observer, &meeting_id).unwrap().unwrap();
-            seen_in_hook.borrow_mut().push((detail.meeting.status, detail.active_run_id));
+            seen_in_hook
+                .borrow_mut()
+                .push((detail.meeting.status, detail.active_run_id));
         }));
         let mut worker = worker(db.connect(), host);
         worker.drain();
 
         assert_eq!(seen.borrow().len(), 5);
         assert!(
-            seen.borrow().iter().all(|(status, active)| *status == MeetingStatus::Ready
-                && active.as_deref() == Some(first_run.as_str())),
+            seen.borrow()
+                .iter()
+                .all(|(status, active)| *status == MeetingStatus::Ready
+                    && active.as_deref() == Some(first_run.as_str())),
             "the first run stays active while the second one is decoded"
         );
         let detail = store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap();
@@ -1303,9 +1496,16 @@ mod tests {
         assert!(detail.runs.iter().all(|run| run.status == RunStatus::Done));
         assert_eq!(detail.runs[1].language, MeetingLanguage::Nl);
         // The old run's segments are still there, the new run's are on show.
-        assert_eq!(store::list_segments(&db.conn, &meeting.id, Some(&first_run)).unwrap().len(), 5);
+        assert_eq!(
+            store::list_segments(&db.conn, &meeting.id, Some(&first_run))
+                .unwrap()
+                .len(),
+            5
+        );
         let shown = store::list_segments(&db.conn, &meeting.id, None).unwrap();
-        assert!(shown.iter().all(|s| s.run_id == second_run && s.lang.as_deref() == Some("nl")));
+        assert!(shown
+            .iter()
+            .all(|s| s.run_id == second_run && s.lang.as_deref() == Some("nl")));
         // A background re-run announces its transcript once, at the flip.
         let transcripts = worker
             .host
@@ -1333,8 +1533,15 @@ mod tests {
         assert_eq!(detail.error.as_deref(), Some(reason.as_str()));
         assert_eq!(detail.runs[0].status, RunStatus::Failed);
         let row = store::get_job(&db.conn, &job.job_id).unwrap().unwrap();
-        assert_eq!((row.status, row.error.as_deref()), (JobStatus::Failed, Some(reason.as_str())));
-        assert!(store::list_windows(&db.conn, job.run_id.as_deref().unwrap()).unwrap().is_empty());
+        assert_eq!(
+            (row.status, row.error.as_deref()),
+            (JobStatus::Failed, Some(reason.as_str()))
+        );
+        assert!(
+            store::list_windows(&db.conn, job.run_id.as_deref().unwrap())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             progress_events(&worker.host.events).last(),
             Some(&(JobStatus::Failed, 0, 0))
@@ -1358,7 +1565,13 @@ mod tests {
         assert_eq!(detail.error, None);
         assert_eq!(detail.active_run_id, first.run_id);
         assert_eq!(detail.runs[1].status, RunStatus::Failed);
-        assert_eq!(store::get_job(&db.conn, &second.job_id).unwrap().unwrap().status, JobStatus::Failed);
+        assert_eq!(
+            store::get_job(&db.conn, &second.job_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Failed
+        );
     }
 
     #[test]
@@ -1377,7 +1590,11 @@ mod tests {
 
         worker.drain();
 
-        assert_eq!(worker.host.script.borrow().decodes.len(), 2, "nothing is decoded after the cancel");
+        assert_eq!(
+            worker.host.script.borrow().decodes.len(),
+            2,
+            "nothing is decoded after the cancel"
+        );
         let row = store::get_job(&db.conn, &job.job_id).unwrap().unwrap();
         assert_eq!((row.status, row.error), (JobStatus::Cancelled, None));
         assert!(!progress_events(&worker.host.events)
@@ -1397,7 +1614,13 @@ mod tests {
         let detail = store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap();
         assert_eq!(detail.meeting.status, MeetingStatus::Ready);
         assert_eq!(detail.runs[0].status, RunStatus::Done);
-        assert_eq!(store::get_job(&db.conn, &job.job_id).unwrap().unwrap().status, JobStatus::Done);
+        assert_eq!(
+            store::get_job(&db.conn, &job.job_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Done
+        );
         assert!(worker.host.script.borrow().decodes.is_empty());
     }
 
@@ -1413,7 +1636,13 @@ mod tests {
 
         assert_eq!(worker.drain(), 2);
 
-        let status = |id: &str| store::get_meeting(&db.conn, id).unwrap().unwrap().meeting.status;
+        let status = |id: &str| {
+            store::get_meeting(&db.conn, id)
+                .unwrap()
+                .unwrap()
+                .meeting
+                .status
+        };
         assert_eq!(status(&broken.id), MeetingStatus::Failed);
         assert_eq!(status(&fine.id), MeetingStatus::Ready);
     }
@@ -1427,17 +1656,31 @@ mod tests {
         host.retention_days = 30;
         // The first window never decodes; the rest of the run is fine.
         for call in 0..3 {
-            host.script.borrow_mut().steps.insert(call, Step::Fail("whisper_full failed"));
+            host.script
+                .borrow_mut()
+                .steps
+                .insert(call, Step::Fail("whisper_full failed"));
         }
         let mut worker = worker(db.connect(), host);
         worker.drain();
         let detail = store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap();
         assert_eq!(detail.meeting.status, MeetingStatus::Ready);
-        assert_eq!(detail.runs[0].error.as_deref(), Some("1 of 5 parts could not be transcribed."));
+        assert_eq!(
+            detail.runs[0].error.as_deref(),
+            Some("1 of 5 parts could not be transcribed.")
+        );
 
         // Re-transcribing is the only way to get that part back.
-        assert!(worker.apply_audio_retention(Utc::now() + chrono::Duration::days(365)).is_empty());
-        assert!(store::get_meeting(&db.conn, &meeting.id).unwrap().unwrap().meeting.has_audio);
+        assert!(worker
+            .apply_audio_retention(Utc::now() + chrono::Duration::days(365))
+            .is_empty());
+        assert!(
+            store::get_meeting(&db.conn, &meeting.id)
+                .unwrap()
+                .unwrap()
+                .meeting
+                .has_audio
+        );
     }
 
     #[test]
@@ -1454,7 +1697,9 @@ mod tests {
         enqueue(&db.conn, &unfinished, MeetingLanguage::En);
 
         let now = Utc::now();
-        assert!(worker.apply_audio_retention(now + chrono::Duration::days(29)).is_empty());
+        assert!(worker
+            .apply_audio_retention(now + chrono::Duration::days(29))
+            .is_empty());
         assert_eq!(
             worker.apply_audio_retention(now + chrono::Duration::days(31)),
             vec![old.id.clone()]
@@ -1463,16 +1708,30 @@ mod tests {
         assert_eq!(worker.host.deleted_audio, vec![old.id.clone()]);
         let detail = store::get_meeting(&db.conn, &old.id).unwrap().unwrap();
         assert!(!detail.meeting.has_audio);
-        assert_eq!(store::list_segments(&db.conn, &old.id, None).unwrap().len(), 5, "the transcript stays");
-        assert!(store::get_meeting(&db.conn, &unfinished.id).unwrap().unwrap().meeting.has_audio);
+        assert_eq!(
+            store::list_segments(&db.conn, &old.id, None).unwrap().len(),
+            5,
+            "the transcript stays"
+        );
+        assert!(
+            store::get_meeting(&db.conn, &unfinished.id)
+                .unwrap()
+                .unwrap()
+                .meeting
+                .has_audio
+        );
         assert_eq!(
             worker.host.events.last(),
             Some(&Event::Updated(old.id.clone(), MeetingChange::AudioDeleted))
         );
         // Nothing left to do, and 0 days means never.
-        assert!(worker.apply_audio_retention(now + chrono::Duration::days(365)).is_empty());
+        assert!(worker
+            .apply_audio_retention(now + chrono::Duration::days(365))
+            .is_empty());
         worker.host.retention_days = 0;
-        assert!(worker.apply_audio_retention(now + chrono::Duration::days(365)).is_empty());
+        assert!(worker
+            .apply_audio_retention(now + chrono::Duration::days(365))
+            .is_empty());
     }
 
     #[test]
@@ -1517,7 +1776,11 @@ mod tests {
         fn detector(&mut self) -> Result<Box<dyn SpeechDetector>, String> {
             self.inner.detector()
         }
-        fn track_audio(&mut self, conn: &Connection, track: &MeetingTrack) -> Result<Box<dyn TrackAudio>, String> {
+        fn track_audio(
+            &mut self,
+            conn: &Connection,
+            track: &MeetingTrack,
+        ) -> Result<Box<dyn TrackAudio>, String> {
             self.inner.track_audio(conn, track)
         }
         fn job_progress(&mut self, progress: &JobProgress) {
@@ -1537,7 +1800,8 @@ mod tests {
     #[test]
     #[ignore = "needs an installed Whisper model (FT_MEETING_MODEL, default whisper-large-v3-turbo-q5)"]
     fn dictation_waits_only_briefly_for_the_gate_while_a_job_runs() {
-        let model = std::env::var("FT_MEETING_MODEL").unwrap_or_else(|_| "whisper-large-v3-turbo-q5".to_string());
+        let model = std::env::var("FT_MEETING_MODEL")
+            .unwrap_or_else(|_| "whisper-large-v3-turbo-q5".to_string());
         jobs::usable_model(&model).expect("the model must be installed");
         let db = TestDb::new();
         // Ten minutes of "speech": about 22 full-length windows.
@@ -1550,7 +1814,10 @@ mod tests {
             .collect::<HashMap<_, _>>();
         let worker_conn = db.connect();
         let background = std::thread::spawn(move || {
-            let inner = FakeHost { audio, ..FakeHost::default() };
+            let inner = FakeHost {
+                audio,
+                ..FakeHost::default()
+            };
             Worker::new(worker_conn, RealModelHost { inner, model }).drain();
         });
 
@@ -1575,8 +1842,14 @@ mod tests {
         // 0.75-0.9 s for large-v3-turbo on Metal. Never a whole window.
         println!("dictation waited for the gate: {waits:?}");
         let worst = waits.iter().max().unwrap();
-        assert!(*worst < Duration::from_millis(1_500), "dictation waited {worst:?} for the gate");
+        assert!(
+            *worst < Duration::from_millis(1_500),
+            "dictation waited {worst:?} for the gate"
+        );
         let windows = store::list_windows(&db.conn, &run_id).unwrap();
-        assert!(windows.iter().all(|w| w.status == WindowStatus::Done), "preempted windows were decoded later");
+        assert!(
+            windows.iter().all(|w| w.status == WindowStatus::Done),
+            "preempted windows were decoded later"
+        );
     }
 }

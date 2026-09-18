@@ -159,8 +159,13 @@ mod tests {
             );
 
             drop(background);
-            acquired_rx.recv_timeout(LONG).expect("interactive never acquired");
-            assert!(gate.should_preempt(), "preempt must stay up while interactive holds");
+            acquired_rx
+                .recv_timeout(LONG)
+                .expect("interactive never acquired");
+            assert!(
+                gate.should_preempt(),
+                "preempt must stay up while interactive holds"
+            );
 
             release_tx.send(()).unwrap();
         });
@@ -192,14 +197,18 @@ mod tests {
             // Freeing the gate hands it to the interactive caller, not to the
             // background caller, whichever of them woke first.
             drop(first_background);
-            interactive_rx.recv_timeout(LONG).expect("interactive never acquired");
+            interactive_rx
+                .recv_timeout(LONG)
+                .expect("interactive never acquired");
             assert!(
                 background_rx.recv_timeout(SHORT).is_err(),
                 "background jumped ahead of an interactive caller"
             );
 
             release_tx.send(()).unwrap();
-            background_rx.recv_timeout(LONG).expect("background never acquired");
+            background_rx
+                .recv_timeout(LONG)
+                .expect("background never acquired");
         });
     }
 

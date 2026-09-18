@@ -113,7 +113,10 @@ fn run_parakeet(
     let vad_state = if vad_model.is_some() { "on" } else { "off" };
     let _ = crate::storage::append_log(
         "INFO",
-        &format!("Parakeet decoded {} chars (VAD {vad_state})", text.trim().len()),
+        &format!(
+            "Parakeet decoded {} chars (VAD {vad_state})",
+            text.trim().len()
+        ),
     );
     // Parakeet does not report which language it decoded, so `lang_id` is
     // a placeholder the caller ignores.
@@ -158,8 +161,8 @@ pub fn preload(model_id: &ModelId) -> Result<u64, String> {
 }
 
 pub(crate) fn load_wav_as_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
-    let mut reader = hound::WavReader::open(path)
-        .map_err(|e| format!("Failed to open wav: {e}"))?;
+    let mut reader =
+        hound::WavReader::open(path).map_err(|e| format!("Failed to open wav: {e}"))?;
     let spec = reader.spec();
     if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
         return Err(format!(
@@ -474,9 +477,8 @@ pub(crate) fn decode_segments(
         // callback runs, and the trampoline only reads through the pointer.
         unsafe {
             params.set_abort_callback(Some(abort_trampoline));
-            params.set_abort_callback_user_data(
-                probe as *const AbortProbe as *mut std::ffi::c_void,
-            );
+            params
+                .set_abort_callback_user_data(probe as *const AbortProbe as *mut std::ffi::c_void);
         }
     }
 
@@ -507,7 +509,9 @@ pub(crate) fn decode_segments(
             Ok(text) => text.to_string(),
             Err(e) => {
                 text_errors.push((segments.len(), e.to_string()));
-                seg.to_str_lossy().map(|t| t.into_owned()).unwrap_or_default()
+                seg.to_str_lossy()
+                    .map(|t| t.into_owned())
+                    .unwrap_or_default()
             }
         };
         // Special tokens (timestamps, end of text) sit at and above `eot`.
@@ -574,7 +578,11 @@ pub(crate) fn detect_language(
     if total <= 0.0 {
         return Ok(("nl", 0.5));
     }
-    Ok(if en > nl { ("en", en / total) } else { ("nl", nl / total) })
+    Ok(if en > nl {
+        ("en", en / total)
+    } else {
+        ("nl", nl / total)
+    })
 }
 
 /// One decode pass. `vad_rejected` separates "the VAD gate kept this audio
@@ -779,7 +787,9 @@ pub fn transcribe_wav_blocking(
         }
     }
     let language = if language == "auto" {
-        whisper_rs::get_lang_str(decoded.lang_id).unwrap_or("").to_string()
+        whisper_rs::get_lang_str(decoded.lang_id)
+            .unwrap_or("")
+            .to_string()
     } else {
         language.to_string()
     };
@@ -885,10 +895,9 @@ mod tests {
         let without_vad = super::run_inference(&ctx, &audio, "en", Some(&prompt), None)
             .unwrap()
             .text;
-        let with_vad =
-            super::run_inference(&ctx, &audio, "en", Some(&prompt), vad_path.to_str())
-                .unwrap()
-                .text;
+        let with_vad = super::run_inference(&ctx, &audio, "en", Some(&prompt), vad_path.to_str())
+            .unwrap()
+            .text;
 
         println!("  without VAD: {without_vad:?}");
         println!("  with VAD:    {with_vad:?}");
@@ -914,7 +923,11 @@ mod tests {
         write_near_silence(&wav, 1_700);
         let audio = super::load_wav_as_mono_16k(&wav).unwrap();
         let gated = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap();
-        assert!(gated.vad_rejected, "VAD let non-speech through: {:?}", gated.text);
+        assert!(
+            gated.vad_rejected,
+            "VAD let non-speech through: {:?}",
+            gated.text
+        );
         let ungated = super::run_parakeet(&id, &audio, None).unwrap().text;
         println!("  parakeet on near-silence without VAD: {ungated:?}");
 
@@ -922,7 +935,9 @@ mod tests {
         if !sample.is_empty() {
             let audio = super::load_wav_as_mono_16k(std::path::Path::new(&sample)).unwrap();
             let started = std::time::Instant::now();
-            let text = super::run_parakeet(&id, &audio, vad_path.to_str()).unwrap().text;
+            let text = super::run_parakeet(&id, &audio, vad_path.to_str())
+                .unwrap()
+                .text;
             println!(
                 "  parakeet transcript ({} ms for {:.1}s audio): {text:?}",
                 started.elapsed().as_millis(),
@@ -944,7 +959,12 @@ mod tests {
         let clips = [
             ("FT_SAMPLE_WAV_NL", Some("nl")),
             ("FT_SAMPLE_WAV_EN", Some("en")),
-            ("FT_SAMPLE_WAV", expected_for_sample.as_deref().filter(|l| ["nl", "en"].contains(l))),
+            (
+                "FT_SAMPLE_WAV",
+                expected_for_sample
+                    .as_deref()
+                    .filter(|l| ["nl", "en"].contains(l)),
+            ),
         ];
         for (var, expected) in clips {
             let path = std::env::var(var).unwrap_or_default();
@@ -995,8 +1015,13 @@ mod tests {
             let audio = super::load_wav_as_mono_16k(std::path::Path::new(&sample)).unwrap();
             // FT_SAMPLE_LANG=nl shows what forcing the language saves over "auto".
             let lang = std::env::var("FT_SAMPLE_LANG").unwrap_or_else(|_| "auto".to_string());
-            for (label, model) in [("turbo", ModelId::LargeV3TurboQ5), ("small", ModelId::SmallQ5)] {
-                let Ok(ctx) = super::get_or_load_context(&model) else { continue };
+            for (label, model) in [
+                ("turbo", ModelId::LargeV3TurboQ5),
+                ("small", ModelId::SmallQ5),
+            ] {
+                let Ok(ctx) = super::get_or_load_context(&model) else {
+                    continue;
+                };
                 let started = std::time::Instant::now();
                 let decoded =
                     super::run_inference(&ctx, &audio, &lang, None, vad_path.to_str()).unwrap();

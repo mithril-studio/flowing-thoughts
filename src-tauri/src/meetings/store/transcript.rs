@@ -593,4 +593,3 @@ pub fn set_segment_hidden(
         require_segment(conn, segment_id)
     })
 }
-

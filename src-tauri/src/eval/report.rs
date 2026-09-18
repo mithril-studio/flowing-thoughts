@@ -78,7 +78,13 @@ pub fn table(header: &[&str], rows: &[Vec<String>]) -> String {
 
 fn tally_row(name: &str, t: &Tally) -> Vec<String> {
     // Error rates only mean something where there was speech to get wrong.
-    let rate = |value: f64| if t.speech_clips > 0 { pct(value) } else { "–".to_string() };
+    let rate = |value: f64| {
+        if t.speech_clips > 0 {
+            pct(value)
+        } else {
+            "–".to_string()
+        }
+    };
     vec![
         name.to_string(),
         (t.speech_clips + t.non_speech_clips).to_string(),
@@ -141,8 +147,12 @@ pub fn render_markdown(report: &Report) -> String {
             row.extend([
                 pct_opt(t.hallucination_rate_raw()),
                 format!("{} / {}", t.latency_ms_p50, t.latency_ms_p95),
-                t.real_time_factor().map(|r| format!("{r:.2}")).unwrap_or_else(|| "–".into()),
-                run.peak_memory_mb.map(|m| format!("{m:.0}")).unwrap_or_else(|| "–".into()),
+                t.real_time_factor()
+                    .map(|r| format!("{r:.2}"))
+                    .unwrap_or_else(|| "–".into()),
+                run.peak_memory_mb
+                    .map(|m| format!("{m:.0}"))
+                    .unwrap_or_else(|| "–".into()),
             ]);
             row
         })
@@ -167,7 +177,10 @@ pub fn render_markdown(report: &Report) -> String {
             run.model_load_ms,
             run.user_terms,
             run.correction_pairs,
-            run.prompt_sha256.as_deref().map(|h| &h[..12]).unwrap_or("none"),
+            run.prompt_sha256
+                .as_deref()
+                .map(|h| &h[..12])
+                .unwrap_or("none"),
         );
         if !run.overall.speech_discarded_by.is_empty() {
             let reasons: Vec<String> = run
@@ -217,7 +230,11 @@ pub fn render_markdown(report: &Report) -> String {
                         .unwrap_or_default(),
                 );
                 if score::is_blank(&clip.final_text) && !score::is_blank(&clip.raw) {
-                    let _ = writeln!(out, "  - raw:  {}", score::render_diff(&clip.reference, &clip.raw));
+                    let _ = writeln!(
+                        out,
+                        "  - raw:  {}",
+                        score::render_diff(&clip.reference, &clip.raw)
+                    );
                 } else {
                     let _ = writeln!(
                         out,
@@ -253,7 +270,11 @@ pub fn write(report: &Report, data_dir: &Path) -> Result<(PathBuf, PathBuf), Str
     let dir = data_dir.join(RESULTS_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create results dir: {e}"))?;
     let stamp = report.created_at.replace([':', '-'], "");
-    let stamp = stamp.split('.').next().unwrap_or(&stamp).trim_end_matches('Z');
+    let stamp = stamp
+        .split('.')
+        .next()
+        .unwrap_or(&stamp)
+        .trim_end_matches('Z');
     let base = format!("{stamp}-{}", report.split.as_str());
     let json_path = dir.join(format!("{base}.json"));
     let md_path = dir.join(format!("{base}.md"));

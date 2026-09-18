@@ -219,7 +219,10 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Meeting
 /// The summary to show for a meeting: the newest `done` one, so a failed
 /// retry does not hide the summary the user already had. Without any `done`
 /// one it is the newest row, whatever its status.
-pub fn latest_summary(conn: &Connection, meeting_id: &str) -> Result<Option<MeetingSummary>, String> {
+pub fn latest_summary(
+    conn: &Connection,
+    meeting_id: &str,
+) -> Result<Option<MeetingSummary>, String> {
     let summary = query_opt(
         conn,
         "read latest summary",

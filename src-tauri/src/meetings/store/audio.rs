@@ -192,7 +192,11 @@ pub fn close_chunk(conn: &Connection, chunk_id: &str, n_frames: u64) -> Result<(
 
 /// Launch recovery found the chunk still `open`: `n_frames` is what is on
 /// disk (file length / 2).
-pub fn mark_chunk_recovered(conn: &Connection, chunk_id: &str, n_frames: u64) -> Result<(), String> {
+pub fn mark_chunk_recovered(
+    conn: &Connection,
+    chunk_id: &str,
+    n_frames: u64,
+) -> Result<(), String> {
     settle_chunk(conn, chunk_id, ChunkStatus::Recovered, n_frames)
 }
 

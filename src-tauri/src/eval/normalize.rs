@@ -74,7 +74,11 @@ fn clean_token(raw: &str) -> String {
 
 /// "1.250" -> "1250" (thousands), "12.50" -> "12,50" (decimal point).
 fn normalize_separators(token: String) -> String {
-    if !token.contains('.') || !token.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+    if !token.contains('.')
+        || !token
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == ',')
+    {
         return token;
     }
     let (int_part, decimals) = match token.split_once(',') {
@@ -112,7 +116,12 @@ fn join_thousands(tokens: Vec<String>) -> Vec<String> {
     for token in tokens {
         if let (Some(prev), Ok(n)) = (out.last_mut(), token.parse::<u64>()) {
             if let Ok(p) = prev.parse::<u64>() {
-                if p >= 1000 && p % 1000 == 0 && n < 1000 && token.len() <= 3 && !token.starts_with('0') {
+                if p >= 1000
+                    && p % 1000 == 0
+                    && n < 1000
+                    && token.len() <= 3
+                    && !token.starts_with('0')
+                {
                     *prev = (p + n).to_string();
                     continue;
                 }
@@ -168,14 +177,26 @@ pub fn parse_dutch_number(word: &str) -> Option<u64> {
         return None;
     }
     if let Some((left, right)) = word.split_once("duizend") {
-        let thousands = if left.is_empty() { 1 } else { parse_below_1000(left)? };
-        let rest = if right.is_empty() { 0 } else { parse_below_1000(right)? };
+        let thousands = if left.is_empty() {
+            1
+        } else {
+            parse_below_1000(left)?
+        };
+        let rest = if right.is_empty() {
+            0
+        } else {
+            parse_below_1000(right)?
+        };
         return Some(thousands * 1000 + rest);
     }
     // "twaalfhonderd", "vijfentwintighonderd"
     if let Some((left, right)) = word.split_once("honderd") {
         if let Some(h) = parse_below_100(left).filter(|h| (11..100).contains(h)) {
-            let rest = if right.is_empty() { 0 } else { parse_below_100(right)? };
+            let rest = if right.is_empty() {
+                0
+            } else {
+                parse_below_100(right)?
+            };
             return Some(h * 100 + rest);
         }
     }
@@ -189,7 +210,11 @@ fn parse_below_1000(word: &str) -> Option<u64> {
         } else {
             parse_below_100(left).filter(|h| (2..10).contains(h))?
         };
-        let rest = if right.is_empty() { 0 } else { parse_below_100(right)? };
+        let rest = if right.is_empty() {
+            0
+        } else {
+            parse_below_100(right)?
+        };
         return Some(hundreds * 100 + rest);
     }
     parse_below_100(word)
@@ -200,8 +225,12 @@ fn parse_below_100(word: &str) -> Option<u64> {
         return Some(n);
     }
     for (tens_word, tens) in TENS {
-        let Some(prefix) = word.strip_suffix(tens_word) else { continue };
-        let unit_word = prefix.strip_suffix("ën").or_else(|| prefix.strip_suffix("en"))?;
+        let Some(prefix) = word.strip_suffix(tens_word) else {
+            continue;
+        };
+        let unit_word = prefix
+            .strip_suffix("ën")
+            .or_else(|| prefix.strip_suffix("en"))?;
         let unit = match unit_word {
             // Inside a compound, "een" can only be the number.
             "een" => 1,
@@ -231,7 +260,10 @@ mod tests {
     #[test]
     fn clitics_equal_their_full_forms() {
         assert_eq!(norm("'t Is zo'n mooie dag"), norm("Het is zo'n mooie dag"));
-        assert_eq!(norm("Ik heb m’n sleutels en z'n jas"), "ik heb mijn sleutels en zijn jas");
+        assert_eq!(
+            norm("Ik heb m’n sleutels en z'n jas"),
+            "ik heb mijn sleutels en zijn jas"
+        );
         assert_eq!(norm("'s Ochtends"), "s ochtends");
         // In-word apostrophes are spelling and stay.
         assert_eq!(norm("Twee auto's"), "2 auto's");
@@ -267,7 +299,15 @@ mod tests {
         ] {
             assert_eq!(parse_dutch_number(word), Some(n), "{word}");
         }
-        for not_a_number in ["een", "enen", "tientje", "achter", "viering", "honderden", ""] {
+        for not_a_number in [
+            "een",
+            "enen",
+            "tientje",
+            "achter",
+            "viering",
+            "honderden",
+            "",
+        ] {
             assert_eq!(parse_dutch_number(not_a_number), None, "{not_a_number}");
         }
     }

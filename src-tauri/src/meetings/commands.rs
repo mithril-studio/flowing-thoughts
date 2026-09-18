@@ -125,7 +125,9 @@ pub fn list_meeting_segments(
     meeting_id: String,
     run_id: Option<String>,
 ) -> Result<Vec<Segment>, String> {
-    with_conn(&db, |conn| store::list_segments(conn, &meeting_id, run_id.as_deref()))
+    with_conn(&db, |conn| {
+        store::list_segments(conn, &meeting_id, run_id.as_deref())
+    })
 }
 
 /// `text: None` (or blank) drops the edit and shows the decoded text again.
@@ -151,7 +153,9 @@ pub fn set_meeting_segment_hidden(
     segment_id: String,
     hidden: bool,
 ) -> Result<Segment, String> {
-    let segment = with_conn(&db, |conn| store::set_segment_hidden(conn, &segment_id, hidden))?;
+    let segment = with_conn(&db, |conn| {
+        store::set_segment_hidden(conn, &segment_id, hidden)
+    })?;
     events::emit_updated(&app, &segment.meeting_id, MeetingChange::Segment);
     Ok(segment)
 }
@@ -192,7 +196,9 @@ pub async fn generate_meeting_summary(
             .lock()
             .map_err(|_| "Persisted state lock poisoned".to_string())?;
         if !state.settings.meetings.summary_enabled {
-            return Err("Meeting summaries are turned off. Enable them in Settings → Meetings.".to_string());
+            return Err(
+                "Meeting summaries are turned off. Enable them in Settings → Meetings.".to_string(),
+            );
         }
         let key = state
             .openrouter_api_key

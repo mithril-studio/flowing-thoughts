@@ -67,8 +67,15 @@ impl Default for RecorderConfig {
 #[derive(Debug, Clone, Copy)]
 enum Packet {
     /// `n_samples` interleaved samples are waiting in the sample ring.
-    Frames { host_time_ns: u64, n_samples: usize, format: SourceFormat, loss_before: bool },
-    Discontinuity { kind: Discontinuity },
+    Frames {
+        host_time_ns: u64,
+        n_samples: usize,
+        format: SourceFormat,
+        loss_before: bool,
+    },
+    Discontinuity {
+        kind: Discontinuity,
+    },
 }
 
 #[derive(Default)]
@@ -139,7 +146,9 @@ impl AudioSourceHandler for RecorderHandler {
         }
         let samples = &frames.samples[..n_frames * channels];
         if self.packets.is_full() || self.samples.slots() < samples.len() {
-            self.shared.overflow_frames.fetch_add(n_frames as u64, Ordering::Relaxed);
+            self.shared
+                .overflow_frames
+                .fetch_add(n_frames as u64, Ordering::Relaxed);
             self.loss_pending = true;
             return;
         }
@@ -161,9 +170,17 @@ impl AudioSourceHandler for RecorderHandler {
 
     fn on_discontinuity(&mut self, discontinuity: Discontinuity, _host_time_ns: u64) {
         if let Discontinuity::Dropped { frames } = discontinuity {
-            self.shared.source_dropped_frames.fetch_add(frames, Ordering::Relaxed);
+            self.shared
+                .source_dropped_frames
+                .fetch_add(frames, Ordering::Relaxed);
         }
-        if self.packets.push(Packet::Discontinuity { kind: discontinuity }).is_err() {
+        if self
+            .packets
+            .push(Packet::Discontinuity {
+                kind: discontinuity,
+            })
+            .is_err()
+        {
             self.loss_pending = true;
         }
     }
@@ -196,7 +213,11 @@ impl TrackRecorder {
             gaps: shared.runs.load(Ordering::Relaxed).saturating_sub(1),
             paused: shared.paused.load(Ordering::Relaxed),
             finished: shared.finished.load(Ordering::Relaxed),
-            error: shared.error.lock().map(|e| e.clone()).unwrap_or_else(|e| e.into_inner().clone()),
+            error: shared
+                .error
+                .lock()
+                .map(|e| e.clone())
+                .unwrap_or_else(|e| e.into_inner().clone()),
         }
     }
 
@@ -266,7 +287,10 @@ pub fn start_track(
         .map_err(|e| format!("Failed to start the recording thread: {e}"))?;
 
     Ok((
-        TrackRecorder { shared: shared.clone(), thread: Some(thread) },
+        TrackRecorder {
+            shared: shared.clone(),
+            thread: Some(thread),
+        },
         RecorderHandler {
             samples: sample_producer,
             packets: packet_producer,
@@ -312,7 +336,13 @@ struct Writer {
 impl Writer {
     fn run(&mut self) {
         if let Err(e) = self.record() {
-            log("ERROR", &format!("Meetings: {} track stopped recording: {e}", self.kind.as_str()));
+            log(
+                "ERROR",
+                &format!(
+                    "Meetings: {} track stopped recording: {e}",
+                    self.kind.as_str()
+                ),
+            );
             set_error(&self.shared, e);
             // Keep what reached the disk: close the chunk if that still works.
             let _ = self.sink.finish();
@@ -341,7 +371,12 @@ impl Writer {
     fn drain(&mut self) -> Result<(), String> {
         while let Ok(packet) = self.packets.pop() {
             match packet {
-                Packet::Frames { host_time_ns, n_samples, format, loss_before } => {
+                Packet::Frames {
+                    host_time_ns,
+                    n_samples,
+                    format,
+                    loss_before,
+                } => {
                     self.native.resize(n_samples, 0.0);
                     if self.samples.pop_entire_slice(&mut self.native).is_err() {
                         return Err("Recorder ring out of step with its packets".to_string());
@@ -371,11 +406,11 @@ impl Writer {
                 if let Some(current) = self.resampler.format() {
                     let frames = ns_to_frames(pad_ns, current.sample_rate) as usize;
                     self.resampler.push_silence(frames, &mut self.out)?;
-                    self.shared.padded_frames.fetch_add(
-                        ns_to_frames(pad_ns, TARGET_SAMPLE_RATE),
-                        Ordering::Relaxed,
-                    );
-                    self.timeline.pad(frames_to_ns(frames as u64, current.sample_rate));
+                    self.shared
+                        .padded_frames
+                        .fetch_add(ns_to_frames(pad_ns, TARGET_SAMPLE_RATE), Ordering::Relaxed);
+                    self.timeline
+                        .pad(frames_to_ns(frames as u64, current.sample_rate));
                 }
             }
             Placement::NewRun => {
@@ -387,7 +422,8 @@ impl Writer {
             }
         }
         let frames = (self.native.len() / format.channels.max(1) as usize) as u64;
-        self.timeline.advance(host_time_ns, frames, format.sample_rate);
+        self.timeline
+            .advance(host_time_ns, frames, format.sample_rate);
         self.resampler.push(&self.native, format, &mut self.out)?;
         self.emit()
     }
@@ -439,7 +475,9 @@ impl Writer {
             let take = ((self.chunk_frames - self.chunk_pos).min(rest.len() as u64)) as usize;
             self.sink.write(&rest[..take])?;
             self.chunk_pos += take as u64;
-            self.shared.written_frames.fetch_add(take as u64, Ordering::Relaxed);
+            self.shared
+                .written_frames
+                .fetch_add(take as u64, Ordering::Relaxed);
             rest = &rest[take..];
         }
         Ok(())
@@ -459,7 +497,10 @@ mod tests {
     const ORIGIN: u64 = 3_000_000_000_000;
     const MS: u64 = 1_000_000;
     const TONE_HZ: f64 = 330.0;
-    const STEREO_48K: SourceFormat = SourceFormat { sample_rate: 48_000, channels: 2 };
+    const STEREO_48K: SourceFormat = SourceFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
 
     /// A capture source driven by the test: it owns the handler like a real
     /// one and delivers buffers with whatever host time the test says. That
@@ -475,7 +516,12 @@ mod tests {
 
     impl FakeSource {
         fn new(format: SourceFormat) -> Self {
-            Self { handler: None, format, tone_s: 0.0, host_ns: ORIGIN }
+            Self {
+                handler: None,
+                format,
+                tone_s: 0.0,
+                host_ns: ORIGIN,
+            }
         }
 
         /// Delivers `count` 10 ms buffers of tone. `stamp_ns` is how far the
@@ -554,27 +600,45 @@ mod tests {
         fn begins(&self) -> Vec<u64> {
             self.calls()
                 .into_iter()
-                .filter_map(|c| if let SinkCall::Begin(anchor) = c { Some(anchor) } else { None })
+                .filter_map(|c| {
+                    if let SinkCall::Begin(anchor) = c {
+                        Some(anchor)
+                    } else {
+                        None
+                    }
+                })
                 .collect()
         }
         fn frames(&self) -> usize {
-            self.calls().iter().map(|c| if let SinkCall::Write(n) = c { *n } else { 0 }).sum()
+            self.calls()
+                .iter()
+                .map(|c| if let SinkCall::Write(n) = c { *n } else { 0 })
+                .sum()
         }
     }
 
     impl SampleSink for FakeSink {
         fn begin(&mut self, anchor_host_ns: u64) -> Result<(), String> {
-            self.calls.lock().unwrap().push(SinkCall::Begin(anchor_host_ns));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(SinkCall::Begin(anchor_host_ns));
             Ok(())
         }
         fn write(&mut self, samples: &[f32]) -> Result<(), String> {
             if let Some(delay) = self.write_delay {
                 std::thread::sleep(delay);
             }
-            if self.fail_after_frames.is_some_and(|limit| self.frames() + samples.len() > limit) {
+            if self
+                .fail_after_frames
+                .is_some_and(|limit| self.frames() + samples.len() > limit)
+            {
                 return Err("No space left on device (os error 28)".to_string());
             }
-            self.calls.lock().unwrap().push(SinkCall::Write(samples.len()));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(SinkCall::Write(samples.len()));
             Ok(())
         }
         fn finish(&mut self) -> Result<(), String> {
@@ -584,7 +648,11 @@ mod tests {
     }
 
     fn fast(chunk_frames: u64) -> RecorderConfig {
-        RecorderConfig { poll_interval: Duration::from_millis(1), chunk_frames, ..RecorderConfig::default() }
+        RecorderConfig {
+            poll_interval: Duration::from_millis(1),
+            chunk_frames,
+            ..RecorderConfig::default()
+        }
     }
 
     fn wait_until(what: &str, condition: impl Fn() -> bool) {
@@ -636,8 +704,14 @@ mod tests {
         assert_eq!((status.overflow_frames, status.gaps), (0, 0));
         assert_eq!(status.written_frames, 40_000);
         let records = ledger.records();
-        assert_eq!(records.iter().map(|r| r.n_frames).collect::<Vec<_>>(), [16_000, 16_000, 8_000]);
-        assert_eq!(records.iter().map(|r| r.start_ms).collect::<Vec<_>>(), [0, 1_000, 2_000]);
+        assert_eq!(
+            records.iter().map(|r| r.n_frames).collect::<Vec<_>>(),
+            [16_000, 16_000, 8_000]
+        );
+        assert_eq!(
+            records.iter().map(|r| r.start_ms).collect::<Vec<_>>(),
+            [0, 1_000, 2_000]
+        );
         assert_eq!(records[1].anchor_host_ns, ORIGIN + 1_000 * MS);
 
         // Read back across both borders: the tone is intact and in phase, so
@@ -668,8 +742,17 @@ mod tests {
         assert_eq!(records[1].n_frames, 9_600, "nothing zero-filled");
         assert_eq!(records[1].start_ms, 750);
         assert_eq!(records[1].anchor_host_ns, ORIGIN + 750 * MS);
-        let sidecar = sidecar::read(&tmp.path().join("m1/system")).unwrap().unwrap();
-        assert_eq!(sidecar.chunks.iter().map(|c| c.gap_before_ms).collect::<Vec<_>>(), [0, 250]);
+        let sidecar = sidecar::read(&tmp.path().join("m1/system"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sidecar
+                .chunks
+                .iter()
+                .map(|c| c.gap_before_ms)
+                .collect::<Vec<_>>(),
+            [0, 250]
+        );
 
         // The audio after the gap sits where it was captured.
         let mut audio = ChunkTrackAudio::new(tmp.path().to_path_buf(), records);
@@ -682,15 +765,22 @@ mod tests {
     fn pause_and_resume_produce_a_gap_not_silence() {
         let sink = FakeSink::default();
         let mut source = FakeSource::new(STEREO_48K);
-        let (mut recorder, handler) =
-            start_track(TrackKind::Mic, Box::new(sink.clone()), ORIGIN, fast(CHUNK_FRAMES)).unwrap();
+        let (mut recorder, handler) = start_track(
+            TrackKind::Mic,
+            Box::new(sink.clone()),
+            ORIGIN,
+            fast(CHUNK_FRAMES),
+        )
+        .unwrap();
         source.start(Box::new(handler)).unwrap();
 
         source.deliver(30);
         recorder.pause();
         assert!(recorder.status().paused);
         // The chunk is closed while paused, with everything from before.
-        wait_until("the pause to close the chunk", || sink.calls().last() == Some(&SinkCall::Finish));
+        wait_until("the pause to close the chunk", || {
+            sink.calls().last() == Some(&SinkCall::Finish)
+        });
         assert_eq!(sink.frames(), 4_800);
         source.deliver(500); // 5 s of audio nobody wants
         recorder.resume();
@@ -698,7 +788,10 @@ mod tests {
         let status = recorder.stop();
 
         assert_eq!(status.error, None);
-        assert_eq!(status.written_frames, 9_600, "paused audio is not on disk, nor is silence");
+        assert_eq!(
+            status.written_frames, 9_600,
+            "paused audio is not on disk, nor is silence"
+        );
         assert_eq!(status.overflow_frames, 0, "a pause is not an overflow");
         assert_eq!(status.gaps, 1);
         assert_eq!(sink.begins(), [ORIGIN, ORIGIN + 5_300 * MS]);
@@ -708,20 +801,36 @@ mod tests {
     fn a_format_change_mid_meeting_stays_in_one_chunk() {
         let sink = FakeSink::default();
         let mut source = FakeSource::new(STEREO_48K);
-        let (mut recorder, handler) =
-            start_track(TrackKind::System, Box::new(sink.clone()), ORIGIN, fast(CHUNK_FRAMES)).unwrap();
+        let (mut recorder, handler) = start_track(
+            TrackKind::System,
+            Box::new(sink.clone()),
+            ORIGIN,
+            fast(CHUNK_FRAMES),
+        )
+        .unwrap();
         source.start(Box::new(handler)).unwrap();
         source.deliver(100);
         // AirPods: the source rebuilds at 44.1 kHz mono, without a hole.
-        let format = SourceFormat { sample_rate: 44_100, channels: 1 };
-        source.handler.as_mut().unwrap().on_discontinuity(Discontinuity::FormatChanged { format }, source.host_ns);
+        let format = SourceFormat {
+            sample_rate: 44_100,
+            channels: 1,
+        };
+        source
+            .handler
+            .as_mut()
+            .unwrap()
+            .on_discontinuity(Discontinuity::FormatChanged { format }, source.host_ns);
         source.format = format;
         source.deliver(100);
         let status = recorder.stop();
 
         assert_eq!(status.error, None);
         assert_eq!(sink.begins(), [ORIGIN], "no new chunk");
-        assert!((status.written_frames as i64 - 32_000).abs() <= 1, "{}", status.written_frames);
+        assert!(
+            (status.written_frames as i64 - 32_000).abs() <= 1,
+            "{}",
+            status.written_frames
+        );
     }
 
     #[test]
@@ -740,22 +849,36 @@ mod tests {
         assert_eq!(begins.len(), 4);
         for (i, anchor) in begins.iter().enumerate() {
             let real = ORIGIN + i as u64 * 1_005 * MS;
-            assert!(anchor.abs_diff(real) < MS, "chunk {i}: off by {} ns", anchor.abs_diff(real));
+            assert!(
+                anchor.abs_diff(real) < MS,
+                "chunk {i}: off by {} ns",
+                anchor.abs_diff(real)
+            );
         }
     }
 
     #[test]
     fn a_slow_sink_drops_and_counts_instead_of_growing() {
-        let sink = FakeSink { write_delay: Some(Duration::from_millis(40)), ..FakeSink::default() };
+        let sink = FakeSink {
+            write_delay: Some(Duration::from_millis(40)),
+            ..FakeSink::default()
+        };
         let mut source = FakeSource::new(STEREO_48K);
         // A ring of 0.25 s, and a disk that manages one write per 40 ms.
         // Threshold 0: every loss is a gap, none is padded, so the frame
         // accounting below is exact.
-        let config =
-            RecorderConfig { ring_samples: 24_000, gap_threshold_ms: 0, ..fast(CHUNK_FRAMES) };
+        let config = RecorderConfig {
+            ring_samples: 24_000,
+            gap_threshold_ms: 0,
+            ..fast(CHUNK_FRAMES)
+        };
         let (mut recorder, handler) =
             start_track(TrackKind::System, Box::new(sink.clone()), ORIGIN, config).unwrap();
-        assert_eq!(handler.ring_capacity(), 24_000, "the only place audio can queue up");
+        assert_eq!(
+            handler.ring_capacity(),
+            24_000,
+            "the only place audio can queue up"
+        );
         source.start(Box::new(handler)).unwrap();
 
         // 30 s of audio arrives as fast as the callback can deliver it. The
@@ -774,13 +897,19 @@ mod tests {
 
         assert_eq!(status.error, None);
         assert!(status.overflow_frames > 0, "the ring overflowed");
-        assert!(callback_time < Duration::from_secs(5), "callbacks blocked: {callback_time:?}");
+        assert!(
+            callback_time < Duration::from_secs(5),
+            "callbacks blocked: {callback_time:?}"
+        );
         // Every frame is accounted for: written or counted as dropped.
         let delivered = 3_000 * 480;
         let accepted = delivered - status.overflow_frames;
         let written_native = status.written_frames * 3;
         let slack = 3 * (status.gaps + 1) * 2;
-        assert!(written_native.abs_diff(accepted) <= slack, "{written_native} vs {accepted}");
+        assert!(
+            written_native.abs_diff(accepted) <= slack,
+            "{written_native} vs {accepted}"
+        );
         // And the drops are gaps on the timeline, not a shifted recording.
         assert!(status.gaps > 0);
         assert_eq!(sink.begins().len() as u64, status.gaps + 1);
@@ -790,12 +919,21 @@ mod tests {
     fn a_short_known_loss_is_padded_to_stay_aligned() {
         let sink = FakeSink::default();
         let mut source = FakeSource::new(STEREO_48K);
-        let (mut recorder, handler) =
-            start_track(TrackKind::System, Box::new(sink.clone()), ORIGIN, fast(CHUNK_FRAMES)).unwrap();
+        let (mut recorder, handler) = start_track(
+            TrackKind::System,
+            Box::new(sink.clone()),
+            ORIGIN,
+            fast(CHUNK_FRAMES),
+        )
+        .unwrap();
         source.start(Box::new(handler)).unwrap();
         source.deliver(50);
         // An xrun: the driver lost 20 ms and says so.
-        source.handler.as_mut().unwrap().on_discontinuity(Discontinuity::Dropped { frames: 960 }, source.host_ns);
+        source
+            .handler
+            .as_mut()
+            .unwrap()
+            .on_discontinuity(Discontinuity::Dropped { frames: 960 }, source.host_ns);
         source.skip_ms(20);
         source.deliver(50);
         let status = recorder.stop();
@@ -803,26 +941,48 @@ mod tests {
         assert_eq!(status.source_dropped_frames, 960);
         assert_eq!(status.gaps, 0);
         assert_eq!(sink.begins(), [ORIGIN]);
-        assert_eq!(status.written_frames, 16_320, "1 s of audio + 20 ms of padding");
+        assert_eq!(
+            status.written_frames, 16_320,
+            "1 s of audio + 20 ms of padding"
+        );
         assert_eq!(status.padded_frames, 320);
     }
 
     #[test]
     fn a_full_disk_is_an_error_state_not_a_panic() {
-        let sink = FakeSink { fail_after_frames: Some(8_000), ..FakeSink::default() };
+        let sink = FakeSink {
+            fail_after_frames: Some(8_000),
+            ..FakeSink::default()
+        };
         let mut source = FakeSource::new(STEREO_48K);
-        let (mut recorder, handler) =
-            start_track(TrackKind::Mic, Box::new(sink.clone()), ORIGIN, fast(CHUNK_FRAMES)).unwrap();
+        let (mut recorder, handler) = start_track(
+            TrackKind::Mic,
+            Box::new(sink.clone()),
+            ORIGIN,
+            fast(CHUNK_FRAMES),
+        )
+        .unwrap();
         source.start(Box::new(handler)).unwrap();
         source.deliver(100);
         wait_until("the error state", || recorder.status().error.is_some());
 
         let status = recorder.status();
-        assert!(status.error.as_deref().unwrap().contains("No space left"), "{status:?}");
-        assert_eq!(sink.calls().last(), Some(&SinkCall::Finish), "what was written is closed");
+        assert!(
+            status.error.as_deref().unwrap().contains("No space left"),
+            "{status:?}"
+        );
+        assert_eq!(
+            sink.calls().last(),
+            Some(&SinkCall::Finish),
+            "what was written is closed"
+        );
         // The audio path carries on unharmed and the ring does not fill up.
         source.deliver(1_000);
-        source.handler.as_mut().unwrap().on_discontinuity(Discontinuity::Stalled, source.host_ns);
+        source
+            .handler
+            .as_mut()
+            .unwrap()
+            .on_discontinuity(Discontinuity::Stalled, source.host_ns);
         recorder.pause();
         recorder.resume();
         let status = recorder.stop();
@@ -833,22 +993,58 @@ mod tests {
 
     #[test]
     fn rejects_empty_rings_and_survives_odd_buffers() {
-        let bad = RecorderConfig { ring_samples: 0, ..RecorderConfig::default() };
+        let bad = RecorderConfig {
+            ring_samples: 0,
+            ..RecorderConfig::default()
+        };
         assert!(start_track(TrackKind::Mic, Box::new(FakeSink::default()), ORIGIN, bad).is_err());
 
         let sink = FakeSink::default();
-        let (mut recorder, mut handler) =
-            start_track(TrackKind::Mic, Box::new(sink.clone()), ORIGIN, fast(CHUNK_FRAMES)).unwrap();
-        let mono_16k = SourceFormat { sample_rate: 16_000, channels: 1 };
-        let no_channels = SourceFormat { sample_rate: 16_000, channels: 0 };
-        handler.on_frames(AudioFrames { samples: &[], format: mono_16k, host_time_ns: ORIGIN });
-        handler.on_frames(AudioFrames { samples: &[0.1; 8], format: no_channels, host_time_ns: ORIGIN });
+        let (mut recorder, mut handler) = start_track(
+            TrackKind::Mic,
+            Box::new(sink.clone()),
+            ORIGIN,
+            fast(CHUNK_FRAMES),
+        )
+        .unwrap();
+        let mono_16k = SourceFormat {
+            sample_rate: 16_000,
+            channels: 1,
+        };
+        let no_channels = SourceFormat {
+            sample_rate: 16_000,
+            channels: 0,
+        };
+        handler.on_frames(AudioFrames {
+            samples: &[],
+            format: mono_16k,
+            host_time_ns: ORIGIN,
+        });
+        handler.on_frames(AudioFrames {
+            samples: &[0.1; 8],
+            format: no_channels,
+            host_time_ns: ORIGIN,
+        });
         // Seven samples of stereo: three frames and a stray sample.
-        let stereo_16k = SourceFormat { sample_rate: 16_000, channels: 2 };
-        handler.on_frames(AudioFrames { samples: &[0.1; 7], format: stereo_16k, host_time_ns: ORIGIN });
+        let stereo_16k = SourceFormat {
+            sample_rate: 16_000,
+            channels: 2,
+        };
+        handler.on_frames(AudioFrames {
+            samples: &[0.1; 7],
+            format: stereo_16k,
+            host_time_ns: ORIGIN,
+        });
         let status = recorder.stop();
         assert_eq!(status.error, None);
         assert_eq!(status.written_frames, 3);
-        assert_eq!(sink.calls(), [SinkCall::Begin(ORIGIN), SinkCall::Write(3), SinkCall::Finish]);
+        assert_eq!(
+            sink.calls(),
+            [
+                SinkCall::Begin(ORIGIN),
+                SinkCall::Write(3),
+                SinkCall::Finish
+            ]
+        );
     }
 }

@@ -307,7 +307,10 @@ mod tests {
             .ops
             .contains(&Op::Joined("pull request".into(), "pullrequest".into())));
         // A real misrecognition is not forgiven.
-        assert_eq!(align(&toks("pull request"), &toks("poolrequest"), true).errors, 2);
+        assert_eq!(
+            align(&toks("pull request"), &toks("poolrequest"), true).errors,
+            2
+        );
     }
 
     #[test]
@@ -319,8 +322,15 @@ mod tests {
         let s = score_clip("Ik ga 't morgen doen.", "Ik ga het morgen doen", &none);
         assert_eq!(s.word_errors, 0);
 
-        let s = score_clip("De zorgverzekering is duur", "De zorg verzekering is duur", &none);
-        assert_eq!((s.ref_words, s.word_errors, s.lenient_word_errors), (4, 2, 0));
+        let s = score_clip(
+            "De zorgverzekering is duur",
+            "De zorg verzekering is duur",
+            &none,
+        );
+        assert_eq!(
+            (s.ref_words, s.word_errors, s.lenient_word_errors),
+            (4, 2, 0)
+        );
         assert_eq!(s.char_errors, 1);
 
         // Speech that was discarded entirely: every word is a deletion.
@@ -365,7 +375,10 @@ mod tests {
     #[test]
     fn diff_marks_each_kind_of_error() {
         assert_eq!(
-            render_diff("Deploy de API key morgen", "De ploy de API morgen alsjeblieft"),
+            render_diff(
+                "Deploy de API key morgen",
+                "De ploy de API morgen alsjeblieft"
+            ),
             "[+de+] [deploy→ploy] de api [-key-] morgen [+alsjeblieft+]"
         );
         assert!(is_blank(" ... "));

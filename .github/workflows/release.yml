@@ -1,107 +1,81 @@
 name: Release
-
 on:
   push:
-    tags:
-      - "v*"
-
+    tags: ["v*"]
+permissions:
+  contents: read
+# Serialize all releases, not just runs of the same tag. Never cancel a publish.
+concurrency:
+  group: production-release
+  cancel-in-progress: false
 jobs:
+  provenance:
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Require a release tag on main before any signing secrets are used
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          # Run the checker from this tag only after proving it is merged.
+          python3 scripts/check-release-version.py "$GITHUB_REF_NAME"
+  preflight:
+    needs: provenance
+    uses: ./.github/workflows/apple-credentials.yml
+    secrets: inherit
+  checks:
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
   build-and-publish:
-    runs-on: macos-latest
-    permissions:
-      contents: write
+    needs: checks
+    runs-on: macos-14
+    timeout-minutes: 45
     env:
       APPLE_SIGNING_IDENTITY: "Developer ID Application: Joost Dolstra (3P87HV73Y6)"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-
-      - name: Verify tag matches tauri.conf.json version
+      - name: Verify release provenance and versions
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          CONF_VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
-          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match tauri.conf.json version $CONF_VERSION"
-            exit 1
-          fi
-
-      # Fails in seconds on a bad certificate, password or notarization key,
-      # instead of after the full build.
-      - name: Check Apple signing and notarization credentials
-        run: |
-          CERT="$RUNNER_TEMP/preflight.p12"
-          KEYCHAIN="$RUNNER_TEMP/preflight.keychain-db"
-          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$CERT"
-          security create-keychain -p preflight "$KEYCHAIN"
-          security import "$CERT" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null \
-            || { echo "::error::APPLE_CERTIFICATE_BASE64 cannot be imported with APPLE_CERTIFICATE_PASSWORD (wrong password or not a base64 .p12)"; exit 1; }
-          IDENTITIES="$(security find-identity -p codesigning "$KEYCHAIN")"
-          security delete-keychain "$KEYCHAIN"
-          rm -f "$CERT"
-          grep -Fq "\"$APPLE_SIGNING_IDENTITY\"" <<< "$IDENTITIES" \
-            || { echo "::error::the certificate does not hold $APPLE_SIGNING_IDENTITY"; echo "$IDENTITIES"; exit 1; }
-
-          KEY="$RUNNER_TEMP/preflight-AuthKey.p8"
-          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$KEY"
-          xcrun notarytool history --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" >/dev/null \
-            || { rm -f "$KEY"; echo "::error::notarytool rejected the App Store Connect API key (check APPLE_API_KEY_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID)"; exit 1; }
-          rm -f "$KEY"
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          test "$(uname -m)" = arm64
+          git merge-base --is-ancestor HEAD origin/main
+          python3 scripts/check-release-version.py "$GITHUB_REF_NAME"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
         with:
           targets: aarch64-apple-darwin
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Write Tauri signing key
+      - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=high
+      - run: brew install minisign
+      - name: Write signing keys
         run: |
-          mkdir -p ~/.tauri
-          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > ~/.tauri/flowingthoughts_updater.key
-          chmod 600 ~/.tauri/flowingthoughts_updater.key
+          umask 077
+          mkdir -p "$RUNNER_TEMP/ft-signing"
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/ft-signing/updater.key"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$RUNNER_TEMP/ft-signing/AuthKey.p8"
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-
-      - name: Write Apple notarization key
-        run: |
-          KEY_DIR="$RUNNER_TEMP/apple-notarization"
-          mkdir -p "$KEY_DIR"
-          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
-          chmod 600 "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
-        env:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-
-      - name: Build and publish release
+      - name: Build, notarize, verify and publish
         env:
-          TAURI_SIGNING_PRIVATE_KEY_PATH: /Users/runner/.tauri/flowingthoughts_updater.key
+          TAURI_SIGNING_PRIVATE_KEY_PATH: ${{ runner.temp }}/ft-signing/updater.key
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          NOTARY_API_KEY_PATH: ${{ runner.temp }}/apple-notarization/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+          NOTARY_API_KEY_PATH: ${{ runner.temp }}/ft-signing/AuthKey.p8
           NOTARY_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           NOTARY_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
-          REQUIRE_DEVELOPER_ID: "1"
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
-        run: |
-          bash scripts/release.sh "Automated release ${GITHUB_REF_NAME} from $(git rev-parse --short HEAD)"
+        run: bash scripts/release.sh "Automated release ${GITHUB_REF_NAME} from $(git rev-parse HEAD)"
+      - name: Remove signing keys
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ft-signing"

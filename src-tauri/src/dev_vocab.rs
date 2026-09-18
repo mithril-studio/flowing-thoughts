@@ -26,32 +26,144 @@ use crate::corrections;
 /// out before the list does.
 pub const PROMPT_TERMS: &[&str] = &[
     // Everyday acronyms
-    "API", "CLI", "SDK", "JSON", "YAML", "XML", "HTML", "CSS", "SQL", "HTTP",
-    "HTTPS", "REST", "gRPC", "GraphQL", "OAuth", "JWT", "SSH", "TLS", "DNS",
-    "TCP", "UDP", "URL", "URI", "UUID", "ORM", "CDN", "CRUD", "IDE", "UI",
-    "UX", "CPU", "GPU", "RAM", "regex", "cron", "localhost", "npm", "pnpm",
-    "CI/CD", "WebSocket", "webhook",
+    "API",
+    "CLI",
+    "SDK",
+    "JSON",
+    "YAML",
+    "XML",
+    "HTML",
+    "CSS",
+    "SQL",
+    "HTTP",
+    "HTTPS",
+    "REST",
+    "gRPC",
+    "GraphQL",
+    "OAuth",
+    "JWT",
+    "SSH",
+    "TLS",
+    "DNS",
+    "TCP",
+    "UDP",
+    "URL",
+    "URI",
+    "UUID",
+    "ORM",
+    "CDN",
+    "CRUD",
+    "IDE",
+    "UI",
+    "UX",
+    "CPU",
+    "GPU",
+    "RAM",
+    "regex",
+    "cron",
+    "localhost",
+    "npm",
+    "pnpm",
+    "CI/CD",
+    "WebSocket",
+    "webhook",
     // Workflow & architecture
-    "Git", "GitHub", "GitLab", "Bitbucket", "pull request", "merge conflict",
-    "refactor", "monorepo", "changelog", "README", "Markdown", "frontend",
-    "backend", "middleware", "DevOps", "Kubernetes", "Docker", "Terraform",
-    "serverless", "microservices",
+    "Git",
+    "GitHub",
+    "GitLab",
+    "Bitbucket",
+    "pull request",
+    "merge conflict",
+    "refactor",
+    "monorepo",
+    "changelog",
+    "README",
+    "Markdown",
+    "frontend",
+    "backend",
+    "middleware",
+    "DevOps",
+    "Kubernetes",
+    "Docker",
+    "Terraform",
+    "serverless",
+    "microservices",
     // Languages & runtimes
-    "TypeScript", "JavaScript", "Python", "Rust", "Golang", "Java", "Kotlin",
-    "Swift", "C#", "C++", "Ruby", "PHP", "Node.js", "Deno", "Bash", "zsh",
+    "TypeScript",
+    "JavaScript",
+    "Python",
+    "Rust",
+    "Golang",
+    "Java",
+    "Kotlin",
+    "Swift",
+    "C#",
+    "C++",
+    "Ruby",
+    "PHP",
+    "Node.js",
+    "Deno",
+    "Bash",
+    "zsh",
     // Frameworks & tools
-    "React", "Next.js", "Vue", "Svelte", "Tailwind", "Vite", "Django",
-    "Flask", "FastAPI", "Rails", "Laravel", "VS Code", "Xcode", "Vim",
-    "Tauri", "Electron",
+    "React",
+    "Next.js",
+    "Vue",
+    "Svelte",
+    "Tailwind",
+    "Vite",
+    "Django",
+    "Flask",
+    "FastAPI",
+    "Rails",
+    "Laravel",
+    "VS Code",
+    "Xcode",
+    "Vim",
+    "Tauri",
+    "Electron",
     // Data & infra
-    "PostgreSQL", "Postgres", "MySQL", "SQLite", "MongoDB", "Redis", "Kafka",
-    "Nginx", "AWS", "Azure", "GCP", "Vercel", "Netlify", "Supabase",
-    "Firebase", "Linux", "Ubuntu", "macOS", "iOS",
+    "PostgreSQL",
+    "Postgres",
+    "MySQL",
+    "SQLite",
+    "MongoDB",
+    "Redis",
+    "Kafka",
+    "Nginx",
+    "AWS",
+    "Azure",
+    "GCP",
+    "Vercel",
+    "Netlify",
+    "Supabase",
+    "Firebase",
+    "Linux",
+    "Ubuntu",
+    "macOS",
+    "iOS",
     // AI engineering
-    "LLM", "RAG", "MCP", "OpenAI", "Anthropic", "Claude", "ChatGPT", "GPT",
-    "Whisper", "Hugging Face", "PyTorch", "TensorFlow", "LangChain",
-    "embeddings", "fine-tuning", "tokenizer", "inference", "transformer",
-    "prompt engineering", "vector database", "agentic",
+    "LLM",
+    "RAG",
+    "MCP",
+    "OpenAI",
+    "Anthropic",
+    "Claude",
+    "ChatGPT",
+    "GPT",
+    "Whisper",
+    "Hugging Face",
+    "PyTorch",
+    "TensorFlow",
+    "LangChain",
+    "embeddings",
+    "fine-tuning",
+    "tokenizer",
+    "inference",
+    "transformer",
+    "prompt engineering",
+    "vector database",
+    "agentic",
 ];
 
 /// Single tokens whose casing gets repaired in the transcript. Strict subset
@@ -60,17 +172,86 @@ pub const PROMPT_TERMS: &[&str] = &[
 /// excluded (lowercase is correct in dictated commands), as are "go",
 /// "rest", "ram", "swift", "react" (real words).
 const CASING_TERMS: &[&str] = &[
-    "API", "CLI", "SDK", "JSON", "YAML", "XML", "HTML", "CSS", "SQL", "HTTP",
-    "HTTPS", "gRPC", "GraphQL", "OAuth", "JWT", "SSH", "TLS", "DNS", "TCP",
-    "UDP", "URL", "URI", "UUID", "ORM", "CDN", "CRUD", "IDE", "UI", "UX",
-    "CPU", "GPU", "LLM", "RAG", "MCP", "GPT", "npm", "pnpm", "zsh", "DevOps",
-    "GitHub", "GitLab", "Bitbucket", "TypeScript", "JavaScript",
-    "PostgreSQL", "Postgres", "MySQL", "SQLite", "MongoDB", "Redis", "Kafka",
-    "Nginx", "AWS", "GCP", "Vercel", "Netlify", "Supabase", "Firebase",
-    "Kubernetes", "Terraform", "Tauri", "Xcode", "Ubuntu", "Linux", "macOS",
-    "README", "Markdown", "OpenAI", "Anthropic", "Claude", "ChatGPT",
-    "PyTorch", "TensorFlow", "LangChain", "FastAPI", "Node.js", "Next.js",
-    "Vite", "Tailwind", "Svelte",
+    "API",
+    "CLI",
+    "SDK",
+    "JSON",
+    "YAML",
+    "XML",
+    "HTML",
+    "CSS",
+    "SQL",
+    "HTTP",
+    "HTTPS",
+    "gRPC",
+    "GraphQL",
+    "OAuth",
+    "JWT",
+    "SSH",
+    "TLS",
+    "DNS",
+    "TCP",
+    "UDP",
+    "URL",
+    "URI",
+    "UUID",
+    "ORM",
+    "CDN",
+    "CRUD",
+    "IDE",
+    "UI",
+    "UX",
+    "CPU",
+    "GPU",
+    "LLM",
+    "RAG",
+    "MCP",
+    "GPT",
+    "npm",
+    "pnpm",
+    "zsh",
+    "DevOps",
+    "GitHub",
+    "GitLab",
+    "Bitbucket",
+    "TypeScript",
+    "JavaScript",
+    "PostgreSQL",
+    "Postgres",
+    "MySQL",
+    "SQLite",
+    "MongoDB",
+    "Redis",
+    "Kafka",
+    "Nginx",
+    "AWS",
+    "GCP",
+    "Vercel",
+    "Netlify",
+    "Supabase",
+    "Firebase",
+    "Kubernetes",
+    "Terraform",
+    "Tauri",
+    "Xcode",
+    "Ubuntu",
+    "Linux",
+    "macOS",
+    "README",
+    "Markdown",
+    "OpenAI",
+    "Anthropic",
+    "Claude",
+    "ChatGPT",
+    "PyTorch",
+    "TensorFlow",
+    "LangChain",
+    "FastAPI",
+    "Node.js",
+    "Next.js",
+    "Vite",
+    "Tailwind",
+    "Svelte",
 ];
 
 /// Known Whisper split-word outputs and mishears, repaired as whole phrases.
@@ -166,7 +347,11 @@ fn replace_phrase_ascii_ci(text: &str, phrase: &str, replacement: &str) -> Strin
     let mut cursor = 0;
     while cursor + needle.len() <= haystack.len() {
         if !haystack[cursor..cursor + needle.len()].eq_ignore_ascii_case(needle) {
-            let ch_len = text[cursor..].chars().next().map(char::len_utf8).unwrap_or(1);
+            let ch_len = text[cursor..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(1);
             out.push_str(&text[cursor..cursor + ch_len]);
             cursor += ch_len;
             continue;
@@ -200,8 +385,7 @@ fn replace_phrase_ascii_ci(text: &str, phrase: &str, replacement: &str) -> Strin
 /// the safe spot.
 pub fn build_biased_prompt(user_terms: &[String], max_chars: usize) -> Option<String> {
     let user_part = corrections::build_prompt_from_corrections(user_terms, max_chars);
-    let remaining =
-        max_chars.saturating_sub(user_part.as_ref().map(|s| s.len() + 2).unwrap_or(0));
+    let remaining = max_chars.saturating_sub(user_part.as_ref().map(|s| s.len() + 2).unwrap_or(0));
     let dev_terms: Vec<String> = PROMPT_TERMS
         .iter()
         .filter(|term| {
@@ -241,8 +425,8 @@ const MAX_ECHO_CHARS: usize = 40;
 /// Filler Whisper glues onto a regurgitated vocabulary term when it continues
 /// the prompt list instead of transcribing ("And Linux.", "the API").
 const ECHO_FILLER: &[&str] = &[
-    "and", "en", "the", "de", "het", "een", "a", "an", "of", "or", "to", "is",
-    "in", "on", "so", "then", "dan", "ook", "plus", "with", "met", "uh", "um",
+    "and", "en", "the", "de", "het", "een", "a", "an", "of", "or", "to", "is", "in", "on", "so",
+    "then", "dan", "ook", "plus", "with", "met", "uh", "um",
 ];
 
 /// True when `text` is Whisper regurgitating the biased prompt rather than
@@ -328,7 +512,10 @@ mod tests {
             normalize("the rest of the ram in the swift river"),
             "the rest of the ram in the swift river"
         );
-        assert_eq!(normalize("git status then docker run"), "git status then docker run");
+        assert_eq!(
+            normalize("git status then docker run"),
+            "git status then docker run"
+        );
     }
 
     #[test]
@@ -344,7 +531,10 @@ mod tests {
             "I write TypeScript and JavaScript"
         );
         assert_eq!(normalize("Get hub actions"), "GitHub actions");
-        assert_eq!(normalize("a next js app on vs code"), "a Next.js app on VS Code");
+        assert_eq!(
+            normalize("a next js app on vs code"),
+            "a Next.js app on VS Code"
+        );
     }
 
     #[test]
