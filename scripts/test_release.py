@@ -1,6 +1,7 @@
 """Release tooling tests: python3 -m unittest discover -s scripts -p 'test_*.py'."""
 import base64
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -51,6 +52,62 @@ esac
                 self.assertEqual(trace[-1], "deleted")
                 self.assertFalse(Path(trace[0]).parent.exists())
                 self.assertNotIn("test password", result.stdout + result.stderr)
+
+
+class PublishTests(unittest.TestCase):
+    def test_unsigned_release_is_rejected_before_build_or_publish(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts/release.sh")],
+            env=dict(os.environ, REQUIRE_DEVELOPER_ID="0",
+                     TAURI_SIGNING_PRIVATE_KEY_PATH="/nonexistent/test-key"),
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsigned publishing is forbidden", result.stderr)
+
+    def test_only_verified_drafts_are_published(self):
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                assets = work / "assets"
+                assets.mkdir()
+                names = ["app.tar.gz", "app.tar.gz.sig", "latest.json", "app.dmg"]
+                for name in names:
+                    (assets / name).write_text(name)
+                gh = work / "gh"
+                gh.write_text('''#!/bin/bash
+printf '%s\\n' "$*" >> "$TRACE"
+case "$2" in
+  create) [[ " $* " == *" --draft "* ]] || exit 5 ;;
+  download)
+    while [ "$1" != --dir ]; do shift; done
+    cp "$ASSETS"/* "$2/"
+    [ "$CORRUPT" = 0 ] || echo corrupt >> "$2/app.tar.gz"
+    ;;
+  edit) touch "$PUBLISHED" ;;
+esac
+''')
+                gh.chmod(0o755)
+                result = subprocess.run(
+                    ["bash", str(ROOT / "scripts/publish-release.sh"), "v0.5.2", "Test notes",
+                     *[str(assets / name) for name in names]],
+                    env=dict(os.environ, PATH=f"{work}:{os.environ['PATH']}",
+                             TRACE=str(work / "trace"), ASSETS=str(assets),
+                             CORRUPT=str(int(corrupt)), PUBLISHED=str(work / "published")),
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode == 0, not corrupt, result.stderr)
+                self.assertEqual((work / "published").exists(), not corrupt)
+                self.assertIn("--draft", (work / "trace").read_text())
+
+
+class VersionTests(unittest.TestCase):
+    def test_version_drift_and_invalid_tags_are_rejected(self):
+        script = ROOT / "scripts/check-release-version.py"
+        expected = "v" + json.loads((ROOT / "package.json").read_text())["version"]
+        for tag in (expected, "v999.999.999", "not-a-tag"):
+            result = subprocess.run(["python3", str(script), tag], capture_output=True, text=True)
+            self.assertEqual(result.returncode == 0, tag == expected, result.stderr)
 
 
 class CertificateUploadTests(unittest.TestCase):
