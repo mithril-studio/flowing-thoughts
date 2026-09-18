@@ -1,0 +1,35 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: checks
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run build
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: cargo fmt --all -- --check
+        working-directory: src-tauri
+      - run: cargo check --locked
+        working-directory: src-tauri
+      - run: cargo test --locked
+        working-directory: src-tauri
