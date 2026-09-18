@@ -239,26 +239,26 @@ one local inference at a time, with dictation first in line.
 macOS keys privacy permissions (Microphone, Accessibility, Input Monitoring,
 System Audio Recording) to the code signature.
 
-- `bundle.macOS.signingIdentity` is `"-"`: Tauri ad-hoc signs the bundle with
-  the bundle identifier, a bound Info.plist and sealed resources. Without it
-  the binary is only linker-signed (identifier = crate name plus a hash) and
-  `codesign --verify --deep --strict` fails.
-- `bundle.macOS.hardenedRuntime` is `false`. Tauri turns the hardened runtime
-  on by default as soon as it signs, and under it macOS refuses the microphone
-  without prompting unless the app carries the
-  `com.apple.security.device.audio-input` entitlement. The hardened runtime is
-  only needed for notarization; turn it on together with an entitlements file
-  when there is a Developer ID.
+- Releases are signed with a Developer ID certificate
+  (`APPLE_SIGNING_IDENTITY`, set by the release workflow) and the DMG is
+  notarized and stapled. The designated requirement is the bundle identifier
+  plus the team ID, so permissions survive updates. The one exception was the
+  first Developer ID release (0.5.1): users coming from an ad-hoc build had
+  to grant every permission once more.
+- `bundle.macOS.hardenedRuntime` is `true`, as notarization requires. Under
+  it macOS refuses the microphone without prompting unless the app carries
+  the `com.apple.security.device.audio-input` entitlement, so
+  `src-tauri/Entitlements.plist` must keep it.
+- `scripts/release.sh` requires the Developer ID and notarization variables
+  by default and stops before building if one is missing.
+  `REQUIRE_DEVELOPER_ID=0` allows a local test build; never publish one.
 - `scripts/release.sh` asserts, before anything is published: strict verify
-  passes, the signature identifier equals the bundle identifier, both usage
-  descriptions are in the bundled Info.plist, no `ProcessTap` symbol is
+  passes, the signature identifier equals the bundle identifier, the bundle
+  is signed by the configured Developer ID with the hardened runtime, both
+  usage descriptions are in the bundled Info.plist, no `ProcessTap` symbol is
   linked, the hardened runtime is not on without the audio-input entitlement,
   and the app inside the updater tarball is the same signed code as
   the one in the DMG.
-- An ad-hoc signature has no stable identity across builds: the designated
-  requirement is the code hash, so macOS asks for every permission again
-  after each update. Only a Developer ID certificate with notarization fixes
-  that. It is an open decision; `release.sh` has a commented placeholder.
 
 ## Reliability Rules
 
