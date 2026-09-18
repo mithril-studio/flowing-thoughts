@@ -127,7 +127,7 @@ otherwise; run by hand when checking a local build):
 
 - [ ] `codesign --verify --deep --strict FlowingThoughts.app` passes.
 - [ ] `codesign -dvvv FlowingThoughts.app` shows
-      `Identifier=com.flowingthoughts.desktop` and `Info.plist entries=…`, not
+      `Identifier=sh.thoughts.flowing` and `Info.plist entries=…`, not
       `Info.plist=not bound`.
 - [ ] `plutil -extract NSAudioCaptureUsageDescription raw FlowingThoughts.app/Contents/Info.plist`
       and the same for `NSMicrophoneUsageDescription` print the texts.
