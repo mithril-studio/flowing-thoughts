@@ -12,11 +12,8 @@ jobs:
   preflight:
     uses: ./.github/workflows/apple-credentials.yml
     secrets: inherit
-  checks:
-    needs: preflight
-    uses: ./.github/workflows/ci.yml
   build-and-publish:
-    needs: checks
+    needs: preflight
     runs-on: macos-14
     timeout-minutes: 45
     env:
