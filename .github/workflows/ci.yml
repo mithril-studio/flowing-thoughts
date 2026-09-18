@@ -24,6 +24,9 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+      - run: brew install actionlint
+      - run: actionlint && shellcheck scripts/*.sh
       - run: npm test
       - run: npm run build
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
