@@ -9,6 +9,21 @@ REPO="mithril-studio/flowing-thoughts-releases"
 TAG="$1"
 NOTES="$2"
 shift 2
+# This app already has a stable release. Fail closed on lookup errors rather
+# than accidentally repointing the stable feed to an older version.
+CURRENT="$(gh release view --repo "$REPO" --json tagName --jq .tagName)"
+python3 - "$TAG" "$CURRENT" <<'PY'
+import re
+import sys
+
+def version(tag):
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        sys.exit(f"error: expected a stable version tag, got {tag!r}")
+    return tuple(map(int, tag[1:].split(".")))
+
+if version(sys.argv[1]) <= version(sys.argv[2]):
+    sys.exit("error: release must be newer than the current stable version")
+PY
 for ASSET in "$@"; do
   [ -s "$ASSET" ] || { echo "error: missing or empty asset: $ASSET" >&2; exit 1; }
 done
