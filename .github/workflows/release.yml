@@ -52,10 +52,27 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
+      - name: Write Apple notarization key
+        run: |
+          KEY_DIR="$RUNNER_TEMP/apple-notarization"
+          mkdir -p "$KEY_DIR"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+          chmod 600 "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+
       - name: Build and publish release
         env:
           TAURI_SIGNING_PRIVATE_KEY_PATH: /Users/runner/.tauri/flowingthoughts_updater.key
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Joost Dolstra (3P87HV73Y6)"
+          NOTARY_API_KEY_PATH: ${{ runner.temp }}/apple-notarization/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+          NOTARY_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          REQUIRE_DEVELOPER_ID: "1"
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           bash scripts/release.sh "Automated release ${GITHUB_REF_NAME} from $(git rev-parse --short HEAD)"

@@ -58,36 +58,10 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # a failure there would otherwise abort the whole release. Build the app +
 # updater artifacts first, then create the DMG ourselves with hdiutil.
 #
-# Code signing: `bundle.macOS.signingIdentity` is "-" in tauri.conf.json, so
-# this build ad-hoc signs the bundle itself (bundle identifier, bound
-# Info.plist, sealed resources) BEFORE it packs the updater tarball. Do not
-# re-sign the .app after this point: the tarball and its .sig already exist,
-# and updates would then ship different code than the DMG. The assertions
-# below check both.
+# Code signing happens during the Tauri build. Do not re-sign the .app after
+# this point: the tarball and its .sig already exist, and updates would then
+# ship different code than the DMG. The assertions below check both.
 npx tauri build --bundles app
-
-# --- Developer ID + notarization: PLACEHOLDER, NOT ENABLED -------------------
-# Open decision for the owner (Apple Developer Program, 99 USD per year). An
-# ad-hoc signature has no stable identity, so macOS asks for every permission
-# again after each update; only a Developer ID fixes that. Tauri signs and
-# notarizes during `tauri build` when these are set, so they would go above
-# the build, not here:
-#
-#   APPLE_CERTIFICATE            base64 of the "Developer ID Application" .p12
-#   APPLE_CERTIFICATE_PASSWORD   password of that .p12
-#   APPLE_SIGNING_IDENTITY       "Developer ID Application: <name> (<TEAMID>)"
-#                                (replaces signingIdentity "-")
-#   and for notarization either
-#   APPLE_API_ISSUER, APPLE_API_KEY, APPLE_API_KEY_PATH   (App Store Connect key)
-#   or
-#   APPLE_ID, APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
-#
-# Notarization requires the hardened runtime: set bundle.macOS.hardenedRuntime
-# back to true AND add an entitlements file with at least
-# com.apple.security.device.audio-input, or the microphone stops working
-# without any prompt. The DMG below is built by hand, so it would also need
-# its own `xcrun notarytool submit --wait` and `xcrun stapler staple`.
-# -----------------------------------------------------------------------------
 
 BUNDLE_DIR_EARLY="src-tauri/target/release/bundle"
 APP_PATH="$BUNDLE_DIR_EARLY/macos/FlowingThoughts.app"
@@ -130,6 +104,13 @@ if grep -q '^CodeDirectory.*runtime' <<< "$SIGN_INFO"; then
     || fail "hardened runtime is on but the com.apple.security.device.audio-input entitlement is missing"
 fi
 
+if [ "${REQUIRE_DEVELOPER_ID:-0}" = "1" ]; then
+  [ -n "${APPLE_SIGNING_IDENTITY:-}" ] \
+    || fail "APPLE_SIGNING_IDENTITY must be set when Developer ID is required"
+  grep -Fqx "Authority=${APPLE_SIGNING_IDENTITY}" <<< "$SIGN_INFO" \
+    || fail "bundle is not signed by the configured Developer ID identity"
+fi
+
 for KEY in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription; do
   VALUE="$(plutil -extract "$KEY" raw "$APP_PLIST" 2>/dev/null || true)"
   [ -n "$VALUE" ] || fail "$KEY is missing from the bundled Info.plist"
@@ -165,6 +146,21 @@ codesign --verify --deep --strict "$STAGE/FlowingThoughts.app" || fail "the stag
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "FlowingThoughts" -srcfolder "$STAGE" -ov -format UDZO "$DMG_OUT" >/dev/null
 rm -rf "$STAGE"
+
+if [ "${REQUIRE_DEVELOPER_ID:-0}" = "1" ]; then
+  [ -r "${NOTARY_API_KEY_PATH:-}" ] || fail "notarization API key is unavailable"
+  [ -n "${NOTARY_API_KEY_ID:-}" ] || fail "NOTARY_API_KEY_ID is required"
+  [ -n "${NOTARY_API_ISSUER:-}" ] || fail "NOTARY_API_ISSUER is required"
+
+  echo "==> Notarizing and stapling the DMG"
+  xcrun notarytool submit "$DMG_OUT" \
+    --key "$NOTARY_API_KEY_PATH" \
+    --key-id "$NOTARY_API_KEY_ID" \
+    --issuer "$NOTARY_API_ISSUER" \
+    --wait
+  xcrun stapler staple "$DMG_OUT"
+  xcrun stapler validate "$DMG_OUT"
+fi
 
 BUNDLE_DIR="src-tauri/target/release/bundle/macos"
 ARCH="$(uname -m)"
