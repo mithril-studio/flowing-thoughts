@@ -29,3 +29,14 @@ dist-ssr
 # Evaluation dataset — personal voice recordings and transcripts. Never commit.
 # (Default location is the app data dir; this covers --data-dir inside the repo.)
 eval-data/
+
+# Signing material and local secrets must never enter source control.
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.pem
+*.key
+*.password
+__pycache__/
