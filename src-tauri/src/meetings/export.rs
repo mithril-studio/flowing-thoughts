@@ -34,7 +34,13 @@ pub fn export_markdown(conn: &Connection, meeting_id: &str) -> Result<MeetingExp
     let started = chrono::DateTime::parse_from_rfc3339(&meeting.meeting.started_at)
         .map(|at| at.with_timezone(&chrono::Local).naive_local())
         .map_err(|e| format!("The meeting has no valid start time: {e}"))?;
-    Ok(render(&meeting, started, &participants, summary.as_ref(), &segments))
+    Ok(render(
+        &meeting,
+        started,
+        &participants,
+        summary.as_ref(),
+        &segments,
+    ))
 }
 
 /// `65_000` is `01:05`, an hour and a bit is `1:02:03`.
@@ -53,7 +59,13 @@ fn timestamp(ms: u64) -> String {
 fn safe_file_stem(title: &str) -> String {
     let cleaned: String = title
         .chars()
-        .map(|c| if c.is_alphanumeric() || " -_.,()&+'".contains(c) { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || " -_.,()&+'".contains(c) {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
     let stem = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     let stem = stem.trim_matches(|c: char| c == '.' || c == ' ');
@@ -66,8 +78,16 @@ fn safe_file_stem(title: &str) -> String {
 }
 
 fn participant_label(participant: &Participant) -> Option<String> {
-    let name = participant.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
-    let email = participant.email.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    let name = participant
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    let email = participant
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty());
     match (name, email) {
         (Some(name), Some(email)) => Some(format!("{name} <{email}>")),
         (Some(one), None) | (None, Some(one)) => Some(one.to_string()),
@@ -100,7 +120,10 @@ pub(crate) fn render(
     let title = meeting.meeting.title.trim();
     let mut md = format!("# {title}\n\n");
     md.push_str(&format!("- Date: {}\n", started.format("%Y-%m-%d %H:%M")));
-    md.push_str(&format!("- Duration: {}\n", timestamp(meeting.meeting.duration_ms)));
+    md.push_str(&format!(
+        "- Duration: {}\n",
+        timestamp(meeting.meeting.duration_ms)
+    ));
     let people: Vec<String> = participants.iter().filter_map(participant_label).collect();
     if !people.is_empty() {
         md.push_str(&format!("- Participants: {}\n", people.join(", ")));
@@ -112,7 +135,12 @@ pub(crate) fn render(
     };
     if let Some(summary) = summary.filter(has_content) {
         md.push_str("\n## Summary\n");
-        if let Some(overview) = summary.overview.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
+        if let Some(overview) = summary
+            .overview
+            .as_deref()
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+        {
             md.push_str(&format!("\n{overview}\n"));
         }
         for (kind, heading) in [
@@ -120,7 +148,8 @@ pub(crate) fn render(
             (SummaryItemKind::Action, "Action items"),
             (SummaryItemKind::Topic, "Topics"),
         ] {
-            let items: Vec<&SummaryItem> = summary.items.iter().filter(|i| i.kind == kind).collect();
+            let items: Vec<&SummaryItem> =
+                summary.items.iter().filter(|i| i.kind == kind).collect();
             if items.is_empty() {
                 continue;
             }
@@ -132,8 +161,10 @@ pub(crate) fn render(
     }
 
     md.push_str("\n## Transcript\n");
-    let mut ordered: Vec<&Segment> =
-        segments.iter().filter(|s| !s.hidden && !s.text.trim().is_empty()).collect();
+    let mut ordered: Vec<&Segment> = segments
+        .iter()
+        .filter(|s| !s.hidden && !s.text.trim().is_empty())
+        .collect();
     ordered.sort_by_key(|s| (s.start_ms, s.end_ms));
     if ordered.is_empty() {
         md.push_str("\n_No transcript yet._\n");
@@ -161,7 +192,11 @@ pub(crate) fn render(
     }
 
     MeetingExport {
-        file_name: format!("{} {}.md", started.format("%Y-%m-%d"), safe_file_stem(title)),
+        file_name: format!(
+            "{} {}.md",
+            started.format("%Y-%m-%d"),
+            safe_file_stem(title)
+        ),
         markdown: md,
     }
 }
@@ -200,7 +235,10 @@ mod tests {
     }
 
     fn started() -> chrono::NaiveDateTime {
-        chrono::NaiveDate::from_ymd_opt(2026, 9, 17).unwrap().and_hms_opt(10, 0, 0).unwrap()
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 17)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
     }
 
     fn segment(id: &str, kind: TrackKind, start_ms: u64, text: &str) -> Segment {
@@ -291,7 +329,13 @@ mod tests {
             hidden_by_user,
         ];
 
-        let export = render(&meeting("Release: planning / Q3"), started(), &participants, Some(&summary), &segments);
+        let export = render(
+            &meeting("Release: planning / Q3"),
+            started(),
+            &participants,
+            Some(&summary),
+            &segments,
+        );
         assert_eq!(export.file_name, "2026-09-17 Release planning Q3.md");
         assert_eq!(
             export.markdown,
@@ -343,17 +387,25 @@ mod tests {
         assert_eq!(export.file_name, "2026-09-17 Meeting.md");
         assert!(!export.markdown.contains("## Summary"));
         assert!(!export.markdown.contains("Participants"));
-        assert!(export.markdown.ends_with("## Transcript\n\n_No transcript yet._\n"));
+        assert!(export
+            .markdown
+            .ends_with("## Transcript\n\n_No transcript yet._\n"));
 
         failed_summary.status = SummaryStatus::Done;
         let export = render(&meeting("x"), started(), &[], Some(&failed_summary), &[]);
-        assert!(!export.markdown.contains("## Summary"), "an empty summary is left out");
+        assert!(
+            !export.markdown.contains("## Summary"),
+            "an empty summary is left out"
+        );
     }
 
     #[test]
     fn file_names_are_safe() {
         assert_eq!(safe_file_stem("../../etc/passwd"), "etc passwd");
-        assert_eq!(safe_file_stem("Wekelijks overleg: café"), "Wekelijks overleg café");
+        assert_eq!(
+            safe_file_stem("Wekelijks overleg: café"),
+            "Wekelijks overleg café"
+        );
         assert_eq!(safe_file_stem("???"), "Meeting");
         assert_eq!(safe_file_stem(&"a".repeat(200)).len(), 80);
     }

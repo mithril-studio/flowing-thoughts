@@ -102,11 +102,19 @@ pub enum Action {
 enum State {
     /// Delivering audio.
     Running,
-    Settling { first_event: Instant, last_event: Instant, reason: RebuildReason },
+    Settling {
+        first_event: Instant,
+        last_event: Instant,
+        reason: RebuildReason,
+    },
     /// `Rebuild` was handed out; waiting for `on_built`.
     Building,
-    AwaitingFirstCallback { since: Instant },
-    Degraded { retry_at: Instant },
+    AwaitingFirstCallback {
+        since: Instant,
+    },
+    Degraded {
+        retry_at: Instant,
+    },
 }
 
 /// Decides when a source rebuilds. It has no clock and does no I/O: the
@@ -123,7 +131,11 @@ pub struct RebuildPlanner {
 impl RebuildPlanner {
     /// A planner for a source that was just built: `on_built` has happened.
     pub fn new(config: PlannerConfig, built_at: Instant) -> Self {
-        Self { config, state: State::AwaitingFirstCallback { since: built_at }, failures: 0 }
+        Self {
+            config,
+            state: State::AwaitingFirstCallback { since: built_at },
+            failures: 0,
+        }
     }
 
     /// A device event, a stream error or a stall. Whatever was going on, the
@@ -134,7 +146,11 @@ impl RebuildPlanner {
             _ => now,
         };
         self.failures = 0;
-        self.state = State::Settling { first_event, last_event: now, reason };
+        self.state = State::Settling {
+            first_event,
+            last_event: now,
+            reason,
+        };
     }
 
     /// The rebuild `poll` asked for is done. Feed the events that arrived
@@ -154,7 +170,10 @@ impl RebuildPlanner {
     /// state: a tap that was silent for want of anything playing needs no
     /// retry once it delivers.
     pub fn on_first_callback(&mut self) {
-        if matches!(self.state, State::AwaitingFirstCallback { .. } | State::Degraded { .. }) {
+        if matches!(
+            self.state,
+            State::AwaitingFirstCallback { .. } | State::Degraded { .. }
+        ) {
             self.state = State::Running;
             self.failures = 0;
         }
@@ -170,13 +189,20 @@ impl RebuildPlanner {
 
     /// Built, but not delivering: waiting for the first callback or degraded.
     pub fn is_waiting_for_callbacks(&self) -> bool {
-        matches!(self.state, State::AwaitingFirstCallback { .. } | State::Degraded { .. })
+        matches!(
+            self.state,
+            State::AwaitingFirstCallback { .. } | State::Degraded { .. }
+        )
     }
 
     pub fn poll(&mut self, now: Instant, hold: Hold) -> Action {
         match self.state {
             State::Running | State::Building => Action::Wait,
-            State::Settling { first_event, last_event, reason } => {
+            State::Settling {
+                first_event,
+                last_event,
+                reason,
+            } => {
                 if now.saturating_duration_since(last_event) < self.config.quiet {
                     return Action::Wait;
                 }
@@ -224,7 +250,9 @@ impl RebuildPlanner {
             .copied()
             .unwrap_or(Duration::from_secs(30));
         self.failures += 1;
-        self.state = State::Degraded { retry_at: now + delay };
+        self.state = State::Degraded {
+            retry_at: now + delay,
+        };
     }
 }
 
@@ -242,7 +270,10 @@ pub struct OutputGate {
 
 impl OutputGate {
     pub const fn new() -> Self {
-        Self { seen: AtomicU64::new(0), handled: AtomicU64::new(0) }
+        Self {
+            seen: AtomicU64::new(0),
+            handled: AtomicU64::new(0),
+        }
     }
 
     /// An output event arrived. Returns its generation.
@@ -279,7 +310,11 @@ pub fn output_gate() -> &'static OutputGate {
 /// a data source of the one built-in device it reads `'hdpn'`, which is
 /// `echo::output_has_echo_risk`'s decision; where it is a device of its own
 /// it is named "External Headphones".
-pub fn is_builtin_speakers(transport: Option<u32>, data_source: Option<u32>, name: Option<&str>) -> bool {
+pub fn is_builtin_speakers(
+    transport: Option<u32>,
+    data_source: Option<u32>,
+    name: Option<&str>,
+) -> bool {
     transport.is_some_and(|transport| output_has_echo_risk(transport, data_source))
         && !name.is_some_and(|n| n.to_ascii_lowercase().contains("headphone"))
 }
@@ -310,7 +345,9 @@ pub enum DeviceEvent {
     DefaultOutputChanged,
     DefaultInputChanged,
     /// The nominal sample rate of a device watched with `watch_sample_rate`.
-    SampleRateChanged { device: u32 },
+    SampleRateChanged {
+        device: u32,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -346,7 +383,9 @@ mod hub {
 
     fn hub() -> MutexGuard<'static, Hub> {
         static HUB: OnceLock<Mutex<Hub>> = OnceLock::new();
-        HUB.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+        HUB.get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Runs on a HAL notification thread (not the real-time one). It only
@@ -525,12 +564,19 @@ mod tests {
                 first_callback_at = None;
                 outcome.running_at = None;
             }
-            if first_callback_at.is_some_and(|at| at <= now) && planner.is_awaiting_first_callback() {
+            if first_callback_at.is_some_and(|at| at <= now) && planner.is_awaiting_first_callback()
+            {
                 planner.on_first_callback();
                 outcome.running_at = Some(now);
                 first_callback_at = None;
             }
-            match planner.poll(t0 + ms(now), Hold { settle: now < script.blocked_until, retry: false }) {
+            match planner.poll(
+                t0 + ms(now),
+                Hold {
+                    settle: now < script.blocked_until,
+                    retry: false,
+                },
+            ) {
                 Action::Wait => now += 1,
                 Action::Degraded => {
                     outcome.degraded_at.push(now);
@@ -575,7 +621,11 @@ mod tests {
             blocked_until: 0,
         };
         let outcome = run(&script, PlannerConfig::default(), 10_000);
-        assert_eq!(outcome.rebuilds_at, vec![900], "300 ms after the last event");
+        assert_eq!(
+            outcome.rebuilds_at,
+            vec![900],
+            "300 ms after the last event"
+        );
     }
 
     /// Finding F4: removing AirPods flapped the default output three times in
@@ -594,9 +644,16 @@ mod tests {
         };
         let outcome = run(&script, PlannerConfig::default(), 20_000);
         assert_eq!(outcome.rebuilds_at, vec![300, 2_200, 4_000]);
-        assert!(outcome.degraded_at.is_empty(), "the waits were abandoned, not timed out");
+        assert!(
+            outcome.degraded_at.is_empty(),
+            "the waits were abandoned, not timed out"
+        );
         let running_at = outcome.running_at.expect("recovered");
-        assert!(running_at - 3_700 < 2_000, "recovered {} ms after the last flap", running_at - 3_700);
+        assert!(
+            running_at - 3_700 < 2_000,
+            "recovered {} ms after the last flap",
+            running_at - 3_700
+        );
     }
 
     #[test]
@@ -605,13 +662,19 @@ mod tests {
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), t0);
         planner.on_first_callback();
         planner.on_event(t0, RebuildReason::DefaultDeviceChanged);
-        assert_eq!(planner.poll(t0 + ms(300), Hold::default()), Action::Rebuild(RebuildReason::DefaultDeviceChanged));
+        assert_eq!(
+            planner.poll(t0 + ms(300), Hold::default()),
+            Action::Rebuild(RebuildReason::DefaultDeviceChanged)
+        );
         // The build took 2.5 s (a stalled HAL) and an event arrived meanwhile.
         planner.on_built(t0 + ms(2_800), true);
         planner.on_event(t0 + ms(2_800), RebuildReason::SampleRateChanged);
         assert!(!planner.is_awaiting_first_callback());
         assert_eq!(planner.poll(t0 + ms(2_900), Hold::default()), Action::Wait);
-        assert_eq!(planner.poll(t0 + ms(3_100), Hold::default()), Action::Rebuild(RebuildReason::SampleRateChanged));
+        assert_eq!(
+            planner.poll(t0 + ms(3_100), Hold::default()),
+            Action::Rebuild(RebuildReason::SampleRateChanged)
+        );
     }
 
     /// Finding F5: while the permission is undetermined the IOProc may never
@@ -621,15 +684,27 @@ mod tests {
         let t0 = Instant::now();
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), t0);
         assert_eq!(planner.poll(t0 + ms(2_999), Hold::default()), Action::Wait);
-        assert_eq!(planner.poll(t0 + ms(3_000), Hold::default()), Action::Degraded);
+        assert_eq!(
+            planner.poll(t0 + ms(3_000), Hold::default()),
+            Action::Degraded
+        );
         assert_eq!(planner.poll(t0 + ms(7_999), Hold::default()), Action::Wait);
         assert_eq!(planner.next_deadline(t0 + ms(7_000)), Some(ms(1_000)));
-        assert_eq!(planner.poll(t0 + ms(8_000), Hold::default()), Action::Rebuild(RebuildReason::Retry));
+        assert_eq!(
+            planner.poll(t0 + ms(8_000), Hold::default()),
+            Action::Rebuild(RebuildReason::Retry)
+        );
         planner.on_built(t0 + ms(8_300), true);
-        assert_eq!(planner.poll(t0 + ms(11_300), Hold::default()), Action::Degraded);
+        assert_eq!(
+            planner.poll(t0 + ms(11_300), Hold::default()),
+            Action::Degraded
+        );
         // Second retry after 10 s, not 5.
         assert_eq!(planner.poll(t0 + ms(21_299), Hold::default()), Action::Wait);
-        assert_eq!(planner.poll(t0 + ms(21_300), Hold::default()), Action::Rebuild(RebuildReason::Retry));
+        assert_eq!(
+            planner.poll(t0 + ms(21_300), Hold::default()),
+            Action::Rebuild(RebuildReason::Retry)
+        );
         // This one delivers: the backoff starts over.
         planner.on_built(t0 + ms(21_600), true);
         planner.on_first_callback();
@@ -644,7 +719,10 @@ mod tests {
     #[test]
     fn a_silent_tap_is_not_retried_while_nothing_plays_and_recovers_by_itself() {
         let t0 = Instant::now();
-        let idle = Hold { settle: false, retry: true };
+        let idle = Hold {
+            settle: false,
+            retry: true,
+        };
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), t0);
         assert_eq!(planner.poll(t0 + ms(3_000), idle), Action::Degraded);
         assert_eq!(planner.poll(t0 + ms(8_000), idle), Action::Wait);
@@ -653,23 +731,38 @@ mod tests {
         // Somebody starts talking: callbacks arrive, nothing is rebuilt.
         planner.on_first_callback();
         assert!(planner.is_running());
-        assert_eq!(planner.poll(t0 + ms(600_001), Hold::default()), Action::Wait);
+        assert_eq!(
+            planner.poll(t0 + ms(600_001), Hold::default()),
+            Action::Wait
+        );
 
         // Whereas with audio playing and still no callbacks, it retries.
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), t0);
-        assert_eq!(planner.poll(t0 + ms(3_000), Hold::default()), Action::Degraded);
-        assert_eq!(planner.poll(t0 + ms(8_000), Hold::default()), Action::Rebuild(RebuildReason::Retry));
+        assert_eq!(
+            planner.poll(t0 + ms(3_000), Hold::default()),
+            Action::Degraded
+        );
+        assert_eq!(
+            planner.poll(t0 + ms(8_000), Hold::default()),
+            Action::Rebuild(RebuildReason::Retry)
+        );
     }
 
     /// A device change is never held back by "nothing is playing".
     #[test]
     fn a_device_change_rebuilds_a_silent_tap_too() {
         let t0 = Instant::now();
-        let idle = Hold { settle: false, retry: true };
+        let idle = Hold {
+            settle: false,
+            retry: true,
+        };
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), t0);
         assert_eq!(planner.poll(t0 + ms(3_000), idle), Action::Degraded);
         planner.on_event(t0 + ms(4_000), RebuildReason::DefaultDeviceChanged);
-        assert_eq!(planner.poll(t0 + ms(4_300), idle), Action::Rebuild(RebuildReason::DefaultDeviceChanged));
+        assert_eq!(
+            planner.poll(t0 + ms(4_300), idle),
+            Action::Rebuild(RebuildReason::DefaultDeviceChanged)
+        );
     }
 
     #[test]
@@ -678,10 +771,16 @@ mod tests {
         let mut planner = RebuildPlanner::new(PlannerConfig::default(), t0);
         planner.on_first_callback();
         planner.on_event(t0, RebuildReason::StreamError);
-        assert_eq!(planner.poll(t0 + ms(300), Hold::default()), Action::Rebuild(RebuildReason::StreamError));
+        assert_eq!(
+            planner.poll(t0 + ms(300), Hold::default()),
+            Action::Rebuild(RebuildReason::StreamError)
+        );
         planner.on_built(t0 + ms(400), false);
         assert_eq!(planner.poll(t0 + ms(5_399), Hold::default()), Action::Wait);
-        assert_eq!(planner.poll(t0 + ms(5_400), Hold::default()), Action::Rebuild(RebuildReason::Retry));
+        assert_eq!(
+            planner.poll(t0 + ms(5_400), Hold::default()),
+            Action::Rebuild(RebuildReason::Retry)
+        );
     }
 
     #[test]
@@ -694,11 +793,22 @@ mod tests {
             blocked_until: 900,
         };
         let outcome = run(&base, PlannerConfig::default(), 20_000);
-        assert_eq!(outcome.rebuilds_at, vec![900], "as soon as the output side runs again");
+        assert_eq!(
+            outcome.rebuilds_at,
+            vec![900],
+            "as soon as the output side runs again"
+        );
 
-        let stuck = Script { blocked_until: u64::MAX, ..base };
+        let stuck = Script {
+            blocked_until: u64::MAX,
+            ..base
+        };
         let outcome = run(&stuck, PlannerConfig::default(), 20_000);
-        assert_eq!(outcome.rebuilds_at, vec![5_300], "quiet period plus max_blocked");
+        assert_eq!(
+            outcome.rebuilds_at,
+            vec![5_300],
+            "quiet period plus max_blocked"
+        );
     }
 
     #[test]
@@ -727,11 +837,31 @@ mod tests {
         let builtin = Some(TRANSPORT_BUILT_IN);
         let speakers = Some(u32::from_be_bytes(*b"ispk"));
         let bluetooth = Some(u32::from_be_bytes(*b"blue"));
-        assert!(is_builtin_speakers(builtin, speakers, Some("MacBook Pro Speakers")));
-        assert!(is_builtin_speakers(builtin, None, Some("Mac mini Speakers")));
-        assert!(!is_builtin_speakers(builtin, Some(DATA_SOURCE_HEADPHONES), Some("Built-in Output")));
-        assert!(!is_builtin_speakers(builtin, None, Some("External Headphones")));
-        assert!(!is_builtin_speakers(bluetooth, None, Some("Joost’s AirPods Pro")));
+        assert!(is_builtin_speakers(
+            builtin,
+            speakers,
+            Some("MacBook Pro Speakers")
+        ));
+        assert!(is_builtin_speakers(
+            builtin,
+            None,
+            Some("Mac mini Speakers")
+        ));
+        assert!(!is_builtin_speakers(
+            builtin,
+            Some(DATA_SOURCE_HEADPHONES),
+            Some("Built-in Output")
+        ));
+        assert!(!is_builtin_speakers(
+            builtin,
+            None,
+            Some("External Headphones")
+        ));
+        assert!(!is_builtin_speakers(
+            bluetooth,
+            None,
+            Some("Joost’s AirPods Pro")
+        ));
         assert!(!is_builtin_speakers(None, None, None));
     }
 }

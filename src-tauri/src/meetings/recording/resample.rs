@@ -177,7 +177,11 @@ impl Default for StreamResampler {
 
 impl StreamResampler {
     pub fn new() -> Self {
-        Self { format: None, engine: None, mono: Vec::new() }
+        Self {
+            format: None,
+            engine: None,
+            mono: Vec::new(),
+        }
     }
 
     /// The format of the last buffer pushed.
@@ -258,7 +262,9 @@ impl StreamResampler {
         } else {
             let scale = 1.0 / channels as f32;
             self.mono.extend(
-                interleaved.chunks_exact(channels).map(|frame| frame.iter().sum::<f32>() * scale),
+                interleaved
+                    .chunks_exact(channels)
+                    .map(|frame| frame.iter().sum::<f32>() * scale),
             );
         }
     }
@@ -295,14 +301,19 @@ mod tests {
         let mut i = 0;
         while pos < samples.len() {
             let len = (sizes[i % sizes.len()] * format.channels as usize).min(samples.len() - pos);
-            resampler.push(&samples[pos..pos + len], format, out).unwrap();
+            resampler
+                .push(&samples[pos..pos + len], format, out)
+                .unwrap();
             pos += len;
             i += 1;
         }
     }
 
     fn frequency_hz(samples: &[f32]) -> f64 {
-        let crossings = samples.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+        let crossings = samples
+            .windows(2)
+            .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+            .count();
         crossings as f64 / (samples.len() as f64 / TARGET_SAMPLE_RATE as f64)
     }
 
@@ -325,7 +336,12 @@ mod tests {
     fn assert_sine_survives(format: SourceFormat, gains: &[f32], seconds: f64) {
         let mut resampler = StreamResampler::new();
         let mut out = Vec::new();
-        push_in_pieces(&mut resampler, &sine(format.sample_rate, gains, 0.0, seconds), format, &mut out);
+        push_in_pieces(
+            &mut resampler,
+            &sine(format.sample_rate, gains, 0.0, seconds),
+            format,
+            &mut out,
+        );
         resampler.flush(&mut out).unwrap();
 
         let expected_len = (seconds * TARGET_SAMPLE_RATE as f64).round() as i64;
@@ -338,9 +354,16 @@ mod tests {
         // Away from the edges, where the filter sees the signal start and stop.
         let body = &out[800..out.len() - 800];
         let frequency = frequency_hz(body);
-        assert!((frequency - TONE_HZ).abs() < 1.0, "{format:?}: {frequency} Hz");
+        assert!(
+            (frequency - TONE_HZ).abs() < 1.0,
+            "{format:?}: {frequency} Hz"
+        );
         let expected_rms = gain / 2f64.sqrt();
-        assert!((rms(body) - expected_rms).abs() < 0.01 * expected_rms, "{format:?}: rms {}", rms(body));
+        assert!(
+            (rms(body) - expected_rms).abs() < 0.01 * expected_rms,
+            "{format:?}: rms {}",
+            rms(body)
+        );
         // Sample-exact alignment: the delay is trimmed, not just the length.
         let error = max_error(body, 800, gain);
         assert!(error < 0.01, "{format:?}: max error {error}");
@@ -349,16 +372,54 @@ mod tests {
     #[test]
     fn sine_keeps_frequency_amplitude_and_length() {
         let stereo = [1.0, 0.5];
-        assert_sine_survives(SourceFormat { sample_rate: 48_000, channels: 2 }, &stereo, 3.0);
-        assert_sine_survives(SourceFormat { sample_rate: 44_100, channels: 2 }, &stereo, 3.0);
-        assert_sine_survives(SourceFormat { sample_rate: 44_100, channels: 1 }, &[0.8], 2.5);
-        assert_sine_survives(SourceFormat { sample_rate: 8_000, channels: 1 }, &[0.8], 2.0);
-        assert_sine_survives(SourceFormat { sample_rate: 96_000, channels: 6 }, &[0.5; 6], 2.0);
+        assert_sine_survives(
+            SourceFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            },
+            &stereo,
+            3.0,
+        );
+        assert_sine_survives(
+            SourceFormat {
+                sample_rate: 44_100,
+                channels: 2,
+            },
+            &stereo,
+            3.0,
+        );
+        assert_sine_survives(
+            SourceFormat {
+                sample_rate: 44_100,
+                channels: 1,
+            },
+            &[0.8],
+            2.5,
+        );
+        assert_sine_survives(
+            SourceFormat {
+                sample_rate: 8_000,
+                channels: 1,
+            },
+            &[0.8],
+            2.0,
+        );
+        assert_sine_survives(
+            SourceFormat {
+                sample_rate: 96_000,
+                channels: 6,
+            },
+            &[0.5; 6],
+            2.0,
+        );
     }
 
     #[test]
     fn output_length_matches_the_ratio_over_a_long_run() {
-        let format = SourceFormat { sample_rate: 44_100, channels: 2 };
+        let format = SourceFormat {
+            sample_rate: 44_100,
+            channels: 2,
+        };
         let mut resampler = StreamResampler::new();
         let mut out = Vec::new();
         let mut total = 0usize;
@@ -376,17 +437,33 @@ mod tests {
 
     #[test]
     fn an_odd_rate_falls_back_to_the_sinc_resampler() {
-        let format = SourceFormat { sample_rate: 47_999, channels: 1 };
+        let format = SourceFormat {
+            sample_rate: 47_999,
+            channels: 1,
+        };
         let mut resampler = StreamResampler::new();
         let mut out = Vec::new();
-        push_in_pieces(&mut resampler, &sine(format.sample_rate, &[0.8], 0.0, 2.0), format, &mut out);
+        push_in_pieces(
+            &mut resampler,
+            &sine(format.sample_rate, &[0.8], 0.0, 2.0),
+            format,
+            &mut out,
+        );
         resampler.flush(&mut out).unwrap();
-        assert!((out.len() as i64 - 32_000).abs() <= 1, "{} frames", out.len());
+        assert!(
+            (out.len() as i64 - 32_000).abs() <= 1,
+            "{} frames",
+            out.len()
+        );
         let body = &out[800..out.len() - 800];
         assert!((frequency_hz(body) - TONE_HZ).abs() < 1.0);
         // The sinc resampler's delay is fractional, so alignment is only good
         // to a frame here: one frame of phase at 440 Hz is an error of 0.14.
-        assert!(max_error(body, 800, 0.8) < 0.15, "max error {}", max_error(body, 800, 0.8));
+        assert!(
+            max_error(body, 800, 0.8) < 0.15,
+            "max error {}",
+            max_error(body, 800, 0.8)
+        );
     }
 
     #[test]
@@ -394,12 +471,30 @@ mod tests {
         let mut resampler = StreamResampler::new();
         let mut out = Vec::new();
         let mono = sine(16_000, &[0.7], 0.0, 0.5);
-        resampler.push(&mono, SourceFormat { sample_rate: 16_000, channels: 1 }, &mut out).unwrap();
+        resampler
+            .push(
+                &mono,
+                SourceFormat {
+                    sample_rate: 16_000,
+                    channels: 1,
+                },
+                &mut out,
+            )
+            .unwrap();
         assert_eq!(out, mono);
 
         out.clear();
         let stereo = [0.2, 0.4, -1.0, 0.0];
-        resampler.push(&stereo, SourceFormat { sample_rate: 16_000, channels: 2 }, &mut out).unwrap();
+        resampler
+            .push(
+                &stereo,
+                SourceFormat {
+                    sample_rate: 16_000,
+                    channels: 2,
+                },
+                &mut out,
+            )
+            .unwrap();
         resampler.flush(&mut out).unwrap();
         assert_eq!(out.len(), 2);
         assert!((out[0] - 0.3).abs() < 1e-6 && (out[1] + 0.5).abs() < 1e-6);
@@ -410,10 +505,34 @@ mod tests {
         // AirPods connect: 48 kHz stereo becomes 44.1 kHz mono, then 16 kHz
         // mono, while the same tone keeps playing.
         let formats = [
-            (SourceFormat { sample_rate: 48_000, channels: 2 }, vec![0.8, 0.8]),
-            (SourceFormat { sample_rate: 44_100, channels: 1 }, vec![0.8]),
-            (SourceFormat { sample_rate: 16_000, channels: 1 }, vec![0.8]),
-            (SourceFormat { sample_rate: 48_000, channels: 1 }, vec![0.8]),
+            (
+                SourceFormat {
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+                vec![0.8, 0.8],
+            ),
+            (
+                SourceFormat {
+                    sample_rate: 44_100,
+                    channels: 1,
+                },
+                vec![0.8],
+            ),
+            (
+                SourceFormat {
+                    sample_rate: 16_000,
+                    channels: 1,
+                },
+                vec![0.8],
+            ),
+            (
+                SourceFormat {
+                    sample_rate: 48_000,
+                    channels: 1,
+                },
+                vec![0.8],
+            ),
         ];
         let mut resampler = StreamResampler::new();
         let mut out = Vec::new();
@@ -425,7 +544,11 @@ mod tests {
         resampler.flush(&mut out).unwrap();
 
         // Still on the timeline: four seconds in, four seconds out.
-        assert!((out.len() as i64 - 64_000).abs() <= 2, "{} frames", out.len());
+        assert!(
+            (out.len() as i64 - 64_000).abs() <= 2,
+            "{} frames",
+            out.len()
+        );
         // And in phase with the original tone in the middle of every second,
         // which only holds if no seam dropped or duplicated audio.
         for second in 0..4 {
@@ -441,10 +564,26 @@ mod tests {
     fn a_channel_change_alone_keeps_the_resampler() {
         let mut resampler = StreamResampler::new();
         let mut out = Vec::new();
-        let stereo = SourceFormat { sample_rate: 48_000, channels: 2 };
-        let mono = SourceFormat { sample_rate: 48_000, channels: 1 };
-        push_in_pieces(&mut resampler, &sine(48_000, &[0.8, 0.8], 0.0, 1.0), stereo, &mut out);
-        push_in_pieces(&mut resampler, &sine(48_000, &[0.8], 1.0, 1.0), mono, &mut out);
+        let stereo = SourceFormat {
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        let mono = SourceFormat {
+            sample_rate: 48_000,
+            channels: 1,
+        };
+        push_in_pieces(
+            &mut resampler,
+            &sine(48_000, &[0.8, 0.8], 0.0, 1.0),
+            stereo,
+            &mut out,
+        );
+        push_in_pieces(
+            &mut resampler,
+            &sine(48_000, &[0.8], 1.0, 1.0),
+            mono,
+            &mut out,
+        );
         resampler.flush(&mut out).unwrap();
         assert!((out.len() as i64 - 32_000).abs() <= 1);
         // Seamless: even right at the change the tone is intact.
@@ -458,13 +597,40 @@ mod tests {
         let mut out = Vec::new();
         resampler.push_silence(100, &mut out).unwrap();
         assert!(out.is_empty(), "no format yet");
-        assert!(resampler.push(&[0.0], SourceFormat { sample_rate: 0, channels: 1 }, &mut out).is_err());
-        assert!(resampler.push(&[0.0], SourceFormat { sample_rate: 48_000, channels: 0 }, &mut out).is_err());
+        assert!(resampler
+            .push(
+                &[0.0],
+                SourceFormat {
+                    sample_rate: 0,
+                    channels: 1
+                },
+                &mut out
+            )
+            .is_err());
+        assert!(resampler
+            .push(
+                &[0.0],
+                SourceFormat {
+                    sample_rate: 48_000,
+                    channels: 0
+                },
+                &mut out
+            )
+            .is_err());
 
-        let format = SourceFormat { sample_rate: 48_000, channels: 2 };
-        resampler.push(&sine(48_000, &[0.5, 0.5], 0.0, 0.1), format, &mut out).unwrap();
+        let format = SourceFormat {
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        resampler
+            .push(&sine(48_000, &[0.5, 0.5], 0.0, 0.1), format, &mut out)
+            .unwrap();
         resampler.push_silence(4_800, &mut out).unwrap();
         resampler.flush(&mut out).unwrap();
-        assert!((out.len() as i64 - 3_200).abs() <= 1, "{} frames", out.len());
+        assert!(
+            (out.len() as i64 - 3_200).abs() <= 1,
+            "{} frames",
+            out.len()
+        );
     }
 }

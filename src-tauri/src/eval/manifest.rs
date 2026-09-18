@@ -12,7 +12,9 @@ pub const MANIFEST_FILE: &str = "manifest.jsonl";
 pub const AUDIO_DIR: &str = "audio";
 pub const RESULTS_DIR: &str = "results";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Split {
     Dev,
@@ -120,7 +122,11 @@ pub fn default_data_dir() -> Result<PathBuf, String> {
 }
 
 pub fn ensure_layout(data_dir: &Path) -> Result<(), String> {
-    for dir in [data_dir.to_path_buf(), data_dir.join(AUDIO_DIR), data_dir.join(RESULTS_DIR)] {
+    for dir in [
+        data_dir.to_path_buf(),
+        data_dir.join(AUDIO_DIR),
+        data_dir.join(RESULTS_DIR),
+    ] {
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     }
     Ok(())
@@ -153,7 +159,8 @@ pub fn parse_manifest(content: &str) -> Result<Vec<Clip>, String> {
 /// (kept dictations) and the recorder CLI can both add clips safely.
 pub fn append(data_dir: &Path, clip: &Clip) -> Result<(), String> {
     ensure_layout(data_dir)?;
-    let mut line = serde_json::to_string(clip).map_err(|e| format!("Failed to encode clip: {e}"))?;
+    let mut line =
+        serde_json::to_string(clip).map_err(|e| format!("Failed to encode clip: {e}"))?;
     line.push('\n');
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -170,7 +177,9 @@ pub fn rewrite(data_dir: &Path, clips: &[Clip]) -> Result<(), String> {
     ensure_layout(data_dir)?;
     let mut body = String::new();
     for clip in clips {
-        body.push_str(&serde_json::to_string(clip).map_err(|e| format!("Failed to encode clip: {e}"))?);
+        body.push_str(
+            &serde_json::to_string(clip).map_err(|e| format!("Failed to encode clip: {e}"))?,
+        );
         body.push('\n');
     }
     let tmp = data_dir.join(format!("{MANIFEST_FILE}.tmp"));
@@ -260,10 +269,16 @@ mod tests {
 
     #[test]
     fn adding_clips_never_moves_existing_ones() {
-        let before: Vec<Split> = (0..50).map(|i| assign_split(&format!("day-{i:03}"))).collect();
+        let before: Vec<Split> = (0..50)
+            .map(|i| assign_split(&format!("day-{i:03}")))
+            .collect();
         // "Adding" more keys is just hashing more strings; nothing is ranked.
-        let _more: Vec<Split> = (50..500).map(|i| assign_split(&format!("day-{i:03}"))).collect();
-        let after: Vec<Split> = (0..50).map(|i| assign_split(&format!("day-{i:03}"))).collect();
+        let _more: Vec<Split> = (50..500)
+            .map(|i| assign_split(&format!("day-{i:03}")))
+            .collect();
+        let after: Vec<Split> = (0..50)
+            .map(|i| assign_split(&format!("day-{i:03}")))
+            .collect();
         assert_eq!(before, after);
     }
 
@@ -289,7 +304,10 @@ mod tests {
         clip.id = "b".into();
         append(&dir, &clip).unwrap();
         let mut clips = load(&dir).unwrap();
-        assert_eq!(clips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(
+            clips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
         clips.retain(|c| c.id == "b");
         rewrite(&dir, &clips).unwrap();
         assert_eq!(load(&dir).unwrap().len(), 1);

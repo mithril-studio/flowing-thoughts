@@ -150,7 +150,9 @@ impl HandlerSlot {
     }
 
     fn try_lock(&self) -> bool {
-        self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok()
+        self.locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
     }
 
     fn unlock(&self) {
@@ -164,7 +166,8 @@ impl HandlerSlot {
             return;
         }
         if !self.try_lock() {
-            self.contended_frames.fetch_add(frames.frame_count() as u64, Ordering::Relaxed);
+            self.contended_frames
+                .fetch_add(frames.frame_count() as u64, Ordering::Relaxed);
             return;
         }
         // SAFETY: the lock is held.
@@ -189,7 +192,8 @@ impl HandlerSlot {
             let Some(handler) = handler else { return };
             let contended = self.contended_frames.swap(0, Ordering::Relaxed);
             if contended > 0 {
-                handler.on_discontinuity(Discontinuity::Dropped { frames: contended }, host_time_ns);
+                handler
+                    .on_discontinuity(Discontinuity::Dropped { frames: contended }, host_time_ns);
             }
             handler.on_discontinuity(discontinuity, host_time_ns);
         });
@@ -239,7 +243,13 @@ pub mod fake {
         }
 
         pub fn failing(kind: TrackKind, error: &str) -> Self {
-            let mut source = Self::new(kind, SourceFormat { sample_rate: 48_000, channels: 1 });
+            let mut source = Self::new(
+                kind,
+                SourceFormat {
+                    sample_rate: 48_000,
+                    channels: 1,
+                },
+            );
             source.fail_start = Some(error.to_string());
             source
         }
@@ -255,7 +265,11 @@ pub mod fake {
             self.handler
                 .as_mut()
                 .expect("FakeSource is not started")
-                .on_frames(AudioFrames { samples, format, host_time_ns });
+                .on_frames(AudioFrames {
+                    samples,
+                    format,
+                    host_time_ns,
+                });
         }
 
         /// `seconds` of a constant value in 10 ms buffers starting at
@@ -409,16 +423,26 @@ mod tests {
         }
     }
 
-    const MONO_16K: SourceFormat = SourceFormat { sample_rate: 16_000, channels: 1 };
+    const MONO_16K: SourceFormat = SourceFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    };
 
     #[test]
     fn the_slot_delivers_frames_and_discontinuities_in_order() {
         let handler = CapturingHandler::default();
         let slot = HandlerSlot::new(Box::new(handler.clone()));
-        slot.frames(AudioFrames { samples: &[0.5; 160], format: MONO_16K, host_time_ns: 7 });
+        slot.frames(AudioFrames {
+            samples: &[0.5; 160],
+            format: MONO_16K,
+            host_time_ns: 7,
+        });
         slot.discontinuity(Discontinuity::Stalled, 8);
         let captured = handler.0.lock().unwrap();
-        assert_eq!((captured.buffers, captured.frames, captured.first_host_ns), (1, 160, Some(7)));
+        assert_eq!(
+            (captured.buffers, captured.frames, captured.first_host_ns),
+            (1, 160, Some(7))
+        );
         assert_eq!(captured.discontinuities, vec![Discontinuity::Stalled]);
     }
 
@@ -428,7 +452,11 @@ mod tests {
         let slot = HandlerSlot::new(Box::new(handler.clone()));
         // The control side holds the slot while the audio thread calls in.
         assert!(slot.try_lock());
-        slot.frames(AudioFrames { samples: &[0.5; 320], format: MONO_16K, host_time_ns: 1 });
+        slot.frames(AudioFrames {
+            samples: &[0.5; 320],
+            format: MONO_16K,
+            host_time_ns: 1,
+        });
         slot.unlock();
         assert_eq!(handler.0.lock().unwrap().buffers, 0);
 
@@ -449,7 +477,11 @@ mod tests {
         assert_eq!(Arc::strong_count(&handler.0), 2);
         slot.close();
         assert_eq!(Arc::strong_count(&handler.0), 1, "the handler was dropped");
-        slot.frames(AudioFrames { samples: &[0.5; 16], format: MONO_16K, host_time_ns: 1 });
+        slot.frames(AudioFrames {
+            samples: &[0.5; 16],
+            format: MONO_16K,
+            host_time_ns: 1,
+        });
         slot.discontinuity(Discontinuity::Stalled, 2);
         assert_eq!(handler.0.lock().unwrap().buffers, 0);
     }
@@ -462,7 +494,11 @@ mod tests {
             let slot = slot.clone();
             std::thread::spawn(move || {
                 for n in 0..20_000u64 {
-                    slot.frames(AudioFrames { samples: &[0.25; 8], format: MONO_16K, host_time_ns: n });
+                    slot.frames(AudioFrames {
+                        samples: &[0.25; 8],
+                        format: MONO_16K,
+                        host_time_ns: n,
+                    });
                 }
             })
         };
@@ -480,7 +516,11 @@ mod tests {
                 _ => 0,
             })
             .sum();
-        assert_eq!(captured.frames as u64 + dropped, 160_000, "every frame is delivered or accounted for");
+        assert_eq!(
+            captured.frames as u64 + dropped,
+            160_000,
+            "every frame is delivered or accounted for"
+        );
     }
 
     /// The whole path the session (WP7) will wire: both real sources, in the
@@ -503,7 +543,14 @@ mod tests {
                 Ok(())
             }
             fn write(&mut self, samples: &[f32]) -> Result<(), String> {
-                self.0 .0.lock().unwrap().last_mut().unwrap().1.extend_from_slice(samples);
+                self.0
+                     .0
+                    .lock()
+                    .unwrap()
+                    .last_mut()
+                    .unwrap()
+                    .1
+                    .extend_from_slice(samples);
                 Ok(())
             }
             fn finish(&mut self) -> Result<(), String> {
@@ -513,10 +560,20 @@ mod tests {
 
         let origin = host_now_ns();
         let (mic_runs, tap_runs) = (Arc::new(Runs::default()), Arc::new(Runs::default()));
-        let (mut mic_recorder, mic_handler) =
-            start_track(TrackKind::Mic, Box::new(Sink(mic_runs.clone())), origin, RecorderConfig::default()).unwrap();
-        let (mut tap_recorder, tap_handler) =
-            start_track(TrackKind::System, Box::new(Sink(tap_runs.clone())), origin, RecorderConfig::default()).unwrap();
+        let (mut mic_recorder, mic_handler) = start_track(
+            TrackKind::Mic,
+            Box::new(Sink(mic_runs.clone())),
+            origin,
+            RecorderConfig::default(),
+        )
+        .unwrap();
+        let (mut tap_recorder, tap_handler) = start_track(
+            TrackKind::System,
+            Box::new(Sink(tap_runs.clone())),
+            origin,
+            RecorderConfig::default(),
+        )
+        .unwrap();
 
         let mut mic: Box<dyn AudioSource> = Box::new(open_mic());
         mic.start(Box::new(mic_handler)).expect("microphone starts");
@@ -526,18 +583,32 @@ mod tests {
 
         std::thread::sleep(Duration::from_secs(1));
         let sound_at = host_now_ns();
-        let _ = std::process::Command::new("afplay").arg("/System/Library/Sounds/Submarine.aiff").status();
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Submarine.aiff")
+            .status();
         std::thread::sleep(Duration::from_secs(2));
         mic.stop().unwrap();
         tap.stop().unwrap();
         let (mic_status, tap_status) = (mic_recorder.stop(), tap_recorder.stop());
-        println!("recorder: mic {mic_status:?}\nrecorder: tap {tap_status:?}\nrecorder: notice {:?}", monitor.notice());
+        println!(
+            "recorder: mic {mic_status:?}\nrecorder: tap {tap_status:?}\nrecorder: notice {:?}",
+            monitor.notice()
+        );
 
         assert_eq!((mic_status.error, tap_status.error), (None, None));
-        assert_eq!((mic_status.overflow_frames, tap_status.overflow_frames), (0, 0));
+        assert_eq!(
+            (mic_status.overflow_frames, tap_status.overflow_frames),
+            (0, 0)
+        );
         let rate = TARGET_SAMPLE_RATE as u64;
-        assert!(mic_status.written_frames > 3 * rate, "the microphone recorded throughout");
-        assert!(tap_status.written_frames > rate, "the tap recorded from the sound on");
+        assert!(
+            mic_status.written_frames > 3 * rate,
+            "the microphone recorded throughout"
+        );
+        assert!(
+            tap_status.written_frames > rate,
+            "the tap recorded from the sound on"
+        );
 
         // The sound sits where the host clock says it was played: the tap
         // track's first loud sample comes shortly after `afplay` was launched
@@ -558,13 +629,25 @@ mod tests {
     #[test]
     fn the_fake_source_behaves_like_a_source() {
         let handler = CapturingHandler::default();
-        let mut source = FakeSource::new(TrackKind::System, SourceFormat { sample_rate: 48_000, channels: 2 });
+        let mut source = FakeSource::new(
+            TrackKind::System,
+            SourceFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            },
+        );
         assert_eq!(source.format(), None);
         let format = source.start(Box::new(handler.clone())).unwrap();
         assert_eq!(source.format(), Some(format));
         let end = source.deliver_constant(0.1, 0.5, 1_000);
         assert_eq!(end, 1_000 + 500_000_000);
-        source.change_format(SourceFormat { sample_rate: 24_000, channels: 2 }, end);
+        source.change_format(
+            SourceFormat {
+                sample_rate: 24_000,
+                channels: 2,
+            },
+            end,
+        );
         source.deliver_constant(0.1, 0.1, end);
         source.stop().unwrap();
         source.stop().unwrap();
@@ -576,7 +659,12 @@ mod tests {
         assert_eq!(captured.discontinuities.len(), 1);
 
         let mut denied = FakeSource::failing(TrackKind::System, "no permission");
-        assert_eq!(denied.start(Box::new(CapturingHandler::default())).unwrap_err(), "no permission");
+        assert_eq!(
+            denied
+                .start(Box::new(CapturingHandler::default()))
+                .unwrap_err(),
+            "no permission"
+        );
         assert!(!denied.is_started());
     }
 }

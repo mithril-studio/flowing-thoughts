@@ -157,7 +157,10 @@ impl SessionEnv for TauriEnv {
     fn open_system_tap(&self) -> Result<OpenedTap, String> {
         let tap = capture::open_system_tap()?;
         let monitor = tap.monitor();
-        Ok(OpenedTap { source: Box::new(tap), monitor: Some(Box::new(monitor)) })
+        Ok(OpenedTap {
+            source: Box::new(tap),
+            monitor: Some(Box::new(monitor)),
+        })
     }
 
     fn state_changed(&self, status: &RecordingStatus) {
@@ -230,7 +233,10 @@ impl Live {
     }
 
     fn elapsed(&self) -> Duration {
-        self.recorded + self.running_since.map_or(Duration::ZERO, |since| since.elapsed())
+        self.recorded
+            + self
+                .running_since
+                .map_or(Duration::ZERO, |since| since.elapsed())
     }
 
     /// Stops the clock, as a pause and a stop do.
@@ -270,7 +276,9 @@ pub(crate) fn tray_title_for(phase: RecordingPhase, elapsed_ms: u64) -> Option<S
     match phase {
         RecordingPhase::Idle => None,
         RecordingPhase::Starting | RecordingPhase::Stopping => Some(RECORDING_MARK.to_string()),
-        RecordingPhase::Recording => Some(format!("{RECORDING_MARK} {}", format_elapsed(elapsed_ms))),
+        RecordingPhase::Recording => {
+            Some(format!("{RECORDING_MARK} {}", format_elapsed(elapsed_ms)))
+        }
         RecordingPhase::Paused => Some(format!("{PAUSED_MARK} {}", format_elapsed(elapsed_ms))),
     }
 }
@@ -278,7 +286,9 @@ pub(crate) fn tray_title_for(phase: RecordingPhase, elapsed_ms: u64) -> Option<S
 /// Whether a `session-phase` payload means a dictation is in progress. The
 /// same reading as the tray listener in `lib.rs`.
 fn dictation_is_active(session_phase_payload: &str) -> bool {
-    ["recording", "transcribing", "injecting"].iter().any(|p| session_phase_payload.contains(p))
+    ["recording", "transcribing", "injecting"]
+        .iter()
+        .any(|p| session_phase_payload.contains(p))
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +474,10 @@ impl Session {
                 return Err("A meeting is already being recorded. Stop it first.".to_string());
             }
             // Claimed under the lock, so a second start is refused from here.
-            *live = Live { phase: RecordingPhase::Starting, ..Live::idle() };
+            *live = Live {
+                phase: RecordingPhase::Starting,
+                ..Live::idle()
+            };
         }
 
         let created = self.create_meeting(&new);
@@ -481,7 +494,8 @@ impl Session {
             live.started_at = Some(started_at);
         }
         self.announce();
-        self.env.meeting_updated(&meeting.id, MeetingChange::Created);
+        self.env
+            .meeting_updated(&meeting.id, MeetingChange::Created);
 
         let (control_tx, control_rx) = mpsc::channel();
         let (started_tx, started_rx) = mpsc::channel();
@@ -524,13 +538,25 @@ impl Session {
         if self.live().phase == RecordingPhase::Idle {
             return Err("No meeting is being recorded.".to_string());
         }
-        self.send(|reply| Control::Stop { reply, quitting: false }, self.config.command_wait)
+        self.send(
+            |reply| Control::Stop {
+                reply,
+                quitting: false,
+            },
+            self.config.command_wait,
+        )
     }
 
     /// Best-effort clean close right before `_exit(0)`.
     pub(crate) fn shutdown(&self) {
         if self.live().phase != RecordingPhase::Idle {
-            let _ = self.send(|reply| Control::Stop { reply, quitting: true }, SHUTDOWN_WAIT);
+            let _ = self.send(
+                |reply| Control::Stop {
+                    reply,
+                    quitting: true,
+                },
+                SHUTDOWN_WAIT,
+            );
         }
     }
 
@@ -569,7 +595,9 @@ impl Session {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| format!("Meeting {}", chrono::Local::now().format("%Y-%m-%d %H:%M")));
+            .unwrap_or_else(|| {
+                format!("Meeting {}", chrono::Local::now().format("%Y-%m-%d %H:%M"))
+            });
         let conn = self.conn()?;
         store::transaction(&conn, || {
             let id = store::insert_meeting(
@@ -585,7 +613,12 @@ impl Session {
             let track = |kind| {
                 store::insert_track(
                     &conn,
-                    &store::NewTrack { meeting_id: id.clone(), kind, device_name: None, format: None },
+                    &store::NewTrack {
+                        meeting_id: id.clone(),
+                        kind,
+                        device_name: None,
+                        format: None,
+                    },
                 )
             };
             let mic_track_id = track(TrackKind::Mic)?;
@@ -594,7 +627,15 @@ impl Session {
             let started_at = store::get_meeting(&conn, &id)?
                 .map(|m| m.meeting.started_at)
                 .ok_or_else(|| "the meeting row is missing".to_string())?;
-            Ok((ActiveMeeting { id, origin_host_ns, mic_track_id, system_track_id }, started_at))
+            Ok((
+                ActiveMeeting {
+                    id,
+                    origin_host_ns,
+                    mic_track_id,
+                    system_track_id,
+                },
+                started_at,
+            ))
         })
     }
 
@@ -657,7 +698,13 @@ impl Session {
         let mut pending_tap = Some(self.start_tap(&meeting));
         let tap_deadline = Instant::now() + self.config.tap_grace;
         while pending_tap.is_some() && Instant::now() < tap_deadline {
-            self.poll_tap(&meeting, &mut pending_tap, &mut tracks, &mut monitor, self.config.tick);
+            self.poll_tap(
+                &meeting,
+                &mut pending_tap,
+                &mut tracks,
+                &mut monitor,
+                self.config.tick,
+            );
         }
         let _ = started.send(Ok(()));
 
@@ -665,7 +712,13 @@ impl Session {
         // that finds nobody listening and is abandoned (`start_tap`).
         loop {
             let command = control.recv_timeout(self.config.tick);
-            self.poll_tap(&meeting, &mut pending_tap, &mut tracks, &mut monitor, Duration::ZERO);
+            self.poll_tap(
+                &meeting,
+                &mut pending_tap,
+                &mut tracks,
+                &mut monitor,
+                Duration::ZERO,
+            );
             match command {
                 Ok(Control::Pause(reply)) => {
                     let _ = reply.send(self.set_paused(&meeting, &tracks, true));
@@ -674,7 +727,12 @@ impl Session {
                     let _ = reply.send(self.set_paused(&meeting, &tracks, false));
                 }
                 Ok(Control::Stop { reply, quitting }) => {
-                    let _ = reply.send(Ok(self.finish(&meeting, tracks, Outcome::Stopped, quitting)));
+                    let _ = reply.send(Ok(self.finish(
+                        &meeting,
+                        tracks,
+                        Outcome::Stopped,
+                        quitting,
+                    )));
                     return;
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -701,19 +759,24 @@ impl Session {
     fn start_tap(self: &Arc<Self>, meeting: &ActiveMeeting) -> Receiver<TapStart> {
         let (tx, rx) = mpsc::channel();
         let (session, meeting) = (self.clone(), meeting.clone());
-        let spawned = std::thread::Builder::new().name("meeting-tap-start".to_string()).spawn(move || {
-            let result = session.env.open_system_tap().and_then(|opened| {
-                let track = session.open_track(&meeting, opened.source)?;
-                Ok((track, opened.monitor))
+        let spawned = std::thread::Builder::new()
+            .name("meeting-tap-start".to_string())
+            .spawn(move || {
+                let result = session.env.open_system_tap().and_then(|opened| {
+                    let track = session.open_track(&meeting, opened.source)?;
+                    Ok((track, opened.monitor))
+                });
+                if let Err(mpsc::SendError(result)) = tx.send(result) {
+                    session.abandon_tap(&meeting, result);
+                }
             });
-            if let Err(mpsc::SendError(result)) = tx.send(result) {
-                session.abandon_tap(&meeting, result);
-            }
-        });
         if let Err(e) = spawned {
             // The sender went with the closure: the receiver reports it as a
             // tap that could not start.
-            log("WARN", &format!("Meetings: failed to start the system audio thread: {e}"));
+            log(
+                "WARN",
+                &format!("Meetings: failed to start the system audio thread: {e}"),
+            );
         }
         rx
     }
@@ -748,7 +811,10 @@ impl Session {
                 self.announce();
             }
             Err(e) => {
-                log("WARN", &format!("Meetings: recording the microphone only: {e}"));
+                log(
+                    "WARN",
+                    &format!("Meetings: recording the microphone only: {e}"),
+                );
                 self.discard_system_track(meeting);
             }
         }
@@ -763,7 +829,10 @@ impl Session {
             }
             Err(_) => false,
         };
-        log("INFO", "Meetings: system audio came up after the meeting had ended");
+        log(
+            "INFO",
+            "Meetings: system audio came up after the meeting had ended",
+        );
         if !recorded {
             self.discard_system_track(meeting);
         }
@@ -788,7 +857,9 @@ impl Session {
             meeting.origin_host_ns,
         );
         writer.chunk_frames = self.config.chunk_frames;
-        let ledger = Box::new(StoreLedger { db: self.db.clone() });
+        let ledger = Box::new(StoreLedger {
+            db: self.db.clone(),
+        });
         let (mut recorder, handler) = record_to_disk(writer, ledger, self.config.recorder.clone())?;
         if let Err(e) = source.start(Box::new(handler)) {
             recorder.stop();
@@ -830,7 +901,9 @@ impl Session {
     }
 
     fn note_echo_risk(&self, meeting_id: &str) {
-        self.persist("record the echo risk", |conn| store::set_echo_risk(conn, meeting_id, true));
+        self.persist("record the echo risk", |conn| {
+            store::set_echo_risk(conn, meeting_id, true)
+        });
         self.live().echo_risk = true;
     }
 
@@ -848,13 +921,18 @@ impl Session {
             let status = track.recorder.status();
             self.persist_overflow(track, status.overflow_frames);
             self.persist_device(track);
-            let Some(error) = status.error.filter(|_| !track.failed) else { continue };
+            let Some(error) = status.error.filter(|_| !track.failed) else {
+                continue;
+            };
             track.failed = true;
             if track.kind == TrackKind::Mic {
                 return Some(error);
             }
             // The meeting carries on with the microphone.
-            log("WARN", &format!("Meetings: the system track stopped recording: {error}"));
+            log(
+                "WARN",
+                &format!("Meetings: the system track stopped recording: {error}"),
+            );
             let _ = track.source.stop();
             self.live().tracks.retain(|kind| *kind != TrackKind::System);
             changed = true;
@@ -899,13 +977,25 @@ impl Session {
         paused: bool,
     ) -> Result<RecordingStatus, String> {
         let (from, to, status) = if paused {
-            (RecordingPhase::Recording, RecordingPhase::Paused, MeetingStatus::Paused)
+            (
+                RecordingPhase::Recording,
+                RecordingPhase::Paused,
+                MeetingStatus::Paused,
+            )
         } else {
-            (RecordingPhase::Paused, RecordingPhase::Recording, MeetingStatus::Recording)
+            (
+                RecordingPhase::Paused,
+                RecordingPhase::Recording,
+                MeetingStatus::Recording,
+            )
         };
         if self.live().phase != from {
-            return Err(if paused { "No meeting is being recorded." } else { "No meeting is paused." }
-                .to_string());
+            return Err(if paused {
+                "No meeting is being recorded."
+            } else {
+                "No meeting is paused."
+            }
+            .to_string());
         }
         self.persist("record the pause", |conn| {
             store::set_meeting_status(conn, &meeting.id, status, None)
@@ -947,7 +1037,10 @@ impl Session {
         let stop_sources = |tracks: &mut Vec<LiveTrack>| {
             for track in tracks.iter_mut() {
                 if let Err(e) = track.source.stop() {
-                    log("WARN", &format!("Meetings: stopping the {} source: {e}", track.kind.as_str()));
+                    log(
+                        "WARN",
+                        &format!("Meetings: stopping the {} source: {e}", track.kind.as_str()),
+                    );
                 }
             }
         };
@@ -974,7 +1067,13 @@ impl Session {
             let status = track.recorder.stop();
             self.persist_overflow(track, status.overflow_frames);
             if let Some(error) = status.error {
-                log("WARN", &format!("Meetings: the {} track ended with an error: {error}", track.kind.as_str()));
+                log(
+                    "WARN",
+                    &format!(
+                        "Meetings: the {} track ended with an error: {error}",
+                        track.kind.as_str()
+                    ),
+                );
             }
         }
     }
@@ -991,7 +1090,12 @@ impl Session {
         let mut empty = false;
         let settled = self.conn().and_then(|conn| {
             store::transaction(&conn, || {
-                store::finish_meeting(&conn, meeting_id, &chrono::Utc::now().to_rfc3339(), duration_ms)?;
+                store::finish_meeting(
+                    &conn,
+                    meeting_id,
+                    &chrono::Utc::now().to_rfc3339(),
+                    duration_ms,
+                )?;
                 empty = !store::meeting_has_frames(&conn, meeting_id)?;
                 if empty {
                     // Empty chunk files are not audio: nothing to transcribe
@@ -1006,12 +1110,21 @@ impl Session {
                         // says `recording`. What it refuses for (no model
                         // chosen) is shown on the meeting; the audio is kept.
                         store::set_meeting_status(&conn, meeting_id, MeetingStatus::Queued, None)?;
-                        jobs::enqueue_transcription(&conn, meeting_id, &RetranscribeOptions::default())
-                            .err()
+                        jobs::enqueue_transcription(
+                            &conn,
+                            meeting_id,
+                            &RetranscribeOptions::default(),
+                        )
+                        .err()
                     }
                 };
                 if let Some(message) = &failure {
-                    store::set_meeting_status(&conn, meeting_id, MeetingStatus::Failed, Some(message))?;
+                    store::set_meeting_status(
+                        &conn,
+                        meeting_id,
+                        MeetingStatus::Failed,
+                        Some(message),
+                    )?;
                 }
                 Ok(())
             })
@@ -1022,7 +1135,10 @@ impl Session {
             }
             Ok(()) => {}
             // Launch recovery picks the meeting up: it still says `recording`.
-            Err(e) => log("ERROR", &format!("Meetings: failed to settle meeting {meeting_id}: {e}")),
+            Err(e) => log(
+                "ERROR",
+                &format!("Meetings: failed to settle meeting {meeting_id}: {e}"),
+            ),
         }
         // The job was inserted inside a transaction: the worker may have
         // looked before the commit.
@@ -1080,7 +1196,8 @@ impl Session {
         }
         recording::delete_meeting_audio_in(&self.root, meeting_id)?;
         store::mark_audio_deleted(&*self.conn()?, meeting_id)?;
-        self.env.meeting_updated(meeting_id, MeetingChange::AudioDeleted);
+        self.env
+            .meeting_updated(meeting_id, MeetingChange::AudioDeleted);
         Ok(())
     }
 }
@@ -1106,10 +1223,16 @@ pub(crate) struct RecoveredMeeting {
 /// survived is queued for transcription, which moves the meeting on to
 /// `queued`. A meeting nothing survived of stays `interrupted`. Jobs left
 /// `running` go back to `queued`.
-pub(crate) fn recover_at_launch(conn: &Connection, root: &Path) -> Result<Vec<RecoveredMeeting>, String> {
+pub(crate) fn recover_at_launch(
+    conn: &Connection,
+    root: &Path,
+) -> Result<Vec<RecoveredMeeting>, String> {
     let requeued = jobs::recover_at_launch(conn)?;
     if requeued > 0 {
-        log("INFO", &format!("Meetings: requeued {requeued} interrupted job(s)"));
+        log(
+            "INFO",
+            &format!("Meetings: requeued {requeued} interrupted job(s)"),
+        );
     }
     let interrupted =
         store::list_meetings_with_status(conn, &[MeetingStatus::Recording, MeetingStatus::Paused])?;
@@ -1136,12 +1259,19 @@ pub(crate) fn recover_at_launch(conn: &Connection, root: &Path) -> Result<Vec<Re
                         "Meetings: recovered interrupted meeting {} ({} chunk(s) repaired, {})",
                         meeting.meeting_id,
                         meeting.chunks_repaired,
-                        if meeting.queued { "queued for transcription" } else { "no audio survived" },
+                        if meeting.queued {
+                            "queued for transcription"
+                        } else {
+                            "no audio survived"
+                        },
                     ),
                 );
                 recovered.push(meeting);
             }
-            Err(e) => log("ERROR", &format!("Meetings: recovering meeting {} failed: {e}", item.id)),
+            Err(e) => log(
+                "ERROR",
+                &format!("Meetings: recovering meeting {} failed: {e}", item.id),
+            ),
         }
     }
     Ok(recovered)
@@ -1161,7 +1291,10 @@ fn recover_meeting(
     let sidecars = match recovery::recover_meeting_dir(&recording::meeting_dir(root, meeting_id)?) {
         Ok(tracks) => tracks,
         Err(e) => {
-            log("WARN", &format!("Meetings: recovery could not read the audio of {meeting_id}: {e}"));
+            log(
+                "WARN",
+                &format!("Meetings: recovery could not read the audio of {meeting_id}: {e}"),
+            );
             Vec::new()
         }
     };
@@ -1185,7 +1318,11 @@ fn recover_meeting(
         let rate = u64::from(TARGET_SAMPLE_RATE);
         recorded_frames = recorded_frames.max(chunks.iter().map(|c| c.n_frames).sum());
         end_ms = end_ms.max(
-            chunks.iter().map(|c| c.start_ms + c.n_frames * 1_000 / rate).max().unwrap_or(0),
+            chunks
+                .iter()
+                .map(|c| c.start_ms + c.n_frames * 1_000 / rate)
+                .max()
+                .unwrap_or(0),
         );
     }
 
@@ -1205,7 +1342,11 @@ fn recover_meeting(
                 false
             }
         };
-    Ok(RecoveredMeeting { meeting_id: meeting_id.to_string(), chunks_repaired, queued })
+    Ok(RecoveredMeeting {
+        meeting_id: meeting_id.to_string(),
+        chunks_repaired,
+        queued,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,7 +1356,9 @@ fn recover_meeting(
 static SESSION: OnceLock<Arc<Session>> = OnceLock::new();
 
 fn session() -> Result<&'static Arc<Session>, String> {
-    SESSION.get().ok_or_else(|| "Meetings are not ready yet.".to_string())
+    SESSION
+        .get()
+        .ok_or_else(|| "Meetings are not ready yet.".to_string())
 }
 
 /// Launch recovery, before the worker starts, then the session itself.
@@ -1256,7 +1399,10 @@ pub fn start(app: &AppHandle, options: StartMeetingOptions) -> Result<RecordingS
         let persisted = app
             .try_state::<PersistedHandle>()
             .ok_or_else(|| "Settings are not available yet".to_string())?;
-        let state = persisted.inner().lock().map_err(|_| "Persisted state lock poisoned".to_string())?;
+        let state = persisted
+            .inner()
+            .lock()
+            .map_err(|_| "Persisted state lock poisoned".to_string())?;
         let settings = &state.settings.meetings;
         if !settings.enabled {
             return Err("Meetings are turned off. Enable them in Settings → Meetings.".to_string());
@@ -1287,7 +1433,9 @@ pub fn stop(_app: &AppHandle) -> Result<RecordingStatus, String> {
 
 /// The live status. Idle is a status, not an error.
 pub fn status(_app: &AppHandle) -> Result<RecordingStatus, String> {
-    Ok(SESSION.get().map_or_else(RecordingStatus::idle, |session| session.status()))
+    Ok(SESSION
+        .get()
+        .map_or_else(RecordingStatus::idle, |session| session.status()))
 }
 
 pub fn delete_meeting(_app: &AppHandle, meeting_id: &str) -> Result<(), String> {
@@ -1318,8 +1466,8 @@ mod tests {
 
     use super::*;
     use crate::meetings::capture::fake::FakeSource;
-    use crate::meetings::recording::test_support::TempDir;
     use crate::meetings::recording::chunk_writer::ChunkWriter;
+    use crate::meetings::recording::test_support::TempDir;
     use crate::meetings::recording::BYTES_PER_FRAME;
     use crate::meetings::types::{
         AudioSourceHandler, ChunkStatus, JobStatus, SampleSink, SpeakerSource,
@@ -1328,8 +1476,14 @@ mod tests {
 
     const ORIGIN_NS: u64 = 1_000_000_000_000;
     const MS: u64 = 1_000_000;
-    const MIC_FORMAT: SourceFormat = SourceFormat { sample_rate: 48_000, channels: 1 };
-    const TAP_FORMAT: SourceFormat = SourceFormat { sample_rate: 48_000, channels: 2 };
+    const MIC_FORMAT: SourceFormat = SourceFormat {
+        sample_rate: 48_000,
+        channels: 1,
+    };
+    const TAP_FORMAT: SourceFormat = SourceFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
     /// Half-second chunk files, so a short test sees rotation.
     const TEST_CHUNK_FRAMES: u64 = 8_000;
 
@@ -1343,7 +1497,10 @@ mod tests {
         }
 
         fn deliver(&self, seconds: f64, host_time_ns: u64) -> u64 {
-            self.0.lock().unwrap().deliver_constant(0.1, seconds, host_time_ns)
+            self.0
+                .lock()
+                .unwrap()
+                .deliver_constant(0.1, seconds, host_time_ns)
         }
 
         fn stops(&self) -> usize {
@@ -1454,14 +1611,24 @@ mod tests {
 
         /// The phases announced so far, without repeats.
         fn phases(&self) -> Vec<RecordingPhase> {
-            let mut phases: Vec<RecordingPhase> =
-                self.states.lock().unwrap().iter().map(|s| s.phase).collect();
+            let mut phases: Vec<RecordingPhase> = self
+                .states
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|s| s.phase)
+                .collect();
             phases.dedup();
             phases
         }
 
         fn last_state(&self) -> RecordingStatus {
-            self.states.lock().unwrap().last().cloned().expect("a state was announced")
+            self.states
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .expect("a state was announced")
         }
 
         fn open_tap_gate(&self) {
@@ -1471,13 +1638,22 @@ mod tests {
         }
 
         fn changes(&self) -> Vec<MeetingChange> {
-            self.updates.lock().unwrap().iter().map(|(_, change)| *change).collect()
+            self.updates
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, change)| *change)
+                .collect()
         }
     }
 
     impl SessionEnv for FakeEnv {
         fn support(&self) -> Result<(), String> {
-            if self.supported { Ok(()) } else { Err("macOS 14.4 or later is needed".to_string()) }
+            if self.supported {
+                Ok(())
+            } else {
+                Err("macOS 14.4 or later is needed".to_string())
+            }
         }
         fn host_now_ns(&self) -> u64 {
             ORIGIN_NS
@@ -1490,18 +1666,30 @@ mod tests {
         }
         fn open_system_tap(&self) -> Result<OpenedTap, String> {
             self.tap_opens.fetch_add(1, Ordering::Relaxed);
-            let tap = self.tap.clone().ok_or_else(|| "process taps are not supported".to_string())?;
+            let tap = self
+                .tap
+                .clone()
+                .ok_or_else(|| "process taps are not supported".to_string())?;
             let source: Box<dyn AudioSource> = match &self.tap_gate {
-                Some(gate) => Box::new(GatedSource { inner: tap, gate: gate.clone() }),
+                Some(gate) => Box::new(GatedSource {
+                    inner: tap,
+                    gate: gate.clone(),
+                }),
                 None => Box::new(tap),
             };
-            Ok(OpenedTap { source, monitor: Some(Box::new(self.monitor.clone())) })
+            Ok(OpenedTap {
+                source,
+                monitor: Some(Box::new(self.monitor.clone())),
+            })
         }
         fn state_changed(&self, status: &RecordingStatus) {
             self.states.lock().unwrap().push(status.clone());
         }
         fn meeting_updated(&self, meeting_id: &str, change: MeetingChange) {
-            self.updates.lock().unwrap().push((meeting_id.to_string(), change));
+            self.updates
+                .lock()
+                .unwrap()
+                .push((meeting_id.to_string(), change));
         }
         fn set_tray_title(&self, title: Option<String>) {
             self.titles.lock().unwrap().push(title);
@@ -1535,7 +1723,12 @@ mod tests {
                 root.path().to_path_buf(),
                 config,
             );
-            Self { db, root, env, session }
+            Self {
+                db,
+                root,
+                env,
+                session,
+            }
         }
 
         fn start(&self) -> Result<RecordingStatus, String> {
@@ -1547,19 +1740,30 @@ mod tests {
         }
 
         fn meeting(&self, meeting_id: &str) -> crate::meetings::types::MeetingDetail {
-            store::get_meeting(&self.db.conn, meeting_id).unwrap().expect("the meeting exists")
+            store::get_meeting(&self.db.conn, meeting_id)
+                .unwrap()
+                .expect("the meeting exists")
         }
 
         fn chunks(&self, meeting_id: &str, kind: TrackKind) -> Vec<ChunkRecord> {
-            let track = self.meeting(meeting_id).tracks.into_iter().find(|t| t.kind == kind);
-            track.map_or_else(Vec::new, |t| store::list_chunks(&self.db.conn, &t.id).unwrap())
+            let track = self
+                .meeting(meeting_id)
+                .tracks
+                .into_iter()
+                .find(|t| t.kind == kind);
+            track.map_or_else(Vec::new, |t| {
+                store::list_chunks(&self.db.conn, &t.id).unwrap()
+            })
         }
 
         /// The session ends a meeting by itself on the next tick: wait for it.
         fn wait_until_idle(&self) {
             let deadline = Instant::now() + Duration::from_secs(5);
             while self.session.status().phase != RecordingPhase::Idle {
-                assert!(Instant::now() < deadline, "the session never went back to idle");
+                assert!(
+                    Instant::now() < deadline,
+                    "the session never went back to idle"
+                );
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
@@ -1568,8 +1772,15 @@ mod tests {
         fn assert_chunks_match_files(&self, chunks: &[ChunkRecord]) {
             for chunk in chunks {
                 assert_eq!(chunk.status, ChunkStatus::Closed, "chunk {}", chunk.path);
-                let bytes = std::fs::metadata(self.root.path().join(&chunk.path)).unwrap().len();
-                assert_eq!(bytes, chunk.n_frames * BYTES_PER_FRAME, "chunk {}", chunk.path);
+                let bytes = std::fs::metadata(self.root.path().join(&chunk.path))
+                    .unwrap()
+                    .len();
+                assert_eq!(
+                    bytes,
+                    chunk.n_frames * BYTES_PER_FRAME,
+                    "chunk {}",
+                    chunk.path
+                );
             }
         }
     }
@@ -1586,11 +1797,21 @@ mod tests {
         assert_eq!(meeting.meeting.status, MeetingStatus::Recording);
         assert_eq!(meeting.meeting.title, "Weekly sync");
         assert_eq!(meeting.meeting.language, MeetingLanguage::Nl);
-        assert_eq!(status.started_at.as_deref(), Some(meeting.meeting.started_at.as_str()));
+        assert_eq!(
+            status.started_at.as_deref(),
+            Some(meeting.meeting.started_at.as_str())
+        );
         assert_eq!(meeting.tracks.len(), 2);
         assert_eq!(meeting.tracks[0].device_name.as_deref(), Some("Fake mic"));
-        let labels: Vec<_> = meeting.speakers.iter().map(|s| (s.label.as_str(), s.source)).collect();
-        assert_eq!(labels, vec![("Me", SpeakerSource::Track), ("Them", SpeakerSource::Track)]);
+        let labels: Vec<_> = meeting
+            .speakers
+            .iter()
+            .map(|s| (s.label.as_str(), s.source))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![("Me", SpeakerSource::Track), ("Them", SpeakerSource::Track)]
+        );
 
         // 1.2 s on both tracks, a pause (what arrives is dropped), 0.6 s more.
         let t0 = ORIGIN_NS + 10 * MS;
@@ -1599,16 +1820,26 @@ mod tests {
 
         let paused = fx.session.pause().unwrap();
         assert_eq!(paused.phase, RecordingPhase::Paused);
-        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Paused);
+        assert_eq!(
+            fx.meeting(&meeting_id).meeting.status,
+            MeetingStatus::Paused
+        );
         assert!(fx.session.pause().is_err(), "already paused");
         fx.env.mic.deliver(0.3, mic_end);
         std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(fx.session.status().elapsed_ms, paused.elapsed_ms, "the clock stands still");
+        assert_eq!(
+            fx.session.status().elapsed_ms,
+            paused.elapsed_ms,
+            "the clock stands still"
+        );
         assert!(fx.session.tray_title().unwrap().starts_with(PAUSED_MARK));
 
         let resumed = fx.session.resume().unwrap();
         assert_eq!(resumed.phase, RecordingPhase::Recording);
-        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Recording);
+        assert_eq!(
+            fx.meeting(&meeting_id).meeting.status,
+            MeetingStatus::Recording
+        );
         assert!(fx.session.tray_title().unwrap().starts_with(RECORDING_MARK));
         let t1 = t0 + 5_000 * MS;
         fx.env.mic.deliver(0.6, t1);
@@ -1617,14 +1848,20 @@ mod tests {
         let stopped = fx.session.stop().unwrap();
         assert_eq!(stopped.phase, RecordingPhase::Idle);
         assert_eq!(stopped.meeting_id, None);
-        assert_eq!((fx.env.mic.stops(), fx.env.tap.as_ref().unwrap().stops()), (1, 1));
+        assert_eq!(
+            (fx.env.mic.stops(), fx.env.tap.as_ref().unwrap().stops()),
+            (1, 1)
+        );
 
         let meeting = fx.meeting(&meeting_id);
         assert_eq!(meeting.meeting.status, MeetingStatus::Queued);
         assert!(meeting.meeting.ended_at.is_some());
         assert!(meeting.meeting.has_audio);
         let job = meeting.meeting.job.expect("a transcription job is queued");
-        assert_eq!((job.status, job.meeting_id.as_str()), (JobStatus::Queued, meeting_id.as_str()));
+        assert_eq!(
+            (job.status, job.meeting_id.as_str()),
+            (JobStatus::Queued, meeting_id.as_str())
+        );
         assert_eq!(meeting.runs.len(), 1);
         assert_eq!(meeting.runs[0].model, "whisper-small-q5");
 
@@ -1634,9 +1871,15 @@ mod tests {
             // Three half-second files before the pause, two after it.
             assert_eq!(chunks.len(), 5, "{kind:?}");
             let frames: u64 = chunks.iter().map(|c| c.n_frames).sum();
-            assert!((28_000..=29_000).contains(&frames), "{kind:?}: {frames} frames for 1.8 s");
+            assert!(
+                (28_000..=29_000).contains(&frames),
+                "{kind:?}: {frames} frames for 1.8 s"
+            );
             // The pause is a gap on the timeline, not silence on disk.
-            assert!(chunks[2].start_ms < 1_300 && chunks[3].start_ms >= 5_000, "{kind:?}");
+            assert!(
+                chunks[2].start_ms < 1_300 && chunks[3].start_ms >= 5_000,
+                "{kind:?}"
+            );
         }
 
         assert_eq!(
@@ -1650,16 +1893,29 @@ mod tests {
                 RecordingPhase::Idle,
             ]
         );
-        assert_eq!(fx.env.changes(), vec![MeetingChange::Created, MeetingChange::Status]);
-        assert_eq!(fx.env.titles.lock().unwrap().last(), Some(&None), "no title is left behind");
+        assert_eq!(
+            fx.env.changes(),
+            vec![MeetingChange::Created, MeetingChange::Status]
+        );
+        assert_eq!(
+            fx.env.titles.lock().unwrap().last(),
+            Some(&None),
+            "no title is left behind"
+        );
         assert_eq!(fx.session.tray_title(), None);
         assert!(fx.session.stop().is_err(), "nothing to stop");
     }
 
     #[test]
     fn a_tap_that_cannot_start_means_a_microphone_only_meeting() {
-        for tap in [Some(FakeSource::failing(TrackKind::System, "no permission")), None] {
-            let fx = Fixture::new(FakeEnv::new(FakeSource::new(TrackKind::Mic, MIC_FORMAT), tap));
+        for tap in [
+            Some(FakeSource::failing(TrackKind::System, "no permission")),
+            None,
+        ] {
+            let fx = Fixture::new(FakeEnv::new(
+                FakeSource::new(TrackKind::Mic, MIC_FORMAT),
+                tap,
+            ));
             let status = fx.start().expect("the meeting is never blocked");
             assert_eq!(status.phase, RecordingPhase::Recording);
             assert_eq!(status.tracks, vec![TrackKind::Mic]);
@@ -1671,7 +1927,8 @@ mod tests {
             assert_eq!(kinds, vec![TrackKind::Mic]);
             let labels: Vec<_> = meeting.speakers.iter().map(|s| s.label.as_str()).collect();
             assert_eq!(labels, vec!["Me"]);
-            let system_dir = recording::track_dir(fx.root.path(), &meeting_id, TrackKind::System).unwrap();
+            let system_dir =
+                recording::track_dir(fx.root.path(), &meeting_id, TrackKind::System).unwrap();
             assert!(!system_dir.exists());
 
             fx.env.mic.deliver(0.3, ORIGIN_NS + 10 * MS);
@@ -1701,8 +1958,14 @@ mod tests {
         let fx = Fixture::new(gated_env());
         let started = Instant::now();
         let status = fx.start().unwrap();
-        assert!(started.elapsed() < Duration::from_secs(2), "start does not wait for the prompt");
-        assert_eq!((status.phase, status.tracks.clone()), (RecordingPhase::Recording, vec![TrackKind::Mic]));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "start does not wait for the prompt"
+        );
+        assert_eq!(
+            (status.phase, status.tracks.clone()),
+            (RecordingPhase::Recording, vec![TrackKind::Mic])
+        );
         let meeting_id = status.meeting_id.unwrap();
 
         // The controls work while the tap is stuck, and it joins paused.
@@ -1710,9 +1973,14 @@ mod tests {
         fx.env.mic.deliver(0.3, t0);
         assert_eq!(fx.session.pause().unwrap().phase, RecordingPhase::Paused);
         fx.env.open_tap_gate();
-        wait_until("the system track joins", || fx.session.status().tracks.len() == 2);
+        wait_until("the system track joins", || {
+            fx.session.status().tracks.len() == 2
+        });
         fx.env.tap.as_ref().unwrap().deliver(0.3, t0);
-        assert_eq!(fx.session.resume().unwrap().tracks, vec![TrackKind::Mic, TrackKind::System]);
+        assert_eq!(
+            fx.session.resume().unwrap().tracks,
+            vec![TrackKind::Mic, TrackKind::System]
+        );
         fx.env.tap.as_ref().unwrap().deliver(0.3, t0 + 2_000 * MS);
         fx.session.stop().unwrap();
 
@@ -1720,7 +1988,10 @@ mod tests {
         fx.assert_chunks_match_files(&system);
         assert_eq!(system.len(), 1, "what arrived during the pause was dropped");
         assert!(system[0].start_ms >= 2_000);
-        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Queued);
+        assert_eq!(
+            fx.meeting(&meeting_id).meeting.status,
+            MeetingStatus::Queued
+        );
     }
 
     #[test]
@@ -1730,13 +2001,21 @@ mod tests {
         fx.env.mic.deliver(0.3, ORIGIN_NS + 10 * MS);
         let stopping = Instant::now();
         assert_eq!(fx.session.stop().unwrap().phase, RecordingPhase::Idle);
-        assert!(stopping.elapsed() < Duration::from_secs(2), "stop does not wait for the prompt");
-        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Queued);
+        assert!(
+            stopping.elapsed() < Duration::from_secs(2),
+            "stop does not wait for the prompt"
+        );
+        assert_eq!(
+            fx.meeting(&meeting_id).meeting.status,
+            MeetingStatus::Queued
+        );
 
         fx.env.open_tap_gate();
         let tap = fx.env.tap.as_ref().unwrap();
         wait_until("the late tap is stopped", || tap.stops() == 1);
-        wait_until("the unused system track is removed", || fx.meeting(&meeting_id).tracks.len() == 1);
+        wait_until("the unused system track is removed", || {
+            fx.meeting(&meeting_id).tracks.len() == 1
+        });
         assert_eq!(fx.session.status().phase, RecordingPhase::Idle);
     }
 
@@ -1759,7 +2038,9 @@ mod tests {
         wait_for("echo risk", &|s| s.echo_risk);
         assert!(fx.meeting(&meeting_id).meeting.echo_risk);
         fx.env.monitor.notice.store(false, Ordering::Relaxed);
-        wait_for("system audio is back", &|s| !s.system_audio_silent && s.echo_risk);
+        wait_for("system audio is back", &|s| {
+            !s.system_audio_silent && s.echo_risk
+        });
 
         fx.session.stop().unwrap();
         assert!(!fx.env.last_state().echo_risk, "idle carries nothing over");
@@ -1785,8 +2066,14 @@ mod tests {
         assert!(error.starts_with("Recording stopped early:"), "{error}");
         assert!(meeting.meeting.ended_at.is_some());
         assert!(meeting.meeting.job.is_none());
-        assert!(store::list_open_chunks(&fx.db.conn).unwrap().is_empty(), "no chunk is left open");
-        assert_eq!((fx.env.mic.stops(), fx.env.tap.as_ref().unwrap().stops()), (1, 1));
+        assert!(
+            store::list_open_chunks(&fx.db.conn).unwrap().is_empty(),
+            "no chunk is left open"
+        );
+        assert_eq!(
+            (fx.env.mic.stops(), fx.env.tap.as_ref().unwrap().stops()),
+            (1, 1)
+        );
         assert_eq!(fx.env.last_state().phase, RecordingPhase::Idle);
         assert_eq!(fx.session.tray_title(), None);
 
@@ -1804,14 +2091,24 @@ mod tests {
             Some(FakeSource::new(TrackKind::System, TAP_FORMAT)),
         ));
         let error = fx.start().unwrap_err();
-        assert_eq!(error, "The microphone could not be started: no input device");
+        assert_eq!(
+            error,
+            "The microphone could not be started: no input device"
+        );
         assert_eq!(fx.session.status().phase, RecordingPhase::Idle);
-        assert_eq!(fx.env.tap_opens.load(Ordering::Relaxed), 0, "the tap never comes first");
+        assert_eq!(
+            fx.env.tap_opens.load(Ordering::Relaxed),
+            0,
+            "the tap never comes first"
+        );
 
         let meetings = store::list_meetings(&fx.db.conn).unwrap();
         assert_eq!(meetings.len(), 1);
         assert_eq!(meetings[0].status, MeetingStatus::Failed);
-        assert_eq!(fx.meeting(&meetings[0].id).error.as_deref(), Some(error.as_str()));
+        assert_eq!(
+            fx.meeting(&meetings[0].id).error.as_deref(),
+            Some(error.as_str())
+        );
         assert_eq!(fx.env.titles.lock().unwrap().last(), Some(&None));
     }
 
@@ -1822,7 +2119,11 @@ mod tests {
         let error = fx.start().unwrap_err();
         assert!(error.contains("already being recorded"), "{error}");
         assert_eq!(store::list_meetings(&fx.db.conn).unwrap().len(), 1);
-        assert_eq!(fx.session.status().phase, RecordingPhase::Recording, "the first one carries on");
+        assert_eq!(
+            fx.session.status().phase,
+            RecordingPhase::Recording,
+            "the first one carries on"
+        );
         fx.session.stop().unwrap();
 
         let mut env = FakeEnv::working();
@@ -1843,20 +2144,46 @@ mod tests {
         assert_eq!(meeting.meeting.status, MeetingStatus::Failed);
         assert_eq!(meeting.error.as_deref(), Some("Nothing was recorded."));
         assert!(meeting.meeting.job.is_none());
-        assert!(!meeting.meeting.has_audio, "nothing to re-transcribe or delete");
-        assert!(!recording::meeting_dir(fx.root.path(), &meeting_id).unwrap().exists());
+        assert!(
+            !meeting.meeting.has_audio,
+            "nothing to re-transcribe or delete"
+        );
+        assert!(!recording::meeting_dir(fx.root.path(), &meeting_id)
+            .unwrap()
+            .exists());
     }
 
     #[test]
     fn the_tray_title_shows_the_mark_and_the_recorded_time() {
         assert_eq!(tray_title_for(RecordingPhase::Idle, 5_000), None);
-        assert_eq!(tray_title_for(RecordingPhase::Starting, 0).as_deref(), Some("●"));
-        assert_eq!(tray_title_for(RecordingPhase::Recording, 0).as_deref(), Some("● 0:00"));
-        assert_eq!(tray_title_for(RecordingPhase::Recording, 65_999).as_deref(), Some("● 1:05"));
-        assert_eq!(tray_title_for(RecordingPhase::Recording, 754_000).as_deref(), Some("● 12:34"));
-        assert_eq!(tray_title_for(RecordingPhase::Recording, 3_723_000).as_deref(), Some("● 1:02:03"));
-        assert_eq!(tray_title_for(RecordingPhase::Paused, 754_000).as_deref(), Some("❙❙ 12:34"));
-        assert_eq!(tray_title_for(RecordingPhase::Stopping, 754_000).as_deref(), Some("●"));
+        assert_eq!(
+            tray_title_for(RecordingPhase::Starting, 0).as_deref(),
+            Some("●")
+        );
+        assert_eq!(
+            tray_title_for(RecordingPhase::Recording, 0).as_deref(),
+            Some("● 0:00")
+        );
+        assert_eq!(
+            tray_title_for(RecordingPhase::Recording, 65_999).as_deref(),
+            Some("● 1:05")
+        );
+        assert_eq!(
+            tray_title_for(RecordingPhase::Recording, 754_000).as_deref(),
+            Some("● 12:34")
+        );
+        assert_eq!(
+            tray_title_for(RecordingPhase::Recording, 3_723_000).as_deref(),
+            Some("● 1:02:03")
+        );
+        assert_eq!(
+            tray_title_for(RecordingPhase::Paused, 754_000).as_deref(),
+            Some("❙❙ 12:34")
+        );
+        assert_eq!(
+            tray_title_for(RecordingPhase::Stopping, 754_000).as_deref(),
+            Some("●")
+        );
     }
 
     #[test]
@@ -1869,20 +2196,40 @@ mod tests {
 
         let fx = Fixture::new(FakeEnv::working());
         fx.start().unwrap();
-        assert!(fx.env.titles.lock().unwrap().iter().flatten().any(|t| t.starts_with("● 0:0")));
+        assert!(fx
+            .env
+            .titles
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .any(|t| t.starts_with("● 0:0")));
 
         // A dictation starts: `lib.rs` shows its dot, the meeting keeps quiet.
         fx.session.set_dictation_active(true);
         let shown = fx.env.titles.lock().unwrap().len();
         fx.session.pause().unwrap();
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(fx.env.titles.lock().unwrap().len(), shown, "the meeting left the title alone");
+        assert_eq!(
+            fx.env.titles.lock().unwrap().len(),
+            shown,
+            "the meeting left the title alone"
+        );
         // It ends: `lib.rs` asks for the title to fall back to, and the next
         // tick shows it again by itself.
         assert!(fx.session.tray_title().unwrap().starts_with(PAUSED_MARK));
         fx.session.set_dictation_active(false);
         std::thread::sleep(Duration::from_millis(50));
-        assert!(fx.env.titles.lock().unwrap().last().unwrap().as_ref().unwrap().starts_with(PAUSED_MARK));
+        assert!(fx
+            .env
+            .titles
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .starts_with(PAUSED_MARK));
 
         // The meeting stops during a dictation: nothing to fall back to.
         fx.session.set_dictation_active(true);
@@ -1897,7 +2244,10 @@ mod tests {
         fx.env.mic.deliver(0.3, ORIGIN_NS + 10 * MS);
         fx.session.shutdown();
         assert_eq!(fx.session.status().phase, RecordingPhase::Idle);
-        assert_eq!(fx.meeting(&meeting_id).meeting.status, MeetingStatus::Queued);
+        assert_eq!(
+            fx.meeting(&meeting_id).meeting.status,
+            MeetingStatus::Queued
+        );
         fx.assert_chunks_match_files(&fx.chunks(&meeting_id, TrackKind::Mic));
         fx.session.shutdown();
     }
@@ -1920,17 +2270,31 @@ mod tests {
         for kind in [TrackKind::Mic, TrackKind::System] {
             let track_id = store::insert_track(
                 conn,
-                &store::NewTrack { meeting_id: id.clone(), kind, device_name: None, format: None },
+                &store::NewTrack {
+                    meeting_id: id.clone(),
+                    kind,
+                    device_name: None,
+                    format: None,
+                },
             )
             .unwrap();
             if seconds > 0.0 {
-                let mut config =
-                    ChunkWriterConfig::new(fx.root.path().to_path_buf(), &id, &track_id, kind, ORIGIN_NS);
+                let mut config = ChunkWriterConfig::new(
+                    fx.root.path().to_path_buf(),
+                    &id,
+                    &track_id,
+                    kind,
+                    ORIGIN_NS,
+                );
                 config.chunk_frames = TEST_CHUNK_FRAMES;
-                let ledger = Box::new(StoreLedger { db: Arc::new(Mutex::new(fx.db.connect())) });
+                let ledger = Box::new(StoreLedger {
+                    db: Arc::new(Mutex::new(fx.db.connect())),
+                });
                 let mut writer = ChunkWriter::new(config, ledger).unwrap();
                 writer.begin(ORIGIN_NS).unwrap();
-                writer.write(&vec![0.1; (seconds * 16_000.0) as usize]).unwrap();
+                writer
+                    .write(&vec![0.1; (seconds * 16_000.0) as usize])
+                    .unwrap();
                 // No `finish`: the process is gone.
                 std::mem::forget(writer);
             }
@@ -1949,19 +2313,34 @@ mod tests {
         assert_eq!(store::list_open_chunks(conn).unwrap().len(), 2);
         // The system track's open chunk never reached the database.
         let system_open = fx.chunks(&crashed, TrackKind::System).pop().unwrap();
-        conn.execute("DELETE FROM meeting_audio_chunks WHERE id = ?1", [&system_open.id]).unwrap();
+        conn.execute(
+            "DELETE FROM meeting_audio_chunks WHERE id = ?1",
+            [&system_open.id],
+        )
+        .unwrap();
         // A meeting that crashed before any audio, and a job that was running.
         let empty = crashed_meeting(&fx, MeetingStatus::Paused, 0.0);
         let other = new_meeting(conn, &[(30_000, &[])]);
         jobs::enqueue_transcription(conn, &other.id, &RetranscribeOptions::default()).unwrap();
-        assert_eq!(store::claim_next_job(conn).unwrap().unwrap().status, JobStatus::Running);
+        assert_eq!(
+            store::claim_next_job(conn).unwrap().unwrap().status,
+            JobStatus::Running
+        );
 
         let recovered = recover_at_launch(conn, fx.root.path()).unwrap();
         assert_eq!(
             recovered,
             vec![
-                RecoveredMeeting { meeting_id: crashed.clone(), chunks_repaired: 2, queued: true },
-                RecoveredMeeting { meeting_id: empty.clone(), chunks_repaired: 0, queued: false },
+                RecoveredMeeting {
+                    meeting_id: crashed.clone(),
+                    chunks_repaired: 2,
+                    queued: true
+                },
+                RecoveredMeeting {
+                    meeting_id: empty.clone(),
+                    chunks_repaired: 0,
+                    queued: false
+                },
             ]
         );
 
@@ -1971,7 +2350,10 @@ mod tests {
             let settled: Vec<_> = chunks.iter().map(|c| (c.status, c.n_frames)).collect();
             assert_eq!(
                 settled,
-                vec![(ChunkStatus::Closed, 8_000), (ChunkStatus::Recovered, 3_200)],
+                vec![
+                    (ChunkStatus::Closed, 8_000),
+                    (ChunkStatus::Recovered, 3_200)
+                ],
                 "{kind:?}"
             );
             assert_eq!(chunks[1].start_ms, 500);
@@ -1981,18 +2363,26 @@ mod tests {
         assert_eq!(meeting.meeting.status, MeetingStatus::Queued);
         assert_eq!(meeting.meeting.duration_ms, 700);
         assert!(meeting.meeting.ended_at.is_some());
-        assert_eq!(meeting.meeting.job.map(|job| job.status), Some(JobStatus::Queued));
+        assert_eq!(
+            meeting.meeting.job.map(|job| job.status),
+            Some(JobStatus::Queued)
+        );
 
         let meeting = fx.meeting(&empty);
         assert_eq!(meeting.meeting.status, MeetingStatus::Interrupted);
         assert!(meeting.meeting.job.is_none());
         assert_eq!(
-            store::job_progress(conn, &other.id).unwrap().map(|job| job.status),
+            store::job_progress(conn, &other.id)
+                .unwrap()
+                .map(|job| job.status),
             Some(JobStatus::Queued),
             "a job that was running is queued again"
         );
 
-        assert!(recover_at_launch(conn, fx.root.path()).unwrap().is_empty(), "nothing left to do");
+        assert!(
+            recover_at_launch(conn, fx.root.path()).unwrap().is_empty(),
+            "nothing left to do"
+        );
     }
 
     /// A recorded, transcribed meeting with audio on disk.
@@ -2006,7 +2396,12 @@ mod tests {
         let windows = store::insert_windows(
             conn,
             &run_id,
-            &[store::NewWindow { track_id: meeting.tracks[0].id.clone(), seq: 0, start_ms: 0, end_ms: 300 }],
+            &[store::NewWindow {
+                track_id: meeting.tracks[0].id.clone(),
+                seq: 0,
+                start_ms: 0,
+                end_ms: 300,
+            }],
         )
         .unwrap();
         let segment = store::NewSegment {
@@ -2038,7 +2433,10 @@ mod tests {
         assert!(!dir.exists());
         let meeting = fx.meeting(&meeting_id);
         assert!(!meeting.meeting.has_audio);
-        assert!(fx.chunks(&meeting_id, TrackKind::Mic).iter().all(|c| c.status == ChunkStatus::Deleted));
+        assert!(fx
+            .chunks(&meeting_id, TrackKind::Mic)
+            .iter()
+            .all(|c| c.status == ChunkStatus::Deleted));
         let segments = store::list_segments(conn, &meeting_id, None).unwrap();
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "Goedemorgen.");
@@ -2055,10 +2453,17 @@ mod tests {
 
         fx.session.delete_meeting(&meeting_id).unwrap();
         assert!(!dir.exists());
-        assert!(store::get_meeting(&fx.db.conn, &meeting_id).unwrap().is_none());
-        assert!(store::list_jobs(&fx.db.conn, &meeting_id).unwrap().is_empty());
+        assert!(store::get_meeting(&fx.db.conn, &meeting_id)
+            .unwrap()
+            .is_none());
+        assert!(store::list_jobs(&fx.db.conn, &meeting_id)
+            .unwrap()
+            .is_empty());
         assert_eq!(fx.env.changes().last(), Some(&MeetingChange::Deleted));
-        assert!(fx.session.delete_meeting(&meeting_id).is_err(), "already gone");
+        assert!(
+            fx.session.delete_meeting(&meeting_id).is_err(),
+            "already gone"
+        );
     }
 
     #[test]
@@ -2066,14 +2471,19 @@ mod tests {
         let fx = Fixture::new(FakeEnv::working());
         let meeting_id = fx.start().unwrap().meeting_id.unwrap();
         fx.env.mic.deliver(0.3, ORIGIN_NS + 10 * MS);
-        for result in [fx.session.delete_meeting(&meeting_id), fx.session.delete_meeting_audio(&meeting_id)] {
+        for result in [
+            fx.session.delete_meeting(&meeting_id),
+            fx.session.delete_meeting_audio(&meeting_id),
+        ] {
             assert!(result.unwrap_err().contains("still being recorded"));
         }
         let retranscribe =
             jobs::enqueue_transcription(&fx.db.conn, &meeting_id, &RetranscribeOptions::default());
         assert!(retranscribe.unwrap_err().contains("still being recorded"));
         fx.session.stop().unwrap();
-        assert!(recording::meeting_dir(fx.root.path(), &meeting_id).unwrap().exists());
+        assert!(recording::meeting_dir(fx.root.path(), &meeting_id)
+            .unwrap()
+            .exists());
     }
 
     /// The real sources into the real recorders, through the state machine.
@@ -2095,7 +2505,10 @@ mod tests {
         fn open_system_tap(&self) -> Result<OpenedTap, String> {
             let tap = capture::open_system_tap()?;
             let monitor = tap.monitor();
-            Ok(OpenedTap { source: Box::new(tap), monitor: Some(Box::new(monitor)) })
+            Ok(OpenedTap {
+                source: Box::new(tap),
+                monitor: Some(Box::new(monitor)),
+            })
         }
         fn state_changed(&self, status: &RecordingStatus) {
             println!("meeting-state: {status:?}");
@@ -2114,34 +2527,57 @@ mod tests {
             Arc::new(HardwareEnv),
             Arc::new(Mutex::new(db.connect())),
             root.path().to_path_buf(),
-            SessionConfig { command_wait: Duration::from_secs(30), ..SessionConfig::default() },
+            SessionConfig {
+                command_wait: Duration::from_secs(30),
+                ..SessionConfig::default()
+            },
         );
         let status = session
-            .start(NewSession { title: None, language: MeetingLanguage::Auto, model: Some("whisper-small-q5".into()) })
+            .start(NewSession {
+                title: None,
+                language: MeetingLanguage::Auto,
+                model: Some("whisper-small-q5".into()),
+            })
             .unwrap();
         assert_eq!(status.tracks, vec![TrackKind::Mic, TrackKind::System]);
         let meeting_id = status.meeting_id.unwrap();
 
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(10) {
-            let _ = std::process::Command::new("afplay").arg("/System/Library/Sounds/Submarine.aiff").status();
+            let _ = std::process::Command::new("afplay")
+                .arg("/System/Library/Sounds/Submarine.aiff")
+                .status();
         }
         let stopped = session.stop().unwrap();
         assert_eq!(stopped.phase, RecordingPhase::Idle);
 
         let meeting = store::get_meeting(&db.conn, &meeting_id).unwrap().unwrap();
-        println!("meeting: {:?}, {} ms", meeting.meeting.status, meeting.meeting.duration_ms);
+        println!(
+            "meeting: {:?}, {} ms",
+            meeting.meeting.status, meeting.meeting.duration_ms
+        );
         assert_eq!(meeting.meeting.status, MeetingStatus::Queued);
         assert!(meeting.meeting.duration_ms >= 10_000);
         assert_eq!(meeting.tracks.len(), 2);
         for track in &meeting.tracks {
             let chunks = store::list_chunks(&db.conn, &track.id).unwrap();
             let frames: u64 = chunks.iter().map(|c| c.n_frames).sum();
-            println!("{:?}: {} chunk(s), {frames} frames, {:?}", track.kind, chunks.len(), track.device_name);
-            assert!(frames > 5 * u64::from(TARGET_SAMPLE_RATE), "{:?} recorded {frames} frames", track.kind);
+            println!(
+                "{:?}: {} chunk(s), {frames} frames, {:?}",
+                track.kind,
+                chunks.len(),
+                track.device_name
+            );
+            assert!(
+                frames > 5 * u64::from(TARGET_SAMPLE_RATE),
+                "{:?} recorded {frames} frames",
+                track.kind
+            );
             let loud = chunks.iter().any(|chunk| {
                 let bytes = std::fs::read(root.path().join(&chunk.path)).unwrap();
-                bytes.chunks_exact(2).any(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs() > 300)
+                bytes
+                    .chunks_exact(2)
+                    .any(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs() > 300)
             });
             assert!(loud, "the {:?} track holds only silence", track.kind);
         }

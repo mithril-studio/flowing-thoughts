@@ -122,7 +122,10 @@ pub struct MicSource {
 
 impl MicSource {
     pub fn new() -> Self {
-        Self { shared: Arc::new(Shared::default()), worker: None }
+        Self {
+            shared: Arc::new(Shared::default()),
+            worker: None,
+        }
     }
 }
 
@@ -138,7 +141,11 @@ impl AudioSource for MicSource {
     }
 
     fn device_name(&self) -> Option<String> {
-        self.shared.device_name.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.shared
+            .device_name
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn format(&self) -> Option<SourceFormat> {
@@ -199,7 +206,10 @@ pub(crate) fn join_with_timeout(thread: JoinHandle<()>, timeout: Duration, what:
     let deadline = Instant::now() + timeout;
     while !thread.is_finished() {
         if Instant::now() >= deadline {
-            log("WARN", &format!("Meetings: the {what} thread is still shutting down; not waiting for it"));
+            log(
+                "WARN",
+                &format!("Meetings: the {what} thread is still shutting down; not waiting for it"),
+            );
             return;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -228,7 +238,11 @@ fn hal_default_input() -> (Option<u32>, Option<f64>) {
     (None, None)
 }
 
-fn build(slot: &Arc<HandlerSlot>, shared: &Arc<Shared>, errors: &Sender<Msg>) -> Result<Built, String> {
+fn build(
+    slot: &Arc<HandlerSlot>,
+    shared: &Arc<Shared>,
+    errors: &Sender<Msg>,
+) -> Result<Built, String> {
     let (hal_device, device_rate) = hal_default_input();
     let host = cpal::default_host();
     let device = host.default_input_device().ok_or_else(|| {
@@ -238,7 +252,10 @@ fn build(slot: &Arc<HandlerSlot>, shared: &Arc<Shared>, errors: &Sender<Msg>) ->
     let config = device
         .default_input_config()
         .map_err(|e| format!("Failed to read the microphone's format: {e}"))?;
-    let format = SourceFormat { sample_rate: config.sample_rate().0, channels: config.channels() };
+    let format = SourceFormat {
+        sample_rate: config.sample_rate().0,
+        channels: config.channels(),
+    };
     if format.sample_rate == 0 || format.channels == 0 {
         return Err("The microphone reports an empty format".to_string());
     }
@@ -290,10 +307,17 @@ fn build(slot: &Arc<HandlerSlot>, shared: &Arc<Shared>, errors: &Sender<Msg>) ->
         other => return Err(format!("Unsupported microphone sample format: {other:?}")),
     }
     .map_err(|e| format!("Failed to open the microphone: {e}"))?;
-    stream.play().map_err(|e| format!("Failed to start the microphone: {e}"))?;
+    stream
+        .play()
+        .map_err(|e| format!("Failed to start the microphone: {e}"))?;
 
     shared.set(Some(format), name);
-    Ok(Built { _stream: stream, format, device: hal_device, device_rate })
+    Ok(Built {
+        _stream: stream,
+        format,
+        device: hal_device,
+        device_rate,
+    })
 }
 
 /// Room for the largest buffer a device is likely to hand over, so the
@@ -325,7 +349,11 @@ fn deliverer(
         let frames = samples.len() / format.channels as usize;
         let buffer_ns = clock::frames_to_ns(frames as u64, format.sample_rate);
         let host_time_ns = mic_clock.stamp(now_ns, buffer_ns, elapsed_ns);
-        slot.frames(AudioFrames { samples, format, host_time_ns });
+        slot.frames(AudioFrames {
+            samples,
+            format,
+            host_time_ns,
+        });
         shared.callbacks.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -396,7 +424,9 @@ fn run(
             TICK
         };
         // Never zero: a rebuild that is held back must not spin.
-        let timeout = planner.next_deadline(now).map_or(tick, |d| d.clamp(FIRST_CALLBACK_TICK, tick));
+        let timeout = planner
+            .next_deadline(now)
+            .map_or(tick, |d| d.clamp(FIRST_CALLBACK_TICK, tick));
         match msgs.recv_timeout(timeout) {
             Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(Msg::StreamError) => {
@@ -430,7 +460,13 @@ fn run(
                     let _ = ready.send(Ok(built.format));
                 }
                 if let Some(event_at) = event_at.take() {
-                    log("INFO", &format!("Meetings: microphone recovered {} ms after the device event", event_at.elapsed().as_millis()));
+                    log(
+                        "INFO",
+                        &format!(
+                            "Meetings: microphone recovered {} ms after the device event",
+                            event_at.elapsed().as_millis()
+                        ),
+                    );
                 }
             }
         } else if planner.is_running()
@@ -442,19 +478,28 @@ fn run(
             planner.on_event(now, RebuildReason::Stalled);
         }
 
-        match planner.poll(now, Hold { settle: output_gate().is_busy(), retry: false }) {
+        match planner.poll(
+            now,
+            Hold {
+                settle: output_gate().is_busy(),
+                retry: false,
+            },
+        ) {
             Action::Wait => {}
             Action::Degraded => {
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Err("The microphone did not deliver any audio".to_string()));
                     break;
                 }
-                log("WARN", "Meetings: microphone is not delivering audio; will retry");
+                log(
+                    "WARN",
+                    "Meetings: microphone is not delivering audio; will retry",
+                );
                 slot.discontinuity(Discontinuity::Stalled, clock::host_now_ns());
             }
             Action::Rebuild(reason) => {
-                let delivering =
-                    last_progress.is_some_and(|at| now.duration_since(at) < Duration::from_millis(600));
+                let delivering = last_progress
+                    .is_some_and(|at| now.duration_since(at) < Duration::from_millis(600));
                 let device_event = matches!(
                     reason,
                     RebuildReason::DefaultDeviceChanged | RebuildReason::SampleRateChanged
@@ -493,7 +538,13 @@ fn run(
                         built = Some(new);
                     }
                     Err(e) => {
-                        log("WARN", &format!("Meetings: microphone rebuild failed ({}): {e}", reason.as_str()));
+                        log(
+                            "WARN",
+                            &format!(
+                                "Meetings: microphone rebuild failed ({}): {e}",
+                                reason.as_str()
+                            ),
+                        );
                         shared.set(None, None);
                     }
                 }
@@ -545,7 +596,10 @@ mod tests {
         // move with them.
         for (n, jitter_ms) in [(1u64, 3u64), (2, 1), (3, 2)] {
             let now = t0 + n * 20 * MS + jitter_ms * MS;
-            assert_eq!(mic_clock.stamp(now, 20 * MS, n * 20 * MS), t0 - 20 * MS + n * 20 * MS);
+            assert_eq!(
+                mic_clock.stamp(now, 20 * MS, n * 20 * MS),
+                t0 - 20 * MS + n * 20 * MS
+            );
         }
     }
 
@@ -557,13 +611,28 @@ mod tests {
         // The first callback was held up for 40 ms, so the next two come
         // right behind it. Each stamp is as early as its callback allows.
         assert_eq!(mic_clock.stamp(t0 + 61 * MS, 20 * MS, 0), t0 + 41 * MS);
-        assert_eq!(mic_clock.stamp(t0 + 62 * MS, 20 * MS, 20 * MS), t0 + 42 * MS);
-        assert_eq!(mic_clock.stamp(t0 + 63 * MS, 20 * MS, 40 * MS), t0 + 43 * MS);
+        assert_eq!(
+            mic_clock.stamp(t0 + 62 * MS, 20 * MS, 20 * MS),
+            t0 + 42 * MS
+        );
+        assert_eq!(
+            mic_clock.stamp(t0 + 63 * MS, 20 * MS, 40 * MS),
+            t0 + 43 * MS
+        );
         // Back on time: the anchor settles 1 ms late instead of 41 ms, and
         // jitter no longer moves the stamps.
-        assert_eq!(mic_clock.stamp(t0 + 81 * MS, 20 * MS, 60 * MS), t0 + 61 * MS);
-        assert_eq!(mic_clock.stamp(t0 + 104 * MS, 20 * MS, 80 * MS), t0 + 81 * MS);
-        assert_eq!(mic_clock.stamp(t0 + 122 * MS, 20 * MS, 100 * MS), t0 + 101 * MS);
+        assert_eq!(
+            mic_clock.stamp(t0 + 81 * MS, 20 * MS, 60 * MS),
+            t0 + 61 * MS
+        );
+        assert_eq!(
+            mic_clock.stamp(t0 + 104 * MS, 20 * MS, 80 * MS),
+            t0 + 81 * MS
+        );
+        assert_eq!(
+            mic_clock.stamp(t0 + 122 * MS, 20 * MS, 100 * MS),
+            t0 + 101 * MS
+        );
     }
 
     #[test]
@@ -597,7 +666,9 @@ mod tests {
         let handler = CapturingHandler::default();
         let mut mic = open();
         let before = clock::host_now_ns();
-        let format = mic.start(Box::new(handler.clone())).expect("microphone starts");
+        let format = mic
+            .start(Box::new(handler.clone()))
+            .expect("microphone starts");
         assert_eq!(mic.format(), Some(format));
         assert!(mic.device_name().is_some());
         std::thread::sleep(Duration::from_secs(5));
@@ -612,8 +683,14 @@ mod tests {
             captured.buffers,
             captured.nonzero_samples
         );
-        assert!((4.5..=5.5).contains(&seconds), "{seconds} s of audio in 5 s");
-        assert!(captured.nonzero_samples > 0, "the microphone delivered only zeros");
+        assert!(
+            (4.5..=5.5).contains(&seconds),
+            "{seconds} s of audio in 5 s"
+        );
+        assert!(
+            captured.nonzero_samples > 0,
+            "the microphone delivered only zeros"
+        );
         // Stamps are on the host clock: between start and stop, in order.
         let first = captured.first_host_ns.unwrap();
         assert!(first + 1_000_000_000 > before && captured.last_host_ns < after);
@@ -628,19 +705,27 @@ mod tests {
         // stream on the device, opened and closed while ours keeps running.
         let handler = CapturingHandler::default();
         let mut mic = open();
-        mic.start(Box::new(handler.clone())).expect("microphone starts");
+        mic.start(Box::new(handler.clone()))
+            .expect("microphone starts");
         std::thread::sleep(Duration::from_secs(1));
-        let dictation = crate::audio::start_recording().expect("dictation starts next to the meeting");
+        let dictation =
+            crate::audio::start_recording().expect("dictation starts next to the meeting");
         std::thread::sleep(Duration::from_secs(2));
         drop(dictation);
         let buffers_before = handler.0.lock().unwrap().buffers;
         std::thread::sleep(Duration::from_secs(1));
         let buffers_after = handler.0.lock().unwrap().buffers;
         mic.stop().unwrap();
-        assert!(buffers_after > buffers_before, "the meeting stream survived the dictation stream");
+        assert!(
+            buffers_after > buffers_before,
+            "the meeting stream survived the dictation stream"
+        );
         let captured = handler.0.lock().unwrap();
         assert!(
-            !captured.discontinuities.iter().any(|d| matches!(d, Discontinuity::Stalled)),
+            !captured
+                .discontinuities
+                .iter()
+                .any(|d| matches!(d, Discontinuity::Stalled)),
             "{:?}",
             captured.discontinuities
         );

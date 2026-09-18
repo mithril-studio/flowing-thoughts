@@ -1,13 +1,13 @@
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-    ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
-};
 use std::process::Command;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    ActivationPolicy, AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
+};
 
 /// The hotkey must be held this long — a full second — before the session is
 /// committed: recording feedback shown and transcription allowed. Audio
@@ -147,7 +147,9 @@ fn maybe_learn_from_pending_capture(
     if !auto_learn {
         let _ = storage::append_log(
             "INFO",
-            &format!("Correction check skipped for session {session_id}: 'Learn from my edits' is off"),
+            &format!(
+                "Correction check skipped for session {session_id}: 'Learn from my edits' is off"
+            ),
         );
         return;
     }
@@ -216,7 +218,6 @@ fn maybe_learn_from_pending_capture(
     );
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -227,9 +228,11 @@ mod tests {
     #[test]
     fn injection_guard_allows_normal_dictations() {
         assert!(!should_withhold_injection(150, 8_000));
-        assert!(!should_withhold_injection(MAX_AUTO_INJECT_CHARS, MAX_AUTO_INJECT_MS));
+        assert!(!should_withhold_injection(
+            MAX_AUTO_INJECT_CHARS,
+            MAX_AUTO_INJECT_MS
+        ));
     }
-
 
     #[test]
     fn injection_guard_withholds_oversized_transcripts() {
@@ -262,7 +265,10 @@ mod tests {
         assert_eq!(settings.meetings.model, "whisper-small-q5");
         assert_eq!(settings.meetings.language, "auto");
         assert_eq!(settings.meetings.summary_model, "openai/gpt-4o-mini");
-        assert_eq!(settings.meetings.auto_delete_audio_days, MAX_AUTO_DELETE_AUDIO_DAYS);
+        assert_eq!(
+            settings.meetings.auto_delete_audio_days,
+            MAX_AUTO_DELETE_AUDIO_DAYS
+        );
     }
 
     #[test]
@@ -299,7 +305,6 @@ mod tests {
         let parsed: storage::AppSettings = serde_json::from_str(raw).expect("should parse");
         assert_eq!(parsed.meetings, storage::MeetingsSettings::default());
     }
-
 }
 
 #[tauri::command]
@@ -524,7 +529,13 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.microphone.input_device.trim().is_empty() {
         settings.microphone.input_device = "system_default".to_string();
     }
-    let valid_positions = ["center", "top_left", "top_right", "bottom_left", "bottom_right"];
+    let valid_positions = [
+        "center",
+        "top_left",
+        "top_right",
+        "bottom_left",
+        "bottom_right",
+    ];
     if !valid_positions.contains(&settings.general.window_position.as_str()) {
         settings.general.window_position = "center".to_string();
     }
@@ -558,8 +569,10 @@ fn sanitize_settings(settings: &mut storage::AppSettings) {
     if settings.meetings.summary_model.trim().is_empty() {
         settings.meetings.summary_model = "openai/gpt-4o-mini".to_string();
     }
-    settings.meetings.auto_delete_audio_days =
-        settings.meetings.auto_delete_audio_days.min(MAX_AUTO_DELETE_AUDIO_DAYS);
+    settings.meetings.auto_delete_audio_days = settings
+        .meetings
+        .auto_delete_audio_days
+        .min(MAX_AUTO_DELETE_AUDIO_DAYS);
 }
 
 fn apply_window_movable(window: &WebviewWindow, movable: bool) {
@@ -610,8 +623,8 @@ fn apply_window_position(window: &WebviewWindow, position: &str) -> Result<(), S
 
 #[cfg(target_os = "macos")]
 fn apply_launch_at_login(enabled: bool) -> Result<(), String> {
-    let executable = std::env::current_exe()
-        .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+    let executable =
+        std::env::current_exe().map_err(|e| format!("Failed to resolve executable path: {e}"))?;
     let exe_path = executable
         .to_str()
         .ok_or_else(|| "Executable path contains invalid UTF-8".to_string())?;
@@ -755,9 +768,7 @@ fn update_app_settings(
             apply_window_movable(&window, next_settings.general.window_movable);
         }
         if next_settings.general.window_position != previous_settings.general.window_position {
-            if let Err(e) =
-                apply_window_position(&window, &next_settings.general.window_position)
-            {
+            if let Err(e) = apply_window_position(&window, &next_settings.general.window_position) {
                 warnings.push(e);
             }
         }
@@ -884,7 +895,8 @@ fn run_injection_test() -> Result<(), String> {
 
 #[tauri::command]
 fn open_logs_folder() -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let home =
+        std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     let logs_dir = std::path::PathBuf::from(home)
         .join("Library")
         .join("Application Support")
@@ -896,7 +908,9 @@ fn open_logs_folder() -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("Open logs folder command failed with status: {status}"))
+        Err(format!(
+            "Open logs folder command failed with status: {status}"
+        ))
     }
 }
 
@@ -939,8 +953,8 @@ struct AccessibilityHelpInfo {
 
 #[tauri::command]
 fn get_accessibility_help_info() -> Result<AccessibilityHelpInfo, String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+    let exe =
+        std::env::current_exe().map_err(|e| format!("Failed to resolve executable path: {e}"))?;
     let executable_path = exe
         .to_str()
         .ok_or_else(|| "Executable path contains invalid UTF-8".to_string())?
@@ -961,8 +975,8 @@ fn get_accessibility_help_info() -> Result<AccessibilityHelpInfo, String> {
 
 #[tauri::command]
 fn reveal_current_executable() -> Result<(), String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("Failed to resolve executable path: {e}"))?;
+    let exe =
+        std::env::current_exe().map_err(|e| format!("Failed to resolve executable path: {e}"))?;
     let status = Command::new("open")
         .arg("-R")
         .arg(exe)
@@ -1058,7 +1072,8 @@ fn read_hidden_models(conn: &rusqlite::Connection) -> Vec<String> {
 }
 
 fn write_hidden_models(conn: &rusqlite::Connection, ids: &[String]) -> Result<(), String> {
-    let raw = serde_json::to_string(ids).map_err(|e| format!("Failed to encode hidden models: {e}"))?;
+    let raw =
+        serde_json::to_string(ids).map_err(|e| format!("Failed to encode hidden models: {e}"))?;
     db::kv_set(conn, HIDDEN_MODELS_KV_KEY, &raw)
 }
 

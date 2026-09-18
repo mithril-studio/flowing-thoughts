@@ -9,15 +9,14 @@ use std::ptr::NonNull;
 
 use objc2_core_audio::{
     kAudioDevicePropertyDataSource, kAudioDevicePropertyDeviceIsRunningSomewhere,
-    kAudioDevicePropertyDeviceUID,
-    kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyTransportType,
-    kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
-    kAudioHardwarePropertyDevices, kAudioHardwarePropertyProcessObjectList,
-    kAudioHardwarePropertyTranslatePIDToProcessObject,
+    kAudioDevicePropertyDeviceUID, kAudioDevicePropertyNominalSampleRate,
+    kAudioDevicePropertyTransportType, kAudioHardwarePropertyDefaultInputDevice,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
+    kAudioHardwarePropertyProcessObjectList, kAudioHardwarePropertyTranslatePIDToProcessObject,
     kAudioObjectPropertyElementMain, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject, kAudioProcessPropertyIsRunningOutput,
-    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
-    AudioObjectID, AudioObjectPropertyAddress,
+    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
+    kAudioProcessPropertyIsRunningOutput, AudioObjectGetPropertyData,
+    AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
 };
 use objc2_core_foundation::{CFRetained, CFString};
 
@@ -134,7 +133,9 @@ pub fn device_uid(device: AudioObjectID) -> Result<CFRetained<CFString>, OSStatu
 }
 
 pub fn device_name(device: AudioObjectID) -> Option<String> {
-    get_string(device, kAudioObjectPropertyName).ok().map(|s| s.to_string())
+    get_string(device, kAudioObjectPropertyName)
+        .ok()
+        .map(|s| s.to_string())
 }
 
 pub fn nominal_sample_rate(device: AudioObjectID) -> Option<f64> {
@@ -173,7 +174,10 @@ pub fn transport_type(device: AudioObjectID) -> Option<u32> {
 /// The selected output data source (`'ispk'`, `'hdpn'`), where the device has
 /// one.
 pub fn output_data_source(device: AudioObjectID) -> Option<u32> {
-    let addr = scoped_address(kAudioDevicePropertyDataSource, kAudioObjectPropertyScopeOutput);
+    let addr = scoped_address(
+        kAudioDevicePropertyDataSource,
+        kAudioObjectPropertyScopeOutput,
+    );
     // SAFETY: the property is a UInt32.
     unsafe { get_prop_at::<u32>(device, addr).ok() }
 }
@@ -182,7 +186,8 @@ pub fn output_data_source(device: AudioObjectID) -> Option<u32> {
 /// included. One cheap read.
 pub fn device_is_running_somewhere(device: AudioObjectID) -> Option<bool> {
     // SAFETY: the property is a UInt32.
-    unsafe { get_prop::<u32>(device, kAudioDevicePropertyDeviceIsRunningSomewhere).ok() }.map(|v| v != 0)
+    unsafe { get_prop::<u32>(device, kAudioDevicePropertyDeviceIsRunningSomewhere).ok() }
+        .map(|v| v != 0)
 }
 
 /// This process as the HAL knows it, for `other_process_running_output`.
@@ -247,9 +252,15 @@ mod tests {
             answer = other_process_running_output();
         }
         let per_call = t.elapsed() / 10;
-        println!("hal: other_process_running_output = {answer:?}, {per_call:?} per call, own = {:?}", own_process_object());
+        println!(
+            "hal: other_process_running_output = {answer:?}, {per_call:?} per call, own = {:?}",
+            own_process_object()
+        );
         // 24 ms on an M-series MacBook with about 60 audio clients.
-        assert!(per_call < std::time::Duration::from_millis(100), "{per_call:?}");
+        assert!(
+            per_call < std::time::Duration::from_millis(100),
+            "{per_call:?}"
+        );
     }
 
     #[test]

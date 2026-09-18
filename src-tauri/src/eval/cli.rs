@@ -67,7 +67,9 @@ impl Args {
             if switches.contains(&name) {
                 flags.insert(name.to_string(), "true".to_string());
             } else {
-                let value = iter.next().ok_or_else(|| format!("--{name} needs a value"))?;
+                let value = iter
+                    .next()
+                    .ok_or_else(|| format!("--{name} needs a value"))?;
                 flags.insert(name.to_string(), value.clone());
             }
         }
@@ -89,7 +91,10 @@ impl Args {
 
     fn number(&self, name: &str) -> Result<Option<usize>, String> {
         self.get(name)
-            .map(|v| v.parse::<usize>().map_err(|_| format!("--{name} must be a number")))
+            .map(|v| {
+                v.parse::<usize>()
+                    .map_err(|_| format!("--{name} must be a number"))
+            })
             .transpose()
     }
 
@@ -192,9 +197,9 @@ pub fn main(raw_args: &[String], default_prompts: &str) -> Result<(), String> {
         "synth" => {
             let args = Args::parse(rest, &[])?;
             args.reject_unknown(&["data-dir"])?;
-            let dir = args
-                .get("data-dir")
-                .ok_or("synth needs an explicit --data-dir so it can never land in your real dataset")?;
+            let dir = args.get("data-dir").ok_or(
+                "synth needs an explicit --data-dir so it can never land in your real dataset",
+            )?;
             let n = synth::build(std::path::Path::new(dir), &prompts::parse(default_prompts)?)?;
             println!("Synthetic fixture: {n} clips in {dir}\nScore it with: npm run eval -- run --data-dir \"{dir}\"");
             Ok(())
@@ -210,10 +215,19 @@ pub fn main(raw_args: &[String], default_prompts: &str) -> Result<(), String> {
 fn cmd_record(rest: &[String], default_prompts: &str) -> Result<(), String> {
     let args = Args::parse(rest, &[])?;
     args.reject_unknown(&[
-        "data-dir", "speaker", "condition", "noise", "device", "category", "sample", "prompts",
+        "data-dir",
+        "speaker",
+        "condition",
+        "noise",
+        "device",
+        "category",
+        "sample",
+        "prompts",
     ])?;
     let script = match args.get("prompts") {
-        Some(path) => std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?,
+        Some(path) => {
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?
+        }
         None => default_prompts.to_string(),
     };
     let options = RecordOptions {
@@ -263,10 +277,18 @@ fn cmd_stats(rest: &[String]) -> Result<(), String> {
     let rows: Vec<Vec<String>> = per_category
         .iter()
         .map(|(c, (dev, test, unverified))| {
-            vec![c.clone(), dev.to_string(), test.to_string(), unverified.to_string()]
+            vec![
+                c.clone(),
+                dev.to_string(),
+                test.to_string(),
+                unverified.to_string(),
+            ]
         })
         .collect();
-    println!("{}", report::table(&["category", "dev", "test", "unverified"], &rows));
+    println!(
+        "{}",
+        report::table(&["category", "dev", "test", "unverified"], &rows)
+    );
     let rows: Vec<Vec<String>> = per_condition
         .iter()
         .map(|(c, n)| vec![c.clone(), n.to_string()])
@@ -278,11 +300,23 @@ fn cmd_stats(rest: &[String]) -> Result<(), String> {
 fn cmd_run(rest: &[String]) -> Result<(), String> {
     let args = Args::parse(rest, &["held-out"])?;
     args.reject_unknown(&[
-        "data-dir", "model", "language", "vocab", "vad", "resampler", "category", "condition",
-        "limit", "held-out",
+        "data-dir",
+        "model",
+        "language",
+        "vocab",
+        "vad",
+        "resampler",
+        "category",
+        "condition",
+        "limit",
+        "held-out",
     ])?;
     let data_dir = manifest::resolve_data_dir(args.get("data-dir"))?;
-    let split = if args.get("held-out").is_some() { Split::Test } else { Split::Dev };
+    let split = if args.get("held-out").is_some() {
+        Split::Test
+    } else {
+        Split::Dev
+    };
     let default_model = match args.get("model") {
         Some(_) => String::new(),
         None => default_model()?,
@@ -316,7 +350,13 @@ fn cmd_run(rest: &[String]) -> Result<(), String> {
     crate::local_transcribe::quiet_native_logging();
     let mut runs = Vec::new();
     for (index, config) in configs.iter().enumerate() {
-        eprintln!("[{}/{}] {} — {} clips", index + 1, configs.len(), config.label(), clips.len());
+        eprintln!(
+            "[{}/{}] {} — {} clips",
+            index + 1,
+            configs.len(),
+            config.label(),
+            clips.len()
+        );
         let model = parse_model(&config.model)?;
         let load_started = std::time::Instant::now();
         crate::local_transcribe::preload_model(&model)?;
@@ -348,7 +388,11 @@ fn cmd_run(rest: &[String]) -> Result<(), String> {
     }
     let (json_path, md_path) = report::write(&report, &data_dir)?;
     println!("{}", report::render_markdown(&report));
-    println!("Results: {}\nSummary: {}", json_path.display(), md_path.display());
+    println!(
+        "Results: {}\nSummary: {}",
+        json_path.display(),
+        md_path.display()
+    );
     Ok(())
 }
 
@@ -372,9 +416,15 @@ mod tests {
         .unwrap();
         assert_eq!(configs.len(), 8);
         assert_eq!(configs[0].label(), "whisper-small-q5 · nl · vocab=none");
-        assert_eq!(configs[7].label(), "whisper-large-v3-turbo-q5 · auto · vocab=developer");
+        assert_eq!(
+            configs[7].label(),
+            "whisper-large-v3-turbo-q5 · auto · vocab=developer"
+        );
         assert!(expand_configs(&strings(&["small"]), &strings(&["de"]), &[], &[], &[]).is_err());
-        assert_eq!(parse_model("ggml-medium-q5_0").unwrap().id(), "ggml-medium-q5_0");
+        assert_eq!(
+            parse_model("ggml-medium-q5_0").unwrap().id(),
+            "ggml-medium-q5_0"
+        );
     }
 
     #[test]

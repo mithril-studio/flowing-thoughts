@@ -164,7 +164,9 @@ pub fn list_participants(conn: &Connection, meeting_id: &str) -> Result<Vec<Part
     query_all(
         conn,
         "list participants",
-        &format!("{PARTICIPANT_SELECT} WHERE p.meeting_id = ?1 ORDER BY p.created_at ASC, p.rowid ASC"),
+        &format!(
+            "{PARTICIPANT_SELECT} WHERE p.meeting_id = ?1 ORDER BY p.created_at ASC, p.rowid ASC"
+        ),
         params![meeting_id],
         participant_from_row,
     )

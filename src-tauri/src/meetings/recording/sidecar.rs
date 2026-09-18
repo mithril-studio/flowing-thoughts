@@ -96,8 +96,10 @@ pub fn write_atomic(track_dir: &Path, sidecar: &TrackSidecar) -> Result<(), Stri
     let tmp = track_dir.join(SIDECAR_TMP_FILE);
     let mut file =
         fs::File::create(&tmp).map_err(|e| format!("Failed to create {SIDECAR_TMP_FILE}: {e}"))?;
-    file.write_all(&json).map_err(|e| format!("Failed to write {SIDECAR_TMP_FILE}: {e}"))?;
-    file.sync_all().map_err(|e| format!("Failed to sync {SIDECAR_TMP_FILE}: {e}"))?;
+    file.write_all(&json)
+        .map_err(|e| format!("Failed to write {SIDECAR_TMP_FILE}: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("Failed to sync {SIDECAR_TMP_FILE}: {e}"))?;
     drop(file);
     fs::rename(&tmp, track_dir.join(SIDECAR_FILE))
         .map_err(|e| format!("Failed to replace {SIDECAR_FILE}: {e}"))?;

@@ -40,7 +40,10 @@ impl ModelId {
             "whisper-tiny-en" => Some(ModelId::TinyEn),
             "whisper-base-en" => Some(ModelId::BaseEn),
             "distil-small-en" => Some(ModelId::DistilSmallEn),
-            other if is_valid_custom_stem(other) && !is_reserved_filename(&format!("{other}.bin")) => {
+            other
+                if is_valid_custom_stem(other)
+                    && !is_reserved_filename(&format!("{other}.bin")) =>
+            {
                 let filename = format!("{other}.bin");
                 // A custom id that points at a built-in's file is that built-in.
                 Some(
@@ -233,7 +236,9 @@ pub fn resolve_custom_source(input: &str) -> Result<CustomSource, String> {
     }
     let filename = format!("ggml-{stem}.bin");
     if is_reserved_filename(&filename) {
-        return Err(format!("{filename} is the voice-activity model, not a speech model"));
+        return Err(format!(
+            "{filename} is the voice-activity model, not a speech model"
+        ));
     }
     Ok(CustomSource {
         url: format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{filename}"),
@@ -412,7 +417,9 @@ pub fn model_path(id: &ModelId) -> Result<PathBuf, String> {
 /// A bundle only counts once every file is in place — an interrupted
 /// download leaves the directory behind with part of its contents.
 pub fn is_installed(id: &ModelId) -> bool {
-    let Ok(path) = model_path(id) else { return false };
+    let Ok(path) = model_path(id) else {
+        return false;
+    };
     match id {
         ModelId::Custom(_) => path.is_file(),
         builtin => {
@@ -459,7 +466,9 @@ pub fn list_installed(hidden: &[String]) -> Result<Vec<InstalledModel>, String> 
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let filename = entry.file_name().to_string_lossy().into_owned();
-            let Some(stem) = filename.strip_suffix(".bin") else { continue };
+            let Some(stem) = filename.strip_suffix(".bin") else {
+                continue;
+            };
             if builtin_files.contains(&filename)
                 || filename == VAD_SPEC.filename
                 || !is_valid_custom_stem(stem)
@@ -493,8 +502,7 @@ pub fn delete_model(id: &ModelId) -> Result<(), String> {
         std::fs::remove_dir_all(&path)
             .map_err(|e| format!("Failed to delete model directory: {e}"))?;
     } else if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete model file: {e}"))?;
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete model file: {e}"))?;
     }
     Ok(())
 }
@@ -502,7 +510,8 @@ pub fn delete_model(id: &ModelId) -> Result<(), String> {
 pub async fn download_model(app: AppHandle, id: ModelId) -> Result<(), String> {
     match id {
         ModelId::Custom(_) => Err(
-            "Custom models are added by name or URL, not re-downloaded from the catalog".to_string(),
+            "Custom models are added by name or URL, not re-downloaded from the catalog"
+                .to_string(),
         ),
         builtin if builtin.spec().bundle.is_empty() => {
             download_job(app, builtin.spec().into()).await
@@ -515,8 +524,7 @@ pub async fn download_model(app: AppHandle, id: ModelId) -> Result<(), String> {
 /// download. Files that already verified on an earlier attempt are kept.
 async fn download_bundle(app: AppHandle, spec: ModelSpec) -> Result<(), String> {
     let dir = models_dir()?.join(spec.filename);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create model directory: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create model directory: {e}"))?;
 
     let total: u64 = spec.bundle.iter().map(|f| f.size_bytes).sum();
     let mut done: u64 = 0;
@@ -577,7 +585,8 @@ pub async fn add_custom_model(app: AppHandle, source: &str) -> Result<String, St
     }
     tauri::async_runtime::spawn(async move {
         if let Err(e) = download_job(app, job).await {
-            let _ = crate::storage::append_log("ERROR", &format!("Custom model download failed: {e}"));
+            let _ =
+                crate::storage::append_log("ERROR", &format!("Custom model download failed: {e}"));
         }
     });
     Ok(model_id)
@@ -648,8 +657,7 @@ async fn fetch_file(
     within: Option<(u64, u64)>,
 ) -> Result<(u64, PathBuf), String> {
     let dir = models_dir()?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create models directory: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create models directory: {e}"))?;
 
     let final_path = dir.join(&spec.filename);
     let temp_path = dir.join(format!("{}.partial", spec.filename));
@@ -712,8 +720,15 @@ async fn fetch_file(
     drop(file);
 
     let digest = hasher.finalize();
-    let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    if spec.sha256.as_deref().is_some_and(|expected| expected != hex) {
+    let hex = digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    if spec
+        .sha256
+        .as_deref()
+        .is_some_and(|expected| expected != hex)
+    {
         let _ = std::fs::remove_file(&temp_path);
         let msg = format!(
             "SHA256 mismatch for {}: expected {}, got {}",
@@ -800,8 +815,13 @@ mod tests {
         assert_eq!(id, ModelId::Custom("ggml-medium-q5_0.bin".to_string()));
         assert_eq!(id.id(), "ggml-medium-q5_0");
         assert!(id.is_multilingual());
-        assert!(!ModelId::from_str("ggml-medium.en").unwrap().is_multilingual());
+        assert!(!ModelId::from_str("ggml-medium.en")
+            .unwrap()
+            .is_multilingual());
         assert_eq!(ModelId::from_str("ggml-small-q5_1"), Some(ModelId::SmallQ5));
-        assert_eq!(ModelId::from_str("whisper-small-q5"), Some(ModelId::SmallQ5));
+        assert_eq!(
+            ModelId::from_str("whisper-small-q5"),
+            Some(ModelId::SmallQ5)
+        );
     }
 }

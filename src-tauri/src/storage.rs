@@ -273,7 +273,8 @@ const HISTORY_UI_CAP: i64 = 200;
 const MIGRATION_FLAG_KEY: &str = "migrated_from_state_json";
 
 fn persisted_file_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let home =
+        std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
@@ -282,7 +283,8 @@ fn persisted_file_path() -> Result<PathBuf, String> {
 }
 
 fn logs_file_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let home =
+        std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
@@ -381,8 +383,8 @@ fn migrate_from_json_if_needed(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
 
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read legacy state.json: {e}"))?;
+    let raw =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read legacy state.json: {e}"))?;
     let legacy: PersistedState = serde_json::from_str(&raw)
         .map_err(|e| format!("Failed to parse legacy state.json: {e}"))?;
 

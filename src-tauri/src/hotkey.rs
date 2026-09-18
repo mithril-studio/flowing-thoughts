@@ -160,8 +160,14 @@ mod tests {
 
     #[test]
     fn hotkey_mode_parse_defaults_to_fn() {
-        assert_eq!(HotkeyMode::parse("cmd+shift+space"), HotkeyMode::CmdShiftSpace);
-        assert_eq!(HotkeyMode::parse("cmd_shift_space"), HotkeyMode::CmdShiftSpace);
+        assert_eq!(
+            HotkeyMode::parse("cmd+shift+space"),
+            HotkeyMode::CmdShiftSpace
+        );
+        assert_eq!(
+            HotkeyMode::parse("cmd_shift_space"),
+            HotkeyMode::CmdShiftSpace
+        );
         assert_eq!(HotkeyMode::parse("anything-else"), HotkeyMode::Fn);
         assert_eq!(HotkeyMode::parse(""), HotkeyMode::Fn);
     }

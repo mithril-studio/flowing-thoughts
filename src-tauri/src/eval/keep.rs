@@ -80,7 +80,9 @@ mod tests {
         };
         let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
         for i in 0..48_000 {
-            writer.write_sample(if i % 2 == 0 { 8_000i16 } else { -8_000 }).unwrap();
+            writer
+                .write_sample(if i % 2 == 0 { 8_000i16 } else { -8_000 })
+                .unwrap();
         }
         writer.finalize().unwrap();
 
@@ -99,12 +101,18 @@ mod tests {
         assert_eq!(clips.len(), 1);
         let clip = &clips[0];
         assert_eq!(clip.id, id);
-        assert!(!clip.verified, "model output must never count as ground truth");
+        assert!(
+            !clip.verified,
+            "model output must never count as ground truth"
+        );
         assert!(clip.reference.is_empty());
         assert_eq!(clip.raw_transcript.as_deref(), Some("Ja dat klopt"));
         assert_eq!((clip.sample_rate, clip.duration_ms), (48_000, 1_000));
         assert!(dir.join(&clip.audio).exists());
-        assert!(wav.exists(), "the live session still owns (and deletes) its capture");
+        assert!(
+            wav.exists(),
+            "the live session still owns (and deletes) its capture"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

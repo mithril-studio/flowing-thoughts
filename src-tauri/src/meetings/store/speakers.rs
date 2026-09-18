@@ -86,7 +86,12 @@ pub fn seed_track_speakers(conn: &Connection, meeting_id: &str) -> Result<Vec<Sp
                                  WHERE s.track_id = t.id AND s.source = 'track')
               ORDER BY t.kind ASC",
             params![meeting_id],
-            |row| Ok((row.get::<_, String>(0)?, enum_col(row, 1, TrackKind::parse)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    enum_col(row, 1, TrackKind::parse)?,
+                ))
+            },
         )?;
         for (track_id, kind) in unseeded {
             insert_speaker(
@@ -135,7 +140,9 @@ pub fn add_speaker(
     if let Some(track_id) = track_id {
         let owner = super::audio::track_meeting_id(conn, track_id)?;
         if owner.as_deref() != Some(meeting_id) {
-            return Err(format!("Track '{track_id}' does not belong to meeting '{meeting_id}'"));
+            return Err(format!(
+                "Track '{track_id}' does not belong to meeting '{meeting_id}'"
+            ));
         }
     }
     let id = insert_speaker(conn, meeting_id, track_id, label, source)?;
@@ -173,7 +180,12 @@ pub fn merge_speakers(conn: &Connection, from_id: &str, into_id: &str) -> Result
                 "read speaker",
                 "SELECT meeting_id, source FROM speakers WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get::<_, String>(0)?, enum_col(row, 1, SpeakerSource::parse)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        enum_col(row, 1, SpeakerSource::parse)?,
+                    ))
+                },
             )?
             .ok_or_else(|| format!("Speaker '{id}' not found"))
         };
@@ -245,10 +257,18 @@ pub fn add_speaker_turns(
             .map_err(|e| format!("Failed to prepare insert speaker turns: {e}"))?;
         for (start_ms, end_ms) in turns {
             if end_ms < start_ms {
-                return Err(format!("Speaker turn ends before it starts ({end_ms} < {start_ms})"));
+                return Err(format!(
+                    "Speaker turn ends before it starts ({end_ms} < {start_ms})"
+                ));
             }
-            stmt.execute(params![new_id(), speaker_id, track_id, *start_ms as i64, *end_ms as i64])
-                .map_err(|e| format!("Failed to insert speaker turn: {e}"))?;
+            stmt.execute(params![
+                new_id(),
+                speaker_id,
+                track_id,
+                *start_ms as i64,
+                *end_ms as i64
+            ])
+            .map_err(|e| format!("Failed to insert speaker turn: {e}"))?;
         }
         Ok(turns.len())
     })

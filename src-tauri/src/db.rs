@@ -64,7 +64,8 @@ const BUSY_TIMEOUT_MS: i64 = 5_000;
 const SCHEMA_VERSION: i64 = 3;
 
 fn db_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let home =
+        std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
@@ -578,11 +579,9 @@ pub fn max_history_session_id(conn: &Connection) -> Result<u64, String> {
 }
 
 pub fn kv_get(conn: &Connection, key: &str) -> Result<Option<String>, String> {
-    conn.query_row(
-        "SELECT value FROM kv WHERE key = ?1",
-        params![key],
-        |row| row.get::<_, String>(0),
-    )
+    conn.query_row("SELECT value FROM kv WHERE key = ?1", params![key], |row| {
+        row.get::<_, String>(0)
+    })
     .optional()
     .map_err(|e| format!("Failed to read kv[{key}]: {e}"))
 }
@@ -783,10 +782,7 @@ pub fn insert_correction(conn: &Connection, correction: &Correction) -> Result<(
     Ok(())
 }
 
-pub fn list_recent_dictations(
-    conn: &Connection,
-    limit: i64,
-) -> Result<Vec<Dictation>, String> {
+pub fn list_recent_dictations(conn: &Connection, limit: i64) -> Result<Vec<Dictation>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, session_id, started_at, wav_path, duration_ms, sample_rate
@@ -906,7 +902,8 @@ mod tests {
     }
 
     fn user_version(conn: &Connection) -> i64 {
-        conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap()
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap()
     }
 
     fn table_exists(conn: &Connection, name: &str) -> bool {
@@ -920,8 +917,10 @@ mod tests {
     }
 
     fn count(conn: &Connection, table: &str) -> i64 {
-        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
-            .unwrap()
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
     }
 
     /// One meeting with a row in every v3 table that hangs off it, plus the
@@ -975,7 +974,14 @@ mod tests {
         migrate(&conn).expect("migrate");
         assert_eq!(SCHEMA_VERSION, 3);
         assert_eq!(user_version(&conn), SCHEMA_VERSION);
-        for table in ["snippets", "notes", "history", "kv", "dictations", "corrections"] {
+        for table in [
+            "snippets",
+            "notes",
+            "history",
+            "kv",
+            "dictations",
+            "corrections",
+        ] {
             assert!(table_exists(&conn, table), "missing pre-v3 table {table}");
         }
         for table in V3_TABLES {
@@ -1010,8 +1016,14 @@ mod tests {
             assert!(table_exists(&conn, table), "missing v3 table {table}");
         }
         assert_eq!(super::list_notes(&conn).unwrap()[0].title, "Keep me");
-        assert_eq!(super::list_history(&conn, 10).unwrap()[0].text, "hallo wereld");
-        assert_eq!(super::list_corrections(&conn).unwrap()[0].intended_text, "Tauri");
+        assert_eq!(
+            super::list_history(&conn, 10).unwrap()[0].text,
+            "hallo wereld"
+        );
+        assert_eq!(
+            super::list_corrections(&conn).unwrap()[0].intended_text,
+            "Tauri"
+        );
     }
 
     #[test]
@@ -1021,7 +1033,8 @@ mod tests {
         insert_full_meeting(&conn, "m1");
         insert_full_meeting(&conn, "m2");
 
-        conn.execute("DELETE FROM meetings WHERE id = 'm1'", []).unwrap();
+        conn.execute("DELETE FROM meetings WHERE id = 'm1'", [])
+            .unwrap();
 
         // Every per-meeting table is back to exactly m2's single row (two for
         // tracks and chunks); people are shared and survive.
@@ -1070,9 +1083,14 @@ mod tests {
         let conn = memory_db();
         migrate(&conn).unwrap();
         insert_full_meeting(&conn, "m1");
-        conn.execute("DELETE FROM people WHERE id = 'person-anna'", []).unwrap();
+        conn.execute("DELETE FROM people WHERE id = 'person-anna'", [])
+            .unwrap();
         let person_id: Option<String> = conn
-            .query_row("SELECT person_id FROM participants WHERE id = 'm1-p0'", [], |row| row.get(0))
+            .query_row(
+                "SELECT person_id FROM participants WHERE id = 'm1-p0'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(person_id, None);
     }
@@ -1092,9 +1110,15 @@ mod tests {
         let worker = open_at(&path, false).expect("open worker");
         assert_eq!(user_version(&worker), SCHEMA_VERSION);
         for conn in [&managed, &worker] {
-            let timeout: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
-            let fks: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
-            let journal: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+            let timeout: i64 = conn
+                .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+                .unwrap();
+            let fks: i64 = conn
+                .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+                .unwrap();
+            let journal: String = conn
+                .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+                .unwrap();
             assert_eq!(timeout, BUSY_TIMEOUT_MS);
             assert_eq!(fks, 1);
             assert_eq!(journal.to_lowercase(), "wal");
@@ -1106,7 +1130,9 @@ mod tests {
             .execute("UPDATE jobs SET status = 'running' WHERE id = 'm1-job'", [])
             .unwrap();
         let status: String = managed
-            .query_row("SELECT status FROM jobs WHERE id = 'm1-job'", [], |r| r.get(0))
+            .query_row("SELECT status FROM jobs WHERE id = 'm1-job'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(status, "running");
 

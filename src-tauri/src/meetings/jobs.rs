@@ -85,7 +85,10 @@ pub fn retranscribe(
         let db = app
             .try_state::<DbState>()
             .ok_or_else(|| "The database is not available yet".to_string())?;
-        let conn = db.inner().lock().map_err(|_| "DB lock poisoned".to_string())?;
+        let conn = db
+            .inner()
+            .lock()
+            .map_err(|_| "DB lock poisoned".to_string())?;
         let before = store::get_meeting(&conn, meeting_id)?.map(|m| m.meeting.status);
         let progress = enqueue_run(&conn, meeting_id, &options, IfBusy::Refuse)?;
         let after = store::get_meeting(&conn, meeting_id)?.map(|m| m.meeting.status);
@@ -149,7 +152,10 @@ pub fn usable_model(model: &str) -> Result<ModelId, String> {
 /// sees until the new one is complete.
 pub(crate) fn shows_finished_run(meeting: &MeetingDetail) -> bool {
     meeting.active_run_id.as_deref().is_some_and(|active| {
-        meeting.runs.iter().any(|run| run.id == active && run.status == RunStatus::Done)
+        meeting
+            .runs
+            .iter()
+            .any(|run| run.id == active && run.status == RunStatus::Done)
     })
 }
 
@@ -192,9 +198,10 @@ fn enqueue_run(
         ) {
             return Err("This meeting is still being recorded. Stop it first.".to_string());
         }
-        if let Some(job) = store::list_jobs(conn, meeting_id)?.into_iter().find(|job| {
-            job.kind == JobKind::Transcribe && !is_settled(job.status)
-        }) {
+        if let Some(job) = store::list_jobs(conn, meeting_id)?
+            .into_iter()
+            .find(|job| job.kind == JobKind::Transcribe && !is_settled(job.status))
+        {
             return match if_busy {
                 IfBusy::ReturnExisting => Ok(job.progress()),
                 IfBusy::Refuse => Err("This meeting is already being transcribed.".to_string()),
@@ -250,13 +257,21 @@ fn enqueue_run(
 
 fn is_settled(status: super::types::JobStatus) -> bool {
     use super::types::JobStatus;
-    matches!(status, JobStatus::Done | JobStatus::Failed | JobStatus::Cancelled)
+    matches!(
+        status,
+        JobStatus::Done | JobStatus::Failed | JobStatus::Cancelled
+    )
 }
 
 /// `MeetingDetail.model` is the active run's model when there is one, else
 /// the model the meeting was recorded for. Both are a sensible default.
 fn stored_model(meeting: &MeetingDetail) -> Option<String> {
-    meeting.model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(str::to_string)
+    meeting
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -266,7 +281,10 @@ mod tests {
     use crate::meetings::worker::test_support::{new_meeting, TestDb};
 
     fn options(model: Option<&str>, language: Option<MeetingLanguage>) -> RetranscribeOptions {
-        RetranscribeOptions { model: model.map(str::to_string), language }
+        RetranscribeOptions {
+            model: model.map(str::to_string),
+            language,
+        }
     }
 
     #[test]
@@ -302,9 +320,12 @@ mod tests {
         let meeting = new_meeting(&db.conn, &[(10_000, &[(0, 1_000)])]);
         let first =
             enqueue_transcription(&db.conn, &meeting.id, &RetranscribeOptions::default()).unwrap();
-        let second =
-            enqueue_transcription(&db.conn, &meeting.id, &options(None, Some(MeetingLanguage::Nl)))
-                .unwrap();
+        let second = enqueue_transcription(
+            &db.conn,
+            &meeting.id,
+            &options(None, Some(MeetingLanguage::Nl)),
+        )
+        .unwrap();
         assert_eq!(first.job_id, second.job_id);
         assert_eq!(store::list_runs(&db.conn, &meeting.id).unwrap().len(), 1);
         assert_eq!(store::list_jobs(&db.conn, &meeting.id).unwrap().len(), 1);
@@ -314,9 +335,20 @@ mod tests {
     fn a_second_retranscribe_is_refused_while_one_is_unfinished() {
         let db = TestDb::new();
         let meeting = new_meeting(&db.conn, &[(10_000, &[(0, 1_000)])]);
-        enqueue_run(&db.conn, &meeting.id, &RetranscribeOptions::default(), IfBusy::Refuse).unwrap();
-        let err = enqueue_run(&db.conn, &meeting.id, &RetranscribeOptions::default(), IfBusy::Refuse)
-            .unwrap_err();
+        enqueue_run(
+            &db.conn,
+            &meeting.id,
+            &RetranscribeOptions::default(),
+            IfBusy::Refuse,
+        )
+        .unwrap();
+        let err = enqueue_run(
+            &db.conn,
+            &meeting.id,
+            &RetranscribeOptions::default(),
+            IfBusy::Refuse,
+        )
+        .unwrap_err();
         assert!(err.contains("already being transcribed"), "{err}");
     }
 
@@ -356,8 +388,8 @@ mod tests {
     #[test]
     fn an_unknown_meeting_is_an_error() {
         let db = TestDb::new();
-        let err = enqueue_transcription(&db.conn, "nope", &RetranscribeOptions::default())
-            .unwrap_err();
+        let err =
+            enqueue_transcription(&db.conn, "nope", &RetranscribeOptions::default()).unwrap_err();
         assert!(err.contains("not found"), "{err}");
     }
 
@@ -380,9 +412,15 @@ mod tests {
         assert_eq!(job.status, JobStatus::Queued);
         assert_eq!((job.progress_done, job.progress_total), (2, 5));
         // It keeps its place: still ahead of the job that was queued later.
-        assert_eq!(store::next_queued_job(&db.conn).unwrap().unwrap().id, running.job_id);
         assert_eq!(
-            store::get_job(&db.conn, &queued.job_id).unwrap().unwrap().status,
+            store::next_queued_job(&db.conn).unwrap().unwrap().id,
+            running.job_id
+        );
+        assert_eq!(
+            store::get_job(&db.conn, &queued.job_id)
+                .unwrap()
+                .unwrap()
+                .status,
             JobStatus::Queued
         );
         assert_eq!(recover_at_launch(&db.conn).unwrap(), 0);
@@ -391,7 +429,9 @@ mod tests {
     #[test]
     fn models_meetings_cannot_use_are_refused_with_a_reason() {
         assert!(usable_model("").unwrap_err().contains("No model is chosen"));
-        assert!(usable_model("../../etc/passwd").unwrap_err().contains("Unknown transcription model"));
+        assert!(usable_model("../../etc/passwd")
+            .unwrap_err()
+            .contains("Unknown transcription model"));
         let err = usable_model("parakeet-tdt-0.6b-v3").unwrap_err();
         assert!(err.contains("needs a Whisper model"), "{err}");
     }

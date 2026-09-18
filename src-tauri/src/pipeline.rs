@@ -59,7 +59,10 @@ pub const CORRECTION_PROMPT_LIMIT: i64 = 40;
 /// the decoder biases toward them on ambiguous audio. With the developer
 /// dictionary on, the built-in vocabulary fills whatever budget the user's
 /// terms leave over.
-pub fn build_vocabulary_prompt(user_terms: &[String], developer_dictionary: bool) -> Option<String> {
+pub fn build_vocabulary_prompt(
+    user_terms: &[String],
+    developer_dictionary: bool,
+) -> Option<String> {
     if developer_dictionary {
         dev_vocab::build_biased_prompt(user_terms, CORRECTION_PROMPT_CHAR_CAP)
     } else {
@@ -314,10 +317,7 @@ mod tests {
 
     #[test]
     fn smart_formatting_preserves_whitespace_and_capitalises_first_letter() {
-        assert_eq!(
-            apply_smart_formatting("hello   world"),
-            "Hello   world"
-        );
+        assert_eq!(apply_smart_formatting("hello   world"), "Hello   world");
         assert_eq!(
             apply_smart_formatting("line one\nline two"),
             "Line one\nline two"
@@ -327,9 +327,18 @@ mod tests {
 
     #[test]
     fn filter_reports_which_rule_dropped_the_transcript() {
-        assert_eq!(filter_transcript("[BLANK_AUDIO]", &[], true), Err(DropReason::Filtered));
-        assert_eq!(filter_transcript("And Linux.", &[], true), Err(DropReason::PromptEcho));
-        assert_eq!(filter_transcript("Ja, dat klopt.", &[], true), Err(DropReason::UnderWordFloor));
+        assert_eq!(
+            filter_transcript("[BLANK_AUDIO]", &[], true),
+            Err(DropReason::Filtered)
+        );
+        assert_eq!(
+            filter_transcript("And Linux.", &[], true),
+            Err(DropReason::PromptEcho)
+        );
+        assert_eq!(
+            filter_transcript("Ja, dat klopt.", &[], true),
+            Err(DropReason::UnderWordFloor)
+        );
         assert_eq!(
             filter_transcript(" Dit is een gewone Nederlandse zin. ", &[], true),
             Ok("Dit is een gewone Nederlandse zin.".to_string())

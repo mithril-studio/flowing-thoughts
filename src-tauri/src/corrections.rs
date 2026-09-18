@@ -81,21 +81,22 @@ pub fn extract_corrections(
     let mut pairs: Vec<(String, String)> = Vec::new();
     let mut deleted: Vec<&str> = Vec::new();
     let mut inserted: Vec<&str> = Vec::new();
-    let flush = |deleted: &mut Vec<&str>, inserted: &mut Vec<&str>, pairs: &mut Vec<(String, String)>| {
-        let learnable = !deleted.is_empty()
-            && !inserted.is_empty()
-            && deleted.len() <= MAX_HUNK_WORDS
-            && inserted.len() <= MAX_HUNK_WORDS;
-        if learnable {
-            let wrong = deleted.join(" ");
-            let right = inserted.join(" ");
-            if wrong != right && !pairs.iter().any(|(w, _)| *w == wrong) {
-                pairs.push((wrong, right));
+    let flush =
+        |deleted: &mut Vec<&str>, inserted: &mut Vec<&str>, pairs: &mut Vec<(String, String)>| {
+            let learnable = !deleted.is_empty()
+                && !inserted.is_empty()
+                && deleted.len() <= MAX_HUNK_WORDS
+                && inserted.len() <= MAX_HUNK_WORDS;
+            if learnable {
+                let wrong = deleted.join(" ");
+                let right = inserted.join(" ");
+                if wrong != right && !pairs.iter().any(|(w, _)| *w == wrong) {
+                    pairs.push((wrong, right));
+                }
             }
-        }
-        deleted.clear();
-        inserted.clear();
-    };
+            deleted.clear();
+            inserted.clear();
+        };
     for op in ops {
         match op {
             DiffOp::Keep => flush(&mut deleted, &mut inserted, &mut pairs),
@@ -230,7 +231,10 @@ pub fn apply_replacements(text: &str, pairs: &[(String, String)]) -> String {
 /// Build a Whisper `prompt` string from the top-N intended (correct) terms.
 /// Whisper accepts up to ~224 tokens; we cap at a conservative character
 /// budget so we don't overflow.
-pub fn build_prompt_from_corrections(intended_terms: &[String], max_chars: usize) -> Option<String> {
+pub fn build_prompt_from_corrections(
+    intended_terms: &[String],
+    max_chars: usize,
+) -> Option<String> {
     if intended_terms.is_empty() {
         return None;
     }
@@ -338,7 +342,9 @@ mod tests {
     use super::*;
 
     fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
-        v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        v.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
     }
 
     #[test]
@@ -392,10 +398,7 @@ mod tests {
     #[test]
     fn deleted_filler_word_next_to_a_fix_is_still_learned() {
         // "eigenlijk" removed, "de" -> "the": one hunk, deletion + substitution.
-        let got = extract_corrections(
-            "dit is eigenlijk de beste optie",
-            "dit is the beste optie",
-        );
+        let got = extract_corrections("dit is eigenlijk de beste optie", "dit is the beste optie");
         assert_eq!(got, Ok(pairs(&[("eigenlijk de", "the")])));
     }
 
@@ -425,7 +428,10 @@ mod tests {
 
     #[test]
     fn empty_original_is_rejected() {
-        assert_eq!(extract_corrections("", "something"), Err(RejectReason::Empty));
+        assert_eq!(
+            extract_corrections("", "something"),
+            Err(RejectReason::Empty)
+        );
     }
 
     #[test]
@@ -473,7 +479,10 @@ mod tests {
     fn apply_replacement_is_case_insensitive_match_but_preserves_case_on_leading_upper() {
         // Wrong has different case in text; match should still fire, and the
         // original's leading-upper should carry through.
-        let got = apply_replacements("Hello Jooost and joost", &[("Jooost".to_string(), "Joost".to_string())]);
+        let got = apply_replacements(
+            "Hello Jooost and joost",
+            &[("Jooost".to_string(), "Joost".to_string())],
+        );
         assert_eq!(got, "Hello Joost and joost");
     }
 
@@ -519,11 +528,7 @@ mod tests {
 
     #[test]
     fn build_prompt_from_corrections_stops_at_budget() {
-        let terms = vec![
-            "alpha".to_string(),
-            "beta".to_string(),
-            "gamma".to_string(),
-        ];
+        let terms = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
         let got = build_prompt_from_corrections(&terms, 12).unwrap();
         // "alpha, beta" = 11 chars, fits. Adding ", gamma" = 7 more → over cap.
         assert_eq!(got, "alpha, beta");

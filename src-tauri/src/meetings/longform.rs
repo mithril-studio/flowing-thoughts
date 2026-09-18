@@ -118,7 +118,12 @@ pub fn place_block_ranges(
     let block_end_ms = block_start_ms + block_len_ms;
     let mut placed: Vec<(u64, u64)> = ranges
         .iter()
-        .map(|&(start, end)| (block_start_ms + start.min(block_len_ms), block_start_ms + end.min(block_len_ms)))
+        .map(|&(start, end)| {
+            (
+                block_start_ms + start.min(block_len_ms),
+                block_start_ms + end.min(block_len_ms),
+            )
+        })
         .filter(|(start, end)| end > start)
         .collect();
     if is_last_block {
@@ -130,7 +135,10 @@ pub fn place_block_ranges(
     if last_end + BLOCK_EDGE_MS < block_end_ms {
         return (placed, block_end_ms);
     }
-    let previous_end = placed.len().checked_sub(2).map_or(block_start_ms, |i| placed[i].1);
+    let previous_end = placed
+        .len()
+        .checked_sub(2)
+        .map_or(block_start_ms, |i| placed[i].1);
     let next_start = last_start.saturating_sub(CARRY_LEAD_MS).max(previous_end);
     // A block that is one long range from its first sample cannot be carried:
     // the next block would be this one again.
@@ -336,7 +344,11 @@ pub fn decode_window(
             start_ms,
             end_ms,
             text: text.to_string(),
-            lang: if seg.lang.is_empty() { language.to_string() } else { seg.lang },
+            lang: if seg.lang.is_empty() {
+                language.to_string()
+            } else {
+                seg.lang
+            },
             no_speech_prob: seg.no_speech_prob,
             avg_logprob: seg.avg_logprob,
             suppressed_reason: None,
@@ -479,7 +491,8 @@ pub fn flag_segments(segments: &mut [WindowSegment], speech: &[(u64, u64)], prom
     let mut in_repeat_run = vec![false; segments.len()];
     let mut run_start = 0;
     for i in 1..=segments.len() {
-        if i < segments.len() && !normalized[i].is_empty() && normalized[i] == normalized[run_start] {
+        if i < segments.len() && !normalized[i].is_empty() && normalized[i] == normalized[run_start]
+        {
             continue;
         }
         if i - run_start >= REPEAT_RUN {
@@ -516,10 +529,17 @@ pub fn flag_segments(segments: &mut [WindowSegment], speech: &[(u64, u64)], prom
 /// nothing to say. Pass an empty title for a default, generated one.
 pub fn build_initial_prompt(title: &str, participants: &[String]) -> Option<String> {
     let title: String = title.trim().chars().take(PROMPT_TITLE_MAX_CHARS).collect();
-    let mut prompt = title.trim_end().trim_end_matches(['.', ',', ';', ':']).to_string();
+    let mut prompt = title
+        .trim_end()
+        .trim_end_matches(['.', ',', ';', ':'])
+        .to_string();
     let mut used = prompt.chars().count();
     let mut names: Vec<&str> = Vec::new();
-    for name in participants.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+    for name in participants
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+    {
         if names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
             continue;
         }
@@ -636,7 +656,9 @@ impl WindowDecoder for WhisperDecoder {
         if output.aborted {
             let _ = crate::storage::append_log(
                 "INFO",
-                &format!("Meetings: window of {audio_ms}ms preempted by dictation after {elapsed_ms}ms"),
+                &format!(
+                    "Meetings: window of {audio_ms}ms preempted by dictation after {elapsed_ms}ms"
+                ),
             );
             return Ok(DecodeResult::Preempted);
         }
@@ -667,7 +689,10 @@ pub(crate) struct MemoryTrackAudio {
 #[cfg(test)]
 impl MemoryTrackAudio {
     pub fn new(samples: Vec<f32>) -> Self {
-        Self { samples, reads: Vec::new() }
+        Self {
+            samples,
+            reads: Vec::new(),
+        }
     }
 
     /// Silence, with a constant 0.5 wherever `speech` (ms ranges) says so.
@@ -724,7 +749,11 @@ impl SpeechDetector for LevelDetector {
 mod tests {
     use super::*;
 
-    fn assert_window_invariants(windows: &[PlannedWindow], ranges: &[(u64, u64)], track_end_ms: u64) {
+    fn assert_window_invariants(
+        windows: &[PlannedWindow],
+        ranges: &[(u64, u64)],
+        track_end_ms: u64,
+    ) {
         for (i, w) in windows.iter().enumerate() {
             assert_eq!(w.seq, i as u32);
             assert!(w.end_ms > w.start_ms, "empty window {w:?}");
@@ -732,14 +761,21 @@ mod tests {
             assert!(w.end_ms <= track_end_ms, "window past the track: {w:?}");
         }
         for pair in windows.windows(2) {
-            assert!(pair[0].end_ms <= pair[1].start_ms, "windows overlap: {pair:?}");
+            assert!(
+                pair[0].end_ms <= pair[1].start_ms,
+                "windows overlap: {pair:?}"
+            );
         }
         for &(start, end) in ranges {
             let covered: u64 = windows
                 .iter()
                 .map(|w| w.end_ms.min(end).saturating_sub(w.start_ms.max(start)))
                 .sum();
-            assert_eq!(covered, end - start, "range {start}..{end} not covered by {windows:?}");
+            assert_eq!(
+                covered,
+                end - start,
+                "range {start}..{end} not covered by {windows:?}"
+            );
         }
     }
 
@@ -749,7 +785,14 @@ mod tests {
     fn nearby_ranges_share_a_padded_window() {
         let ranges = [(1_000, 4_000), (5_000, 9_000), (11_500, 12_000)];
         let windows = pack_windows(&ranges, 60_000);
-        assert_eq!(windows, vec![PlannedWindow { seq: 0, start_ms: 800, end_ms: 12_200 }]);
+        assert_eq!(
+            windows,
+            vec![PlannedWindow {
+                seq: 0,
+                start_ms: 800,
+                end_ms: 12_200
+            }]
+        );
     }
 
     #[test]
@@ -761,8 +804,16 @@ mod tests {
         assert_eq!(
             split,
             vec![
-                PlannedWindow { seq: 0, start_ms: 0, end_ms: 2_200 },
-                PlannedWindow { seq: 1, start_ms: 4_801, end_ms: 6_200 },
+                PlannedWindow {
+                    seq: 0,
+                    start_ms: 0,
+                    end_ms: 2_200
+                },
+                PlannedWindow {
+                    seq: 1,
+                    start_ms: 4_801,
+                    end_ms: 6_200
+                },
             ]
         );
     }
@@ -775,13 +826,27 @@ mod tests {
         assert_window_invariants(&windows, &ranges, 300_000);
         // Two turns fit (20.5 s), a third would not (31 s).
         assert_eq!(windows.len(), 14);
-        assert_eq!(windows[0], PlannedWindow { seq: 0, start_ms: 0, end_ms: 20_700 });
+        assert_eq!(
+            windows[0],
+            PlannedWindow {
+                seq: 0,
+                start_ms: 0,
+                end_ms: 20_700
+            }
+        );
     }
 
     #[test]
     fn a_full_window_gives_up_padding_to_stay_under_the_cap() {
         let windows = pack_windows(&[(1_000, 28_900)], 60_000);
-        assert_eq!(windows, vec![PlannedWindow { seq: 0, start_ms: 950, end_ms: 28_950 }]);
+        assert_eq!(
+            windows,
+            vec![PlannedWindow {
+                seq: 0,
+                start_ms: 950,
+                end_ms: 28_950
+            }]
+        );
     }
 
     #[test]
@@ -792,9 +857,30 @@ mod tests {
         assert_eq!(windows.len(), 3);
         // The cuts are in the middle of speech: no padding there, and the
         // parts meet exactly.
-        assert_eq!(windows[0], PlannedWindow { seq: 0, start_ms: 9_800, end_ms: 30_000 });
-        assert_eq!(windows[1], PlannedWindow { seq: 1, start_ms: 30_000, end_ms: 50_000 });
-        assert_eq!(windows[2], PlannedWindow { seq: 2, start_ms: 50_000, end_ms: 70_200 });
+        assert_eq!(
+            windows[0],
+            PlannedWindow {
+                seq: 0,
+                start_ms: 9_800,
+                end_ms: 30_000
+            }
+        );
+        assert_eq!(
+            windows[1],
+            PlannedWindow {
+                seq: 1,
+                start_ms: 30_000,
+                end_ms: 50_000
+            }
+        );
+        assert_eq!(
+            windows[2],
+            PlannedWindow {
+                seq: 2,
+                start_ms: 50_000,
+                end_ms: 70_200
+            }
+        );
     }
 
     #[test]
@@ -808,18 +894,43 @@ mod tests {
         assert_eq!(
             windows,
             vec![
-                PlannedWindow { seq: 0, start_ms: 0, end_ms: 20_050 },
-                PlannedWindow { seq: 1, start_ms: 20_050, end_ms: 40_000 },
-                PlannedWindow { seq: 2, start_ms: 40_000, end_ms: 60_000 },
+                PlannedWindow {
+                    seq: 0,
+                    start_ms: 0,
+                    end_ms: 20_050
+                },
+                PlannedWindow {
+                    seq: 1,
+                    start_ms: 20_050,
+                    end_ms: 40_000
+                },
+                PlannedWindow {
+                    seq: 2,
+                    start_ms: 40_000,
+                    end_ms: 60_000
+                },
             ]
         );
     }
 
     #[test]
     fn unsorted_overlapping_and_empty_ranges_are_tolerated() {
-        let ranges = [(9_000, 12_000), (1_000, 5_000), (4_000, 6_000), (2_000, 3_000), (7_000, 7_000)];
+        let ranges = [
+            (9_000, 12_000),
+            (1_000, 5_000),
+            (4_000, 6_000),
+            (2_000, 3_000),
+            (7_000, 7_000),
+        ];
         let windows = pack_windows(&ranges, 20_000);
-        assert_eq!(windows, vec![PlannedWindow { seq: 0, start_ms: 800, end_ms: 12_200 }]);
+        assert_eq!(
+            windows,
+            vec![PlannedWindow {
+                seq: 0,
+                start_ms: 800,
+                end_ms: 12_200
+            }]
+        );
         assert!(pack_windows(&[], 20_000).is_empty());
     }
 
@@ -828,16 +939,27 @@ mod tests {
         // Deterministic LCG: range and gap lengths from 50 ms to 40 s.
         let mut seed: u64 = 0x5eed;
         let mut next = |max: u64| {
-            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             50 + (seed >> 33) % max
         };
         for _ in 0..200 {
             let mut ranges = Vec::new();
             let mut t = next(5_000);
             for _ in 0..next(40) {
-                let len = if next(10) > 8 { next(40_000) } else { next(6_000) };
+                let len = if next(10) > 8 {
+                    next(40_000)
+                } else {
+                    next(6_000)
+                };
                 ranges.push((t, t + len));
-                t += len + if next(10) > 6 { next(8_000) } else { next(400) - 50 };
+                t += len
+                    + if next(10) > 6 {
+                        next(8_000)
+                    } else {
+                        next(400) - 50
+                    };
             }
             let track_end_ms = t + next(1_000);
             let windows = pack_windows(&ranges, track_end_ms);
@@ -859,8 +981,12 @@ mod tests {
         assert_eq!(next, BLOCK_MS);
 
         // The lead-in never reaches back into speech that is already placed.
-        let (complete, next) =
-            place_block_ranges(0, BLOCK_MS, &[(290_000, 297_900), (298_000, 300_000)], false);
+        let (complete, next) = place_block_ranges(
+            0,
+            BLOCK_MS,
+            &[(290_000, 297_900), (298_000, 300_000)],
+            false,
+        );
         assert_eq!(complete, vec![(290_000, 297_900)]);
         assert_eq!(next, 297_900);
 
@@ -877,17 +1003,38 @@ mod tests {
 
     #[test]
     fn planning_reads_in_blocks_and_keeps_border_speech_in_one_window() {
-        let speech = [(5_000, 8_000), (298_000, 302_000), (450_000, 452_000), (598_500, 601_000)];
+        let speech = [
+            (5_000, 8_000),
+            (298_000, 302_000),
+            (450_000, 452_000),
+            (598_500, 601_000),
+        ];
         let mut audio = MemoryTrackAudio::with_speech(640_000, &speech);
         let windows = plan_windows(&mut audio, &mut LevelDetector).unwrap();
         assert_window_invariants(&windows, &speech, 640_000);
         assert_eq!(
             windows,
             vec![
-                PlannedWindow { seq: 0, start_ms: 4_800, end_ms: 8_200 },
-                PlannedWindow { seq: 1, start_ms: 297_800, end_ms: 302_200 },
-                PlannedWindow { seq: 2, start_ms: 449_800, end_ms: 452_200 },
-                PlannedWindow { seq: 3, start_ms: 598_300, end_ms: 601_200 },
+                PlannedWindow {
+                    seq: 0,
+                    start_ms: 4_800,
+                    end_ms: 8_200
+                },
+                PlannedWindow {
+                    seq: 1,
+                    start_ms: 297_800,
+                    end_ms: 302_200
+                },
+                PlannedWindow {
+                    seq: 2,
+                    start_ms: 449_800,
+                    end_ms: 452_200
+                },
+                PlannedWindow {
+                    seq: 3,
+                    start_ms: 598_300,
+                    end_ms: 601_200
+                },
             ]
         );
         // Block two starts where the carried speech starts, less the lead-in.
@@ -901,9 +1048,13 @@ mod tests {
     #[test]
     fn a_silent_or_empty_track_has_no_windows() {
         let mut audio = MemoryTrackAudio::with_speech(10_000, &[]);
-        assert!(plan_windows(&mut audio, &mut LevelDetector).unwrap().is_empty());
+        assert!(plan_windows(&mut audio, &mut LevelDetector)
+            .unwrap()
+            .is_empty());
         let mut audio = MemoryTrackAudio::new(Vec::new());
-        assert!(plan_windows(&mut audio, &mut LevelDetector).unwrap().is_empty());
+        assert!(plan_windows(&mut audio, &mut LevelDetector)
+            .unwrap()
+            .is_empty());
         assert!(audio.reads.is_empty());
     }
 
@@ -930,7 +1081,12 @@ mod tests {
 
     impl ScriptedDecoder {
         fn new(result: DecodeResult) -> Self {
-            Self { result, detected: "nl", decodes: Vec::new(), detections: Vec::new() }
+            Self {
+                result,
+                detected: "nl",
+                decodes: Vec::new(),
+                detections: Vec::new(),
+            }
         }
     }
 
@@ -946,14 +1102,22 @@ mod tests {
             language: &str,
             prompt: Option<&str>,
         ) -> Result<DecodeResult, String> {
-            self.decodes.push((samples.len(), language.to_string(), prompt.map(str::to_owned)));
+            self.decodes.push((
+                samples.len(),
+                language.to_string(),
+                prompt.map(str::to_owned),
+            ));
             Ok(self.result.clone())
         }
     }
 
     #[test]
     fn segment_times_map_linearly_onto_the_meeting_timeline() {
-        let window = PlannedWindow { seq: 7, start_ms: 600_000, end_ms: 610_000 };
+        let window = PlannedWindow {
+            seq: 7,
+            start_ms: 600_000,
+            end_ms: 610_000,
+        };
         assert_eq!(map_to_timeline(&window, 0), 600_000);
         assert_eq!(map_to_timeline(&window, 1), 600_001);
         assert_eq!(map_to_timeline(&window, 4_320), 604_320);
@@ -964,7 +1128,11 @@ mod tests {
 
     #[test]
     fn a_window_decodes_into_ordered_in_window_segments() {
-        let window = PlannedWindow { seq: 0, start_ms: 600_000, end_ms: 610_000 };
+        let window = PlannedWindow {
+            seq: 0,
+            start_ms: 600_000,
+            end_ms: 610_000,
+        };
         let mut audio = MemoryTrackAudio::with_speech(700_000, &[(600_200, 609_800)]);
         let mut decoder = ScriptedDecoder::new(DecodeResult::Segments(vec![
             raw(0, 2_500, " Goedemorgen allemaal."),
@@ -973,15 +1141,28 @@ mod tests {
             // Starts before its predecessor and ends past the audio.
             raw(2_000, 29_000, " Ja."),
         ]));
-        let outcome =
-            decode_window(&mut audio, &window, "nl", Some("Standup."), &mut LevelDetector, &mut decoder)
-                .unwrap();
-        let WindowOutcome::Done(segments) = outcome else { panic!("expected segments") };
+        let outcome = decode_window(
+            &mut audio,
+            &window,
+            "nl",
+            Some("Standup."),
+            &mut LevelDetector,
+            &mut decoder,
+        )
+        .unwrap();
+        let WindowOutcome::Done(segments) = outcome else {
+            panic!("expected segments")
+        };
 
         assert_eq!(audio.reads, vec![(600_000, 10_000)]);
-        assert_eq!(decoder.decodes, vec![(160_000, "nl".to_string(), Some("Standup.".to_string()))]);
-        let got: Vec<(u32, u64, u64, &str)> =
-            segments.iter().map(|s| (s.seq, s.start_ms, s.end_ms, s.text.as_str())).collect();
+        assert_eq!(
+            decoder.decodes,
+            vec![(160_000, "nl".to_string(), Some("Standup.".to_string()))]
+        );
+        let got: Vec<(u32, u64, u64, &str)> = segments
+            .iter()
+            .map(|s| (s.seq, s.start_ms, s.end_ms, s.text.as_str()))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -990,42 +1171,83 @@ mod tests {
                 (2, 602_500, 610_000, "Ja."),
             ]
         );
-        assert!(segments.iter().all(|s| s.suppressed_reason.is_none() && s.lang == "nl"));
+        assert!(segments
+            .iter()
+            .all(|s| s.suppressed_reason.is_none() && s.lang == "nl"));
     }
 
     #[test]
     fn a_preempted_decode_is_an_outcome_not_an_error() {
-        let window = PlannedWindow { seq: 0, start_ms: 0, end_ms: 5_000 };
+        let window = PlannedWindow {
+            seq: 0,
+            start_ms: 0,
+            end_ms: 5_000,
+        };
         let mut audio = MemoryTrackAudio::with_speech(5_000, &[(500, 4_500)]);
         let mut decoder = ScriptedDecoder::new(DecodeResult::Preempted);
-        let outcome =
-            decode_window(&mut audio, &window, "en", None, &mut LevelDetector, &mut decoder).unwrap();
+        let outcome = decode_window(
+            &mut audio,
+            &window,
+            "en",
+            None,
+            &mut LevelDetector,
+            &mut decoder,
+        )
+        .unwrap();
         assert_eq!(outcome, WindowOutcome::Preempted);
     }
 
     #[test]
     fn text_decoded_from_the_silent_part_of_a_window_is_flagged() {
-        let window = PlannedWindow { seq: 0, start_ms: 10_000, end_ms: 20_000 };
-        let mut audio = MemoryTrackAudio::with_speech(30_000, &[(10_200, 13_000), (15_500, 19_800)]);
+        let window = PlannedWindow {
+            seq: 0,
+            start_ms: 10_000,
+            end_ms: 20_000,
+        };
+        let mut audio =
+            MemoryTrackAudio::with_speech(30_000, &[(10_200, 13_000), (15_500, 19_800)]);
         let mut decoder = ScriptedDecoder::new(DecodeResult::Segments(vec![
             raw(200, 3_000, " We ship on Friday."),
             raw(3_100, 5_400, " Thanks for watching!"),
             raw(5_500, 9_800, " Any objections?"),
         ]));
-        let outcome =
-            decode_window(&mut audio, &window, "en", None, &mut LevelDetector, &mut decoder).unwrap();
-        let WindowOutcome::Done(segments) = outcome else { panic!("expected segments") };
+        let outcome = decode_window(
+            &mut audio,
+            &window,
+            "en",
+            None,
+            &mut LevelDetector,
+            &mut decoder,
+        )
+        .unwrap();
+        let WindowOutcome::Done(segments) = outcome else {
+            panic!("expected segments")
+        };
         let reasons: Vec<_> = segments.iter().map(|s| s.suppressed_reason).collect();
-        assert_eq!(reasons, vec![None, Some(SuppressedReason::OutsideVad), None]);
+        assert_eq!(
+            reasons,
+            vec![None, Some(SuppressedReason::OutsideVad), None]
+        );
     }
 
     #[test]
     fn a_window_past_the_end_of_the_audio_is_done_and_empty() {
-        let window = PlannedWindow { seq: 0, start_ms: 50_000, end_ms: 60_000 };
+        let window = PlannedWindow {
+            seq: 0,
+            start_ms: 50_000,
+            end_ms: 60_000,
+        };
         let mut audio = MemoryTrackAudio::with_speech(5_000, &[]);
         let mut decoder = ScriptedDecoder::new(DecodeResult::Preempted);
-        let outcome =
-            decode_window(&mut audio, &window, "en", None, &mut LevelDetector, &mut decoder).unwrap();
+        let outcome = decode_window(
+            &mut audio,
+            &window,
+            "en",
+            None,
+            &mut LevelDetector,
+            &mut decoder,
+        )
+        .unwrap();
         assert_eq!(outcome, WindowOutcome::Done(Vec::new()));
         assert!(decoder.decodes.is_empty());
     }
@@ -1034,7 +1256,11 @@ mod tests {
 
     #[test]
     fn a_set_or_known_language_never_touches_audio_or_model() {
-        let windows = [PlannedWindow { seq: 0, start_ms: 0, end_ms: 5_000 }];
+        let windows = [PlannedWindow {
+            seq: 0,
+            start_ms: 0,
+            end_ms: 5_000,
+        }];
         let mut audio = MemoryTrackAudio::with_speech(5_000, &[(0, 5_000)]);
         let mut decoder = ScriptedDecoder::new(DecodeResult::Preempted);
         for (requested, known, expected) in [
@@ -1053,16 +1279,34 @@ mod tests {
     #[test]
     fn auto_detects_once_on_the_first_thirty_seconds_of_windows() {
         let windows = [
-            PlannedWindow { seq: 0, start_ms: 10_000, end_ms: 22_000 },
-            PlannedWindow { seq: 1, start_ms: 40_000, end_ms: 60_000 },
-            PlannedWindow { seq: 2, start_ms: 90_000, end_ms: 100_000 },
+            PlannedWindow {
+                seq: 0,
+                start_ms: 10_000,
+                end_ms: 22_000,
+            },
+            PlannedWindow {
+                seq: 1,
+                start_ms: 40_000,
+                end_ms: 60_000,
+            },
+            PlannedWindow {
+                seq: 2,
+                start_ms: 90_000,
+                end_ms: 100_000,
+            },
         ];
         let mut audio = MemoryTrackAudio::with_speech(120_000, &[]);
         let mut decoder = ScriptedDecoder::new(DecodeResult::Preempted);
         decoder.detected = "en";
         // A language stored by some other version is not trusted.
-        let got =
-            track_language(MeetingLanguage::Auto, Some("af"), &mut audio, &windows, &mut decoder).unwrap();
+        let got = track_language(
+            MeetingLanguage::Auto,
+            Some("af"),
+            &mut audio,
+            &windows,
+            &mut decoder,
+        )
+        .unwrap();
         assert_eq!(got, "en");
         assert_eq!(audio.reads, vec![(10_000, 12_000), (40_000, 18_000)]);
         assert_eq!(decoder.detections, vec![30 * 16_000]);
@@ -1121,15 +1365,23 @@ mod tests {
 
     #[test]
     fn ngram_loops_are_found_and_emphasis_is_not() {
-        assert!(has_ngram_loop("Thank you. Thank you. Thank you. Thank you."));
-        assert!(has_ngram_loop("so we need to we need to we need to we need to go"));
-        assert!(has_ngram_loop("and then I said I'll be right back I'll be right back I'll be right back"));
+        assert!(has_ngram_loop(
+            "Thank you. Thank you. Thank you. Thank you."
+        ));
+        assert!(has_ngram_loop(
+            "so we need to we need to we need to we need to go"
+        ));
+        assert!(has_ngram_loop(
+            "and then I said I'll be right back I'll be right back I'll be right back"
+        ));
         assert!(has_ngram_loop("ja ja ja ja ja ja ja ja"));
         // Near-misses: too few repeats, too few words, or not back to back.
         assert!(!has_ngram_loop("No, no, no."));
         assert!(!has_ngram_loop("Thank you. Thank you. Thank you."));
         assert!(!has_ngram_loop("I'll be right back, I'll be right back."));
-        assert!(!has_ngram_loop("we need to plan, we need to build, we need to ship, we need to rest"));
+        assert!(!has_ngram_loop(
+            "we need to plan, we need to build, we need to ship, we need to rest"
+        ));
         assert!(!has_ngram_loop("ja ja ja ja ja ja ja"));
         assert!(!has_ngram_loop(""));
     }
@@ -1169,13 +1421,22 @@ mod tests {
     #[test]
     fn prompt_echo_is_only_the_prompt_read_back() {
         let prompt = "Roadmap review. Anna de Vries, Piet Jansen, Joost.";
-        assert!(is_prompt_echo("Roadmap review. Anna de Vries, Piet Jansen, Joost.", prompt));
+        assert!(is_prompt_echo(
+            "Roadmap review. Anna de Vries, Piet Jansen, Joost.",
+            prompt
+        ));
         assert!(is_prompt_echo(" anna de vries piet jansen joost", prompt));
-        assert!(is_prompt_echo("Roadmap review, Roadmap review, Anna.", prompt));
+        assert!(is_prompt_echo(
+            "Roadmap review, Roadmap review, Anna.",
+            prompt
+        ));
         // Near-misses: a name said out loud, a short mention, a real sentence.
         assert!(!is_prompt_echo("Anna?", prompt));
         assert!(!is_prompt_echo("Piet Jansen.", prompt));
-        assert!(!is_prompt_echo("Anna de Vries and Piet Jansen will review the roadmap.", prompt));
+        assert!(!is_prompt_echo(
+            "Anna de Vries and Piet Jansen will review the roadmap.",
+            prompt
+        ));
         assert!(!is_prompt_echo("", prompt));
         assert!(!is_prompt_echo("Hello there.", ""));
     }
@@ -1217,16 +1478,29 @@ mod tests {
     fn the_prompt_is_title_plus_names_within_the_cap() {
         let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            build_initial_prompt(" Roadmap review. ", &names(&["Anna de Vries", " ", "Piet", "anna de vries"])),
+            build_initial_prompt(
+                " Roadmap review. ",
+                &names(&["Anna de Vries", " ", "Piet", "anna de vries"])
+            ),
             Some("Roadmap review. Anna de Vries, Piet.".to_string())
         );
-        assert_eq!(build_initial_prompt("Standup", &[]), Some("Standup.".to_string()));
-        assert_eq!(build_initial_prompt("", &names(&["Anna", "Piet"])), Some("Anna, Piet.".to_string()));
+        assert_eq!(
+            build_initial_prompt("Standup", &[]),
+            Some("Standup.".to_string())
+        );
+        assert_eq!(
+            build_initial_prompt("", &names(&["Anna", "Piet"])),
+            Some("Anna, Piet.".to_string())
+        );
         assert_eq!(build_initial_prompt("  ", &names(&[" "])), None);
 
         let many: Vec<String> = (0..60).map(|i| format!("Deelnemer Nummer{i}")).collect();
         let prompt = build_initial_prompt(&"Kwartaalplanning ".repeat(20), &many).unwrap();
-        assert!(prompt.chars().count() <= PROMPT_MAX_CHARS, "{} chars", prompt.chars().count());
+        assert!(
+            prompt.chars().count() <= PROMPT_MAX_CHARS,
+            "{} chars",
+            prompt.chars().count()
+        );
         assert!(prompt.chars().count() > 150);
         // Names are dropped whole, never cut.
         assert!(prompt.ends_with("Deelnemer Nummer3."), "{prompt}");
@@ -1239,7 +1513,9 @@ mod tests {
 
     #[test]
     fn parakeet_is_refused_with_a_clear_error() {
-        let err = WhisperDecoder::load(&ModelId::ParakeetV3).err().expect("must refuse Parakeet");
+        let err = WhisperDecoder::load(&ModelId::ParakeetV3)
+            .err()
+            .expect("must refuse Parakeet");
         assert!(err.contains("Whisper model"), "{err}");
     }
 
@@ -1280,13 +1556,25 @@ mod tests {
         let windows = plan_windows(&mut audio, &mut detector).unwrap();
         println!("  windows: {windows:?}");
         assert!(!windows.is_empty(), "VAD found no speech in the fixture");
-        assert!(windows[0].start_ms >= 29_000, "the leading silence must not be planned");
+        assert!(
+            windows[0].start_ms >= 29_000,
+            "the leading silence must not be planned"
+        );
         assert_window_invariants(&windows, &[], audio.duration_ms());
 
-        let language =
-            track_language(MeetingLanguage::Auto, None, &mut audio, &windows, &mut decoder).unwrap();
+        let language = track_language(
+            MeetingLanguage::Auto,
+            None,
+            &mut audio,
+            &windows,
+            &mut decoder,
+        )
+        .unwrap();
         println!("  language: {language}");
-        if std::env::var("FT_SAMPLE_WAV").unwrap_or_default().is_empty() {
+        if std::env::var("FT_SAMPLE_WAV")
+            .unwrap_or_default()
+            .is_empty()
+        {
             assert_eq!(language, "en");
         }
 
@@ -1302,22 +1590,35 @@ mod tests {
                 &mut decoder,
             )
             .unwrap();
-            let WindowOutcome::Done(segments) = outcome else { panic!("nothing preempts a test") };
+            let WindowOutcome::Done(segments) = outcome else {
+                panic!("nothing preempts a test")
+            };
             let mut previous_start = window.start_ms;
             for s in &segments {
                 println!(
                     "  [{:>6}..{:>6}] {:?} {:?} (no_speech {:.2}, logprob {:.2})",
-                    s.start_ms, s.end_ms, s.suppressed_reason, s.text, s.no_speech_prob, s.avg_logprob
+                    s.start_ms,
+                    s.end_ms,
+                    s.suppressed_reason,
+                    s.text,
+                    s.no_speech_prob,
+                    s.avg_logprob
                 );
                 assert!(s.start_ms >= previous_start, "segments out of order");
-                assert!(s.start_ms >= window.start_ms && s.end_ms <= window.end_ms, "segment outside its window");
+                assert!(
+                    s.start_ms >= window.start_ms && s.end_ms <= window.end_ms,
+                    "segment outside its window"
+                );
                 assert!(s.end_ms >= s.start_ms);
                 assert!(!s.text.is_empty() && s.text == s.text.trim());
                 assert_eq!(s.lang, language);
                 assert!(s.avg_logprob < 0.0, "avg_logprob was not filled in");
                 previous_start = s.start_ms;
             }
-            total += segments.iter().filter(|s| s.suppressed_reason.is_none()).count();
+            total += segments
+                .iter()
+                .filter(|s| s.suppressed_reason.is_none())
+                .count();
         }
         assert!(total > 0, "nothing was transcribed");
     }
@@ -1336,9 +1637,14 @@ mod tests {
         let mut decoder =
             WhisperDecoder::load(&ModelId::LargeV3TurboQ5).expect("large-v3-turbo model installed");
         decoder.abort = abort_on_second_poll;
-        let result = decoder.decode(&samples[..samples.len().min(28 * 16_000)], "en", None).unwrap();
+        let result = decoder
+            .decode(&samples[..samples.len().min(28 * 16_000)], "en", None)
+            .unwrap();
         assert_eq!(result, DecodeResult::Preempted);
-        assert!(POLLS.load(Ordering::Relaxed) >= 2, "whisper.cpp never polled the abort callback");
+        assert!(
+            POLLS.load(Ordering::Relaxed) >= 2,
+            "whisper.cpp never polled the abort callback"
+        );
 
         decoder.abort = || true;
         let result = decoder.decode(&samples[..16_000], "en", None).unwrap();

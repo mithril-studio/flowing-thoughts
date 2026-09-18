@@ -71,7 +71,8 @@ pub const CHUNK_EXTENSION: &str = "pcm";
 /// `~/Library/Application Support/FlowingThoughts/meetings`. Everything below
 /// takes the root as a parameter so tests can point it at a temp directory.
 pub fn meetings_root() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let home =
+        std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
@@ -83,7 +84,9 @@ pub fn meetings_root() -> Result<PathBuf, String> {
 /// that directory: refuse anything that could point somewhere else.
 fn validate_meeting_id(meeting_id: &str) -> Result<(), String> {
     let ok = !meeting_id.is_empty()
-        && meeting_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        && meeting_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if ok {
         Ok(())
     } else {
@@ -170,18 +173,29 @@ mod tests {
     #[test]
     fn layout_is_meeting_track_seq() {
         assert_eq!(chunk_file_name(7), "000007.pcm");
-        assert_eq!(chunk_rel_path("m-1", TrackKind::System, 12), "m-1/system/000012.pcm");
+        assert_eq!(
+            chunk_rel_path("m-1", TrackKind::System, 12),
+            "m-1/system/000012.pcm"
+        );
         assert_eq!(CHUNK_FRAMES, 960_000);
         let root = Path::new("/root");
-        assert_eq!(track_dir(root, "m-1", TrackKind::Mic).unwrap(), Path::new("/root/m-1/mic"));
-        assert!(meetings_root().unwrap().ends_with("FlowingThoughts/meetings"));
+        assert_eq!(
+            track_dir(root, "m-1", TrackKind::Mic).unwrap(),
+            Path::new("/root/m-1/mic")
+        );
+        assert!(meetings_root()
+            .unwrap()
+            .ends_with("FlowingThoughts/meetings"));
     }
 
     #[test]
     fn meeting_ids_cannot_escape_the_root() {
         for bad in ["", "..", "../other", "a/b", ".", "a b"] {
             assert!(meeting_dir(Path::new("/root"), bad).is_err(), "{bad:?}");
-            assert!(delete_meeting_audio_in(Path::new("/root"), bad).is_err(), "{bad:?}");
+            assert!(
+                delete_meeting_audio_in(Path::new("/root"), bad).is_err(),
+                "{bad:?}"
+            );
         }
         assert!(meeting_dir(Path::new("/root"), &uuid::Uuid::new_v4().to_string()).is_ok());
     }
@@ -197,7 +211,10 @@ mod tests {
 
         delete_meeting_audio_in(tmp.path(), "m1").unwrap();
         assert!(!tmp.path().join("m1").exists());
-        assert!(tmp.path().join("m2").exists(), "other meetings are untouched");
+        assert!(
+            tmp.path().join("m2").exists(),
+            "other meetings are untouched"
+        );
         delete_meeting_audio_in(tmp.path(), "m1").unwrap();
     }
 }

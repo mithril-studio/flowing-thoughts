@@ -83,11 +83,7 @@ extern "C" {
         order: isize,
     ) -> CFRunLoopSourceRef;
 
-    fn CFRunLoopAddSource(
-        rl: *mut c_void,
-        source: CFRunLoopSourceRef,
-        mode: *const c_void,
-    );
+    fn CFRunLoopAddSource(rl: *mut c_void, source: CFRunLoopSourceRef, mode: *const c_void);
 }
 
 #[link(name = "IOKit", kind = "framework")]
@@ -142,9 +138,7 @@ const KC_SPACE: i64 = 49;
 const K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION: u32 = 0;
 
 fn event_mask() -> u64 {
-    (1u64 << K_CG_EVENT_KEY_DOWN)
-        | (1u64 << K_CG_EVENT_KEY_UP)
-        | (1u64 << K_CG_EVENT_FLAGS_CHANGED)
+    (1u64 << K_CG_EVENT_KEY_DOWN) | (1u64 << K_CG_EVENT_KEY_UP) | (1u64 << K_CG_EVENT_FLAGS_CHANGED)
 }
 
 // --- Listener state ------------------------------------------------------
@@ -320,11 +314,7 @@ extern "C" fn tap_callback(
     // SAFETY: we allocated this Box and leaked it; pointer is valid.
     let ctx: &TapContext = unsafe { &*(user_info as *const TapContext) };
 
-    let mode = ctx
-        .mode_state
-        .lock()
-        .map(|g| *g)
-        .unwrap_or(HotkeyMode::Fn);
+    let mode = ctx.mode_state.lock().map(|g| *g).unwrap_or(HotkeyMode::Fn);
 
     let mut fsm = match ctx.state.lock() {
         Ok(g) => g,
@@ -504,7 +494,7 @@ mod tests {
         let mut f = ReleaseFailsafe::default();
         assert!(!f.observe(true, true));
         assert!(!f.observe(false, false)); // recording ended normally
-        // New recording: needs to see the key held again before it can fire.
+                                           // New recording: needs to see the key held again before it can fire.
         assert!(!f.observe(true, false));
         assert!(!f.observe(true, false));
         assert!(!f.observe(true, false));

@@ -281,7 +281,9 @@ pub(super) fn unfinished_jobs(conn: &Connection) -> Result<HashMap<String, JobPr
     )?;
     let mut by_meeting = HashMap::new();
     for job in jobs {
-        by_meeting.entry(job.meeting_id.clone()).or_insert_with(|| job.progress());
+        by_meeting
+            .entry(job.meeting_id.clone())
+            .or_insert_with(|| job.progress());
     }
     Ok(by_meeting)
 }

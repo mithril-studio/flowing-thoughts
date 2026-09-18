@@ -153,7 +153,9 @@ pub fn inject_text(text: &str) -> Result<(), String> {
         }
         Err(e) => {
             // Keep the dictation on the clipboard as a manual fallback.
-            Err(format!("{e} Your dictation is on the clipboard — press ⌘V to paste it."))
+            Err(format!(
+                "{e} Your dictation is on the clipboard — press ⌘V to paste it."
+            ))
         }
     }
 }

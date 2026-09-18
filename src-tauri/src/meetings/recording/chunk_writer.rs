@@ -107,7 +107,15 @@ impl ChunkWriter {
             config.origin_host_ns,
         );
         sidecar::write_atomic(&dir, &sidecar)?;
-        Ok(Self { config, dir, ledger, sidecar, open: None, next_seq: 0, bytes: Vec::new() })
+        Ok(Self {
+            config,
+            dir,
+            ledger,
+            sidecar,
+            open: None,
+            next_seq: 0,
+            bytes: Vec::new(),
+        })
     }
 
     /// Frames in the chunk being written, 0 when none is open.
@@ -143,7 +151,12 @@ impl ChunkWriter {
             .chunks
             .last()
             .map(|prev| {
-                gap_between_ms(prev.anchor_host_ns, prev.n_frames, TARGET_SAMPLE_RATE, anchor_host_ns)
+                gap_between_ms(
+                    prev.anchor_host_ns,
+                    prev.n_frames,
+                    TARGET_SAMPLE_RATE,
+                    anchor_host_ns,
+                )
             })
             .unwrap_or(0);
         self.sidecar.chunks.push(SidecarChunk {
@@ -160,9 +173,16 @@ impl ChunkWriter {
         // the bookkeeping below fails.
         let sidecar_result = sidecar::write_atomic(&self.dir, &self.sidecar);
         if let Err(e) = self.ledger.chunk_opened(&record) {
-            log("ERROR", &format!("Meetings: chunk ledger failed on open (seq {seq}): {e}"));
+            log(
+                "ERROR",
+                &format!("Meetings: chunk ledger failed on open (seq {seq}): {e}"),
+            );
         }
-        self.open = Some(OpenChunk { record, file, frames: 0 });
+        self.open = Some(OpenChunk {
+            record,
+            file,
+            frames: 0,
+        });
         sidecar_result
     }
 
@@ -170,13 +190,20 @@ impl ChunkWriter {
         let Some(chunk) = self.open.take() else {
             return Ok(());
         };
-        let sync_result = chunk
-            .file
-            .sync_all()
-            .map_err(|e| format!("Failed to sync chunk file {}: {e}", chunk_file_name(chunk.record.seq)));
+        let sync_result = chunk.file.sync_all().map_err(|e| {
+            format!(
+                "Failed to sync chunk file {}: {e}",
+                chunk_file_name(chunk.record.seq)
+            )
+        });
         drop(chunk.file);
 
-        if let Some(entry) = self.sidecar.chunks.iter_mut().find(|c| c.id == chunk.record.id) {
+        if let Some(entry) = self
+            .sidecar
+            .chunks
+            .iter_mut()
+            .find(|c| c.id == chunk.record.id)
+        {
             entry.status = ChunkStatus::Closed;
             entry.n_frames = chunk.frames;
         }
@@ -184,7 +211,10 @@ impl ChunkWriter {
         if let Err(e) = self.ledger.chunk_closed(&chunk.record.id, chunk.frames) {
             log(
                 "ERROR",
-                &format!("Meetings: chunk ledger failed on close (seq {}): {e}", chunk.record.seq),
+                &format!(
+                    "Meetings: chunk ledger failed on close (seq {}): {e}",
+                    chunk.record.seq
+                ),
             );
         }
         sync_result.and(sidecar_result)
@@ -213,12 +243,18 @@ impl SampleSink for ChunkWriter {
             }
             let take = (room.min(rest.len() as u64)) as usize;
             self.bytes.clear();
-            self.bytes.extend(rest[..take].iter().flat_map(|s| f32_to_s16(*s).to_le_bytes()));
+            self.bytes.extend(
+                rest[..take]
+                    .iter()
+                    .flat_map(|s| f32_to_s16(*s).to_le_bytes()),
+            );
             let chunk = self.open.as_mut().expect("checked above");
-            chunk
-                .file
-                .write_all(&self.bytes)
-                .map_err(|e| format!("Failed to write chunk file {}: {e}", chunk_file_name(chunk.record.seq)))?;
+            chunk.file.write_all(&self.bytes).map_err(|e| {
+                format!(
+                    "Failed to write chunk file {}: {e}",
+                    chunk_file_name(chunk.record.seq)
+                )
+            })?;
             chunk.frames += take as u64;
             rest = &rest[take..];
         }
@@ -286,16 +322,27 @@ pub(crate) mod test_support {
 
     impl ChunkLedger for FakeLedger {
         fn chunk_opened(&mut self, chunk: &ChunkRecord) -> Result<(), String> {
-            self.calls.lock().unwrap().push(LedgerCall::Opened(chunk.clone()));
-            if self.fail { Err("ledger down".into()) } else { Ok(()) }
-        }
-
-        fn chunk_closed(&mut self, chunk_id: &str, n_frames: u64) -> Result<(), String> {
             self.calls
                 .lock()
                 .unwrap()
-                .push(LedgerCall::Closed { id: chunk_id.to_string(), n_frames });
-            if self.fail { Err("ledger down".into()) } else { Ok(()) }
+                .push(LedgerCall::Opened(chunk.clone()));
+            if self.fail {
+                Err("ledger down".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn chunk_closed(&mut self, chunk_id: &str, n_frames: u64) -> Result<(), String> {
+            self.calls.lock().unwrap().push(LedgerCall::Closed {
+                id: chunk_id.to_string(),
+                n_frames,
+            });
+            if self.fail {
+                Err("ledger down".into())
+            } else {
+                Ok(())
+            }
         }
     }
 }
@@ -314,11 +361,16 @@ mod tests {
         let mut config =
             ChunkWriterConfig::new(tmp.path().to_path_buf(), "m1", "t1", TrackKind::Mic, ORIGIN);
         config.chunk_frames = chunk_frames;
-        (ChunkWriter::new(config, Box::new(ledger.clone())).unwrap(), ledger)
+        (
+            ChunkWriter::new(config, Box::new(ledger.clone())).unwrap(),
+            ledger,
+        )
     }
 
     fn file_len(tmp: &TempDir, seq: u32) -> u64 {
-        fs::metadata(tmp.path().join("m1").join("mic").join(chunk_file_name(seq))).unwrap().len()
+        fs::metadata(tmp.path().join("m1").join("mic").join(chunk_file_name(seq)))
+            .unwrap()
+            .len()
     }
 
     #[test]
@@ -346,13 +398,23 @@ mod tests {
 
         let records = ledger.records();
         assert_eq!(records.len(), 3);
-        assert_eq!(records.iter().map(|r| r.n_frames).collect::<Vec<_>>(), [960_000, 960_000, 160_000]);
-        assert_eq!(records.iter().map(|r| r.start_ms).collect::<Vec<_>>(), [2_000, 62_000, 122_000]);
+        assert_eq!(
+            records.iter().map(|r| r.n_frames).collect::<Vec<_>>(),
+            [960_000, 960_000, 160_000]
+        );
+        assert_eq!(
+            records.iter().map(|r| r.start_ms).collect::<Vec<_>>(),
+            [2_000, 62_000, 122_000]
+        );
         assert_eq!(records[1].anchor_host_ns, ORIGIN + 62 * SECOND);
         assert_eq!(records[2].path, "m1/mic/000002.pcm");
         for record in &records {
             assert_eq!(record.status, ChunkStatus::Closed);
-            assert_eq!(file_len(&tmp, record.seq), 2 * record.n_frames, "bytes = 2 x n_frames");
+            assert_eq!(
+                file_len(&tmp, record.seq),
+                2 * record.n_frames,
+                "bytes = 2 x n_frames"
+            );
         }
     }
 
@@ -375,22 +437,42 @@ mod tests {
             calls,
             vec![
                 LedgerCall::Opened(opened[0].clone()),
-                LedgerCall::Closed { id: opened[0].id.clone(), n_frames: 300 },
+                LedgerCall::Closed {
+                    id: opened[0].id.clone(),
+                    n_frames: 300
+                },
                 LedgerCall::Opened(opened[1].clone()),
-                LedgerCall::Closed { id: opened[1].id.clone(), n_frames: 1_000 },
+                LedgerCall::Closed {
+                    id: opened[1].id.clone(),
+                    n_frames: 1_000
+                },
                 LedgerCall::Opened(opened[2].clone()),
-                LedgerCall::Closed { id: opened[2].id.clone(), n_frames: 500 },
+                LedgerCall::Closed {
+                    id: opened[2].id.clone(),
+                    n_frames: 500
+                },
             ]
         );
-        assert!(opened.iter().all(|r| r.status == ChunkStatus::Open && r.n_frames == 0));
+        assert!(opened
+            .iter()
+            .all(|r| r.status == ChunkStatus::Open && r.n_frames == 0));
         assert_eq!(opened.iter().map(|r| r.seq).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(opened[1].start_ms, 268);
 
         // The sidecar tells the same story, plus the gap.
-        let sidecar = sidecar::read(&tmp.path().join("m1").join("mic")).unwrap().unwrap();
+        let sidecar = sidecar::read(&tmp.path().join("m1").join("mic"))
+            .unwrap()
+            .unwrap();
         assert_eq!(sidecar.origin_host_ns, ORIGIN);
         assert_eq!(sidecar.chunk_records(), ledger.records());
-        assert_eq!(sidecar.chunks.iter().map(|c| c.gap_before_ms).collect::<Vec<_>>(), [0, 250, 0]);
+        assert_eq!(
+            sidecar
+                .chunks
+                .iter()
+                .map(|c| c.gap_before_ms)
+                .collect::<Vec<_>>(),
+            [0, 250, 0]
+        );
 
         // s16le on disk.
         let bytes = fs::read(tmp.path().join("m1/mic/000000.pcm")).unwrap();
@@ -406,23 +488,36 @@ mod tests {
         writer.write(&[0.1; 160]).unwrap();
         assert_eq!(file_len(&tmp, 0), 320, "nothing is held back in user space");
         assert_eq!(writer.open_chunk_frames(), 160);
-        let sidecar = sidecar::read(&tmp.path().join("m1").join("mic")).unwrap().unwrap();
-        assert_eq!(sidecar.chunks[0].status, ChunkStatus::Open, "the open chunk is already listed");
+        let sidecar = sidecar::read(&tmp.path().join("m1").join("mic"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sidecar.chunks[0].status,
+            ChunkStatus::Open,
+            "the open chunk is already listed"
+        );
     }
 
     #[test]
     fn errors_are_results_not_panics() {
         let tmp = TempDir::new("chunks-errors");
         let (mut writer, _ledger) = writer(&tmp, 1_000);
-        assert!(writer.write(&[0.0; 4]).unwrap_err().contains("before begin"));
+        assert!(writer
+            .write(&[0.0; 4])
+            .unwrap_err()
+            .contains("before begin"));
 
         // The next chunk file is already there: refuse to overwrite it.
         fs::write(tmp.path().join("m1/mic/000000.pcm"), b"audio").unwrap();
         assert!(writer.begin(ORIGIN).unwrap_err().contains("000000.pcm"));
-        assert_eq!(fs::read(tmp.path().join("m1/mic/000000.pcm")).unwrap(), b"audio");
+        assert_eq!(
+            fs::read(tmp.path().join("m1/mic/000000.pcm")).unwrap(),
+            b"audio"
+        );
 
         // A second writer for the same track is refused as well.
-        let config = ChunkWriterConfig::new(tmp.path().to_path_buf(), "m1", "t1", TrackKind::Mic, ORIGIN);
+        let config =
+            ChunkWriterConfig::new(tmp.path().to_path_buf(), "m1", "t1", TrackKind::Mic, ORIGIN);
         assert!(ChunkWriter::new(config, Box::new(FakeLedger::default())).is_err());
 
         // A root that cannot hold directories.
@@ -435,15 +530,21 @@ mod tests {
     #[test]
     fn a_failing_ledger_does_not_stop_the_audio() {
         let tmp = TempDir::new("chunks-ledger");
-        let ledger = FakeLedger { fail: true, ..FakeLedger::default() };
-        let config = ChunkWriterConfig::new(tmp.path().to_path_buf(), "m1", "t1", TrackKind::Mic, ORIGIN);
+        let ledger = FakeLedger {
+            fail: true,
+            ..FakeLedger::default()
+        };
+        let config =
+            ChunkWriterConfig::new(tmp.path().to_path_buf(), "m1", "t1", TrackKind::Mic, ORIGIN);
         let mut writer = ChunkWriter::new(config, Box::new(ledger.clone())).unwrap();
         writer.begin(ORIGIN).unwrap();
         writer.write(&[0.5; 100]).unwrap();
         writer.finish().unwrap();
         assert_eq!(file_len(&tmp, 0), 200);
         assert_eq!(ledger.calls().len(), 2);
-        let sidecar = sidecar::read(&tmp.path().join("m1").join("mic")).unwrap().unwrap();
+        let sidecar = sidecar::read(&tmp.path().join("m1").join("mic"))
+            .unwrap()
+            .unwrap();
         assert_eq!(sidecar.chunks[0].n_frames, 100);
     }
 }

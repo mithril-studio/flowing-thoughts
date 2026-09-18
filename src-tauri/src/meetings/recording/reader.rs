@@ -124,7 +124,10 @@ impl ChunkTrackAudio {
             }
             let samples = read_frames(&self.root.join(&chunk.path), from - chunk_start, to - from)?;
             if !samples.is_empty() {
-                spans.push(AudioSpan { start_frame: from, samples });
+                spans.push(AudioSpan {
+                    start_frame: from,
+                    samples,
+                });
             }
         }
         Ok(spans)
@@ -175,12 +178,12 @@ impl TrackAudio for ChunkTrackAudio {
 #[cfg(test)]
 mod tests {
     use super::super::chunk_writer::test_support::FakeLedger;
-    use super::super::test_support::TempDir;
     use super::super::chunk_writer::ChunkWriter;
+    use super::super::test_support::TempDir;
     use super::super::ChunkWriterConfig;
     use super::*;
-    use crate::meetings::types::TrackKind;
     use crate::meetings::types::SampleSink;
+    use crate::meetings::types::TrackKind;
 
     const ORIGIN: u64 = 9_000_000_000;
     const MS: u64 = 1_000_000;
@@ -194,7 +197,11 @@ mod tests {
     fn assert_ramp(samples: &[f32], first: usize) {
         for (i, sample) in samples.iter().enumerate() {
             let expected = (first + i) as f32 / 5_000.0;
-            assert!((sample - expected).abs() < 8e-5, "frame {}: {sample} vs {expected}", first + i);
+            assert!(
+                (sample - expected).abs() < 8e-5,
+                "frame {}: {sample} vs {expected}",
+                first + i
+            );
         }
     }
 
@@ -204,8 +211,13 @@ mod tests {
     /// - 1000..1050 ms recorded (frames 4000..4800).
     fn recorded(tmp: &TempDir) -> ChunkTrackAudio {
         let ledger = FakeLedger::default();
-        let mut config =
-            ChunkWriterConfig::new(tmp.path().to_path_buf(), "m1", "t1", TrackKind::System, ORIGIN);
+        let mut config = ChunkWriterConfig::new(
+            tmp.path().to_path_buf(),
+            "m1",
+            "t1",
+            TrackKind::System,
+            ORIGIN,
+        );
         config.chunk_frames = 1_600;
         let mut writer = ChunkWriter::new(config, Box::new(ledger.clone())).unwrap();
         writer.begin(ORIGIN).unwrap();
@@ -214,7 +226,10 @@ mod tests {
         writer.write(&ramp(4_000, 800)).unwrap();
         writer.finish().unwrap();
         let mut records = ledger.records();
-        assert_eq!(records.iter().map(|r| r.start_ms).collect::<Vec<_>>(), [0, 100, 200, 1_000]);
+        assert_eq!(
+            records.iter().map(|r| r.start_ms).collect::<Vec<_>>(),
+            [0, 100, 200, 1_000]
+        );
         records.reverse(); // any order in
         ChunkTrackAudio::new(tmp.path().to_path_buf(), records)
     }
@@ -246,14 +261,20 @@ mod tests {
         let spans = audio.read_spans(200, 850).unwrap();
         assert_eq!(spans.len(), 2);
         assert_eq!((spans[0].start_frame, spans[0].samples.len()), (3_200, 800));
-        assert_eq!((spans[1].start_frame, spans[1].samples.len()), (16_000, 800));
+        assert_eq!(
+            (spans[1].start_frame, spans[1].samples.len()),
+            (16_000, 800)
+        );
         assert_ramp(&spans[0].samples, 3_200);
         assert_ramp(&spans[1].samples, 4_000);
 
         let samples = audio.read(200, 850).unwrap();
         assert_eq!(samples.len(), 850 * 16);
         assert_ramp(&samples[..800], 3_200);
-        assert!(samples[800..12_800].iter().all(|s| *s == 0.0), "the gap reads as silence");
+        assert!(
+            samples[800..12_800].iter().all(|s| *s == 0.0),
+            "the gap reads as silence"
+        );
         assert_ramp(&samples[12_800..], 4_000);
 
         // Entirely inside the gap.
@@ -320,7 +341,8 @@ mod tests {
         assert_ramp(&live.read(0, 200).unwrap(), 0);
 
         super::super::recovery::recover_meeting_dir(&tmp.path().join("m1")).unwrap();
-        let mut recovered = ChunkTrackAudio::from_sidecar(tmp.path(), "m1", TrackKind::Mic).unwrap();
+        let mut recovered =
+            ChunkTrackAudio::from_sidecar(tmp.path(), "m1", TrackKind::Mic).unwrap();
         assert_eq!(recovered.chunks[1].status, ChunkStatus::Recovered);
         let samples = recovered.read(0, 200).unwrap();
         assert_eq!(samples.len(), 2_000);

@@ -108,7 +108,12 @@ const ASSIGNMENT_JOINS: &str = "LEFT JOIN speaker_assignments sa \
      LEFT JOIN participants par ON par.id = sa.participant_id \
      LEFT JOIN people per ON per.id = par.person_id";
 
-fn execute<P: Params>(conn: &Connection, what: &str, sql: &str, params: P) -> Result<usize, String> {
+fn execute<P: Params>(
+    conn: &Connection,
+    what: &str,
+    sql: &str,
+    params: P,
+) -> Result<usize, String> {
     conn.execute(sql, params)
         .map_err(|e| format!("Failed to {what}: {e}"))
 }

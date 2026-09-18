@@ -571,7 +571,10 @@ mod tests {
             assert_eq!(MeetingStatus::parse(status.as_str()), Some(*status));
             let json = serde_json::to_string(status).unwrap();
             assert_eq!(json, format!("\"{}\"", status.as_str()));
-            assert_eq!(serde_json::from_str::<MeetingStatus>(&json).unwrap(), *status);
+            assert_eq!(
+                serde_json::from_str::<MeetingStatus>(&json).unwrap(),
+                *status
+            );
         }
         macro_rules! every_variant_parses_back {
             ($($name:ident),+) => {$(
@@ -581,12 +584,28 @@ mod tests {
             )+};
         }
         every_variant_parses_back!(
-            TrackKind, MeetingStatus, ChunkStatus, RunStatus, WindowStatus, JobKind, JobStatus,
-            SuppressedReason, SpeakerSource, ParticipantSource, SummaryStatus, SummaryItemKind,
-            MeetingLanguage, RecordingPhase, PermissionState, MeetingChange
+            TrackKind,
+            MeetingStatus,
+            ChunkStatus,
+            RunStatus,
+            WindowStatus,
+            JobKind,
+            JobStatus,
+            SuppressedReason,
+            SpeakerSource,
+            ParticipantSource,
+            SummaryStatus,
+            SummaryItemKind,
+            MeetingLanguage,
+            RecordingPhase,
+            PermissionState,
+            MeetingChange
         );
         assert_eq!(SuppressedReason::PromptEcho.as_str(), "prompt_echo");
-        assert_eq!(SuppressedReason::parse("outside_vad"), Some(SuppressedReason::OutsideVad));
+        assert_eq!(
+            SuppressedReason::parse("outside_vad"),
+            Some(SuppressedReason::OutsideVad)
+        );
         assert_eq!(TrackKind::parse("speaker"), None);
         assert!(serde_json::from_str::<TrackKind>("\"speaker\"").is_err());
     }
@@ -634,7 +653,10 @@ mod tests {
         let samples = [0.0_f32; 12];
         let frames = AudioFrames {
             samples: &samples,
-            format: SourceFormat { sample_rate: 48_000, channels: 2 },
+            format: SourceFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            },
             host_time_ns: 0,
         };
         assert_eq!(frames.frame_count(), 6);

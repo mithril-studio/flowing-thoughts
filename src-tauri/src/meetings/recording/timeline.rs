@@ -47,7 +47,12 @@ pub fn ns_to_frames(ns: u64, sample_rate: u32) -> u64 {
 
 /// Silence between the end of one chunk and the start of the next, as the
 /// sidecar records it. Overlap (drift) is 0.
-pub fn gap_between_ms(prev_anchor_ns: u64, prev_frames: u64, sample_rate: u32, next_anchor_ns: u64) -> u64 {
+pub fn gap_between_ms(
+    prev_anchor_ns: u64,
+    prev_frames: u64,
+    sample_rate: u32,
+    next_anchor_ns: u64,
+) -> u64 {
     let prev_end_ns = prev_anchor_ns + frames_to_ns(prev_frames, sample_rate);
     next_anchor_ns.saturating_sub(prev_end_ns) / NS_PER_MS
 }
@@ -156,7 +161,11 @@ impl Timeline {
             Some(last_end) => (anchor_host_ns - last_end) / NS_PER_MS,
             None => 0,
         };
-        self.run = Some(Run { anchor_host_ns, nominal_ns: 0, drift_ns: 0 });
+        self.run = Some(Run {
+            anchor_host_ns,
+            nominal_ns: 0,
+            drift_ns: 0,
+        });
         self.loss_pending = false;
         RunStart {
             anchor_host_ns,
@@ -250,10 +259,19 @@ mod tests {
         assert_eq!(frames_to_ns(441, 44_100), 10 * NS_PER_MS);
         assert_eq!(frames_to_ns(1, 0), 0);
         assert_eq!(ns_to_frames(60 * NS_PER_SEC, 16_000), 960_000);
-        assert_eq!(host_to_timeline_ms(ORIGIN, ORIGIN + 1_500 * NS_PER_MS), 1_500);
+        assert_eq!(
+            host_to_timeline_ms(ORIGIN, ORIGIN + 1_500 * NS_PER_MS),
+            1_500
+        );
         assert_eq!(host_to_timeline_ms(ORIGIN, ORIGIN - 1), 0);
-        assert_eq!(gap_between_ms(ORIGIN, 16_000, 16_000, ORIGIN + 1_250 * NS_PER_MS), 250);
-        assert_eq!(gap_between_ms(ORIGIN, 16_000, 16_000, ORIGIN + 998 * NS_PER_MS), 0);
+        assert_eq!(
+            gap_between_ms(ORIGIN, 16_000, 16_000, ORIGIN + 1_250 * NS_PER_MS),
+            250
+        );
+        assert_eq!(
+            gap_between_ms(ORIGIN, 16_000, 16_000, ORIGIN + 998 * NS_PER_MS),
+            0
+        );
     }
 
     #[test]
@@ -358,12 +376,19 @@ mod tests {
         let buffers = 6_100; // 61 s
         for i in 0..buffers {
             let (placement, _) = feed(&mut timeline, ORIGIN + i * (BUF_NS + skew_ns));
-            assert_eq!(placement == Placement::NewRun, i == 0, "drift never re-anchors");
+            assert_eq!(
+                placement == Placement::NewRun,
+                i == 0,
+                "drift never re-anchors"
+            );
         }
         let start = timeline.rotate(60 * NS_PER_SEC).unwrap();
         let nominal = ORIGIN + 60 * NS_PER_SEC;
         let real = ORIGIN + 6_000 * (BUF_NS + skew_ns);
-        assert!(start.anchor_host_ns > nominal, "anchor follows the host clock");
+        assert!(
+            start.anchor_host_ns > nominal,
+            "anchor follows the host clock"
+        );
         let error = real.abs_diff(start.anchor_host_ns);
         assert!(error < NS_PER_MS / 2, "anchor error {error} ns");
         assert_eq!(start.gap_before_ms, 0);
