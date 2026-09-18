@@ -239,19 +239,19 @@ one local inference at a time, with dictation first in line.
 macOS keys privacy permissions (Microphone, Accessibility, Input Monitoring,
 System Audio Recording) to the code signature.
 
-- Releases are signed with a Developer ID certificate
-  (`APPLE_SIGNING_IDENTITY`, set by the release workflow) and the DMG is
-  notarized and stapled. The designated requirement is the bundle identifier
-  plus the team ID, so permissions survive updates. The one exception was the
-  first Developer ID release (0.5.1): users coming from an ad-hoc build had
-  to grant every permission once more.
+- The release pipeline requires a Developer ID certificate
+  (`APPLE_SIGNING_IDENTITY`) and notarizes/staples both the app and DMG.
+  A stable bundle identifier and team ID are intended to preserve permissions
+  between Developer ID releases; the first transition from an ad-hoc build may
+  require re-granting them. The 0.5.1 tag failed certificate import and was not
+  published. See `docs/RELEASING.md` for current status and validation.
 - `bundle.macOS.hardenedRuntime` is `true`, as notarization requires. Under
   it macOS refuses the microphone without prompting unless the app carries
   the `com.apple.security.device.audio-input` entitlement, so
   `src-tauri/Entitlements.plist` must keep it.
 - `scripts/release.sh` requires the Developer ID and notarization variables
-  by default and stops before building if one is missing.
-  `REQUIRE_DEVELOPER_ID=0` allows a local test build; never publish one.
+  and stops before building if one is missing. Disabling Developer ID in this
+  publishing path is forbidden; local builds use `npx tauri build` separately.
 - `scripts/release.sh` asserts, before anything is published: strict verify
   passes, the signature identifier equals the bundle identifier, the bundle
   is signed by the configured Developer ID with the hardened runtime, both

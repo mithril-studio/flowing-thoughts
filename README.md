@@ -11,13 +11,13 @@ Free, open source voice dictation for macOS. Hold a key, speak, release. Your wo
 ## Install
 
 1. Download the latest `.dmg` from [Releases](https://github.com/mithril-studio/flowing-thoughts-releases/releases/latest) and drag FlowingThoughts into Applications.
-2. The app is not notarized yet, so macOS blocks the first launch:
+2. The current public release (0.5.0) is not notarized, so macOS may block the first launch:
    - **macOS 15 and later:** open the app once and dismiss the warning. Then go to **System Settings → Privacy & Security**, scroll down to the message about FlowingThoughts and click **Open Anyway**.
    - **macOS 14 and earlier:** right-click the app and choose **Open**, then **Open** again.
 3. Follow the setup: download the speech model (one time), grant **Accessibility** and **Input Monitoring**, and run the injection test.
 4. Hold `Fn`, speak, release.
 
-**After every update macOS asks for the permissions again.** Builds are not notarized, and without an Apple Developer ID macOS treats each new version as a different app. Grant Microphone, Accessibility and Input Monitoring (and System Audio Recording, if you use Meetings) again after updating. If a permission shows as granted but does not work, remove FlowingThoughts from that list in System Settings and add it back.
+**Older ad-hoc builds may require permission grants again after updating.** The release pipeline now requires Developer ID signing and notarization, but its first successful release is still pending. The transition may require granting permissions once more. If a permission shows as granted but does not work, remove FlowingThoughts from that list in System Settings and add it back. See [release status and process](docs/RELEASING.md).
 
 Prefer cloud transcription? Bring your own Groq or OpenAI API key in Settings. Audio is only uploaded when you select the API provider there; local mode never falls back to the cloud, even with a key saved.
 
