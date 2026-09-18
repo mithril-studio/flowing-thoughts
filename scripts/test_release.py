@@ -66,8 +66,8 @@ class PublishTests(unittest.TestCase):
         self.assertIn("unsigned publishing is forbidden", result.stderr)
 
     def test_only_verified_drafts_are_published(self):
-        for corrupt in (False, True):
-            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as directory:
+        for corrupt, tag in ((False, "v0.5.2"), (True, "v0.5.2"), (False, "v0.4.9")):
+            with self.subTest(corrupt=corrupt, tag=tag), tempfile.TemporaryDirectory() as directory:
                 work = Path(directory)
                 assets = work / "assets"
                 assets.mkdir()
@@ -78,6 +78,7 @@ class PublishTests(unittest.TestCase):
                 gh.write_text('''#!/bin/bash
 printf '%s\\n' "$*" >> "$TRACE"
 case "$2" in
+  view) echo v0.5.0 ;;
   create) [[ " $* " == *" --draft "* ]] || exit 5 ;;
   download)
     while [ "$1" != --dir ]; do shift; done
@@ -89,16 +90,21 @@ esac
 ''')
                 gh.chmod(0o755)
                 result = subprocess.run(
-                    ["bash", str(ROOT / "scripts/publish-release.sh"), "v0.5.2", "Test notes",
+                    ["bash", str(ROOT / "scripts/publish-release.sh"), tag, "Test notes",
                      *[str(assets / name) for name in names]],
                     env=dict(os.environ, PATH=f"{work}:{os.environ['PATH']}",
                              TRACE=str(work / "trace"), ASSETS=str(assets),
                              CORRUPT=str(int(corrupt)), PUBLISHED=str(work / "published")),
                     capture_output=True, text=True,
                 )
-                self.assertEqual(result.returncode == 0, not corrupt, result.stderr)
-                self.assertEqual((work / "published").exists(), not corrupt)
-                self.assertIn("--draft", (work / "trace").read_text())
+                should_publish = not corrupt and tag == "v0.5.2"
+                self.assertEqual(result.returncode == 0, should_publish, result.stderr)
+                self.assertEqual((work / "published").exists(), should_publish)
+                trace = (work / "trace").read_text()
+                if tag == "v0.4.9":
+                    self.assertNotIn("create", trace)
+                else:
+                    self.assertIn("--draft", trace)
 
 
 class VersionTests(unittest.TestCase):
