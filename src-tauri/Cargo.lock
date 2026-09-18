@@ -1332,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "flowing-thoughts"
-version = "0.5.1-dev"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "core-foundation 0.9.4",
