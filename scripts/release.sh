@@ -9,6 +9,12 @@ set -euo pipefail
 # - gh CLI authenticated (gh auth status)
 # - jq installed (brew install jq)
 # - Version bumped in src-tauri/tauri.conf.json BEFORE running this script
+# - Developer ID signing and notarization (required by default):
+#     APPLE_SIGNING_IDENTITY  "Developer ID Application: <name> (<TEAMID>)"
+#     NOTARY_API_KEY_PATH, NOTARY_API_KEY_ID, NOTARY_API_ISSUER
+#   REQUIRE_DEVELOPER_ID=0 skips both for a local test build. Never publish
+#   such a build: a different signing identity makes macOS ask every user for
+#   all permissions again.
 #
 # Usage:
 #   scripts/release.sh                        # uses version from tauri.conf.json
@@ -20,6 +26,23 @@ cd "$REPO_ROOT"
 RELEASES_REPO="mithril-studio/flowing-thoughts-releases"
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/flowingthoughts_updater.key}"
 NOTES="${1:-}"
+REQUIRE_DEVELOPER_ID="${REQUIRE_DEVELOPER_ID:-1}"
+
+# Checked before the build so a missing variable fails in seconds, not after
+# a full release build.
+if [ "$REQUIRE_DEVELOPER_ID" = "1" ]; then
+  for VAR in APPLE_SIGNING_IDENTITY NOTARY_API_KEY_PATH NOTARY_API_KEY_ID NOTARY_API_ISSUER; do
+    if [ -z "${!VAR:-}" ]; then
+      echo "error: $VAR is not set; Developer ID signing and notarization are required" >&2
+      echo "set REQUIRE_DEVELOPER_ID=0 only for a local test build that is never published" >&2
+      exit 1
+    fi
+  done
+  if [ ! -r "$NOTARY_API_KEY_PATH" ]; then
+    echo "error: notarization API key not readable at $NOTARY_API_KEY_PATH" >&2
+    exit 1
+  fi
+fi
 
 if [ ! -f "$KEY_PATH" ]; then
   echo "error: signing key not found at $KEY_PATH" >&2
@@ -84,7 +107,7 @@ APP_BIN="$APP_PATH/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP
 [ -f "$APP_BIN" ] || fail "main binary not found at $APP_BIN"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH" \
-  || fail "codesign --verify --deep --strict does not pass (is bundle.macOS.signingIdentity still \"-\"?)"
+  || fail "codesign --verify --deep --strict does not pass (was APPLE_SIGNING_IDENTITY set for the build?)"
 
 # Captured first, then matched: `codesign | grep -q` can die of SIGPIPE under
 # pipefail. The same goes for nm below.
@@ -96,17 +119,17 @@ grep -q '^Info.plist entries=' <<< "$SIGN_INFO" \
   || fail "Info.plist is not bound to the signature"
 
 # Hardened runtime without the audio-input entitlement means macOS refuses
-# the microphone without ever prompting. It is off on purpose until there is
-# a Developer ID (see the placeholder above).
+# the microphone without ever prompting. Notarization requires the hardened
+# runtime, so a Developer ID build must have it.
 if grep -q '^CodeDirectory.*runtime' <<< "$SIGN_INFO"; then
   ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null || true)"
   grep -q 'com.apple.security.device.audio-input' <<< "$ENTITLEMENTS" \
     || fail "hardened runtime is on but the com.apple.security.device.audio-input entitlement is missing"
 fi
 
-if [ "${REQUIRE_DEVELOPER_ID:-0}" = "1" ]; then
-  [ -n "${APPLE_SIGNING_IDENTITY:-}" ] \
-    || fail "APPLE_SIGNING_IDENTITY must be set when Developer ID is required"
+if [ "$REQUIRE_DEVELOPER_ID" = "1" ]; then
+  grep -q '^CodeDirectory.*runtime' <<< "$SIGN_INFO" \
+    || fail "hardened runtime is off; notarization will reject the bundle"
   grep -Fqx "Authority=${APPLE_SIGNING_IDENTITY}" <<< "$SIGN_INFO" \
     || fail "bundle is not signed by the configured Developer ID identity"
 fi
@@ -147,11 +170,7 @@ ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "FlowingThoughts" -srcfolder "$STAGE" -ov -format UDZO "$DMG_OUT" >/dev/null
 rm -rf "$STAGE"
 
-if [ "${REQUIRE_DEVELOPER_ID:-0}" = "1" ]; then
-  [ -r "${NOTARY_API_KEY_PATH:-}" ] || fail "notarization API key is unavailable"
-  [ -n "${NOTARY_API_KEY_ID:-}" ] || fail "NOTARY_API_KEY_ID is required"
-  [ -n "${NOTARY_API_ISSUER:-}" ] || fail "NOTARY_API_ISSUER is required"
-
+if [ "$REQUIRE_DEVELOPER_ID" = "1" ]; then
   echo "==> Notarizing and stapling the DMG"
   xcrun notarytool submit "$DMG_OUT" \
     --key "$NOTARY_API_KEY_PATH" \
