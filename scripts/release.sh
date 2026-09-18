@@ -12,9 +12,8 @@ set -euo pipefail
 # - Developer ID signing and notarization (required by default):
 #     APPLE_SIGNING_IDENTITY  "Developer ID Application: <name> (<TEAMID>)"
 #     NOTARY_API_KEY_PATH, NOTARY_API_KEY_ID, NOTARY_API_ISSUER
-#   REQUIRE_DEVELOPER_ID=0 skips both for a local test build. Never publish
-#   such a build: a different signing identity makes macOS ask every user for
-#   all permissions again.
+# - minisign installed (brew install minisign)
+# Unsigned local builds use `npx tauri build`, never this publishing script.
 #
 # Usage:
 #   scripts/release.sh                        # uses version from tauri.conf.json
@@ -27,6 +26,11 @@ RELEASES_REPO="mithril-studio/flowing-thoughts-releases"
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/flowingthoughts_updater.key}"
 NOTES="${1:-}"
 REQUIRE_DEVELOPER_ID="${REQUIRE_DEVELOPER_ID:-1}"
+if [ "$REQUIRE_DEVELOPER_ID" != "1" ]; then
+  echo 'error: unsigned publishing is forbidden; use npx tauri build for local builds' >&2
+  exit 1
+fi
+command -v minisign >/dev/null || { echo 'error: install minisign before releasing' >&2; exit 1; }
 
 # Checked before the build so a missing variable fails in seconds, not after
 # a full release build.
@@ -34,7 +38,7 @@ if [ "$REQUIRE_DEVELOPER_ID" = "1" ]; then
   for VAR in APPLE_SIGNING_IDENTITY NOTARY_API_KEY_PATH NOTARY_API_KEY_ID NOTARY_API_ISSUER; do
     if [ -z "${!VAR:-}" ]; then
       echo "error: $VAR is not set; Developer ID signing and notarization are required" >&2
-      echo "set REQUIRE_DEVELOPER_ID=0 only for a local test build that is never published" >&2
+      echo "use npx tauri build for a local build without publishing" >&2
       exit 1
     fi
   done
@@ -58,6 +62,7 @@ if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
 fi
 
 TAG="v${VERSION}"
+python3 scripts/check-release-version.py "$TAG"
 echo "==> Building FlowingThoughts ${TAG}"
 
 if gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
@@ -71,7 +76,8 @@ fi
 # password comes from the env or from a sibling ".password" file. Note: the
 # key MUST have a non-empty password — empty-password keys fail to decode
 # ("Wrong password") in current tauri CLI versions.
-export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
+TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
+export TAURI_SIGNING_PRIVATE_KEY
 if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ -f "${KEY_PATH}.password" ]; then
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "${KEY_PATH}.password")"
 fi
@@ -81,6 +87,12 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # a failure there would otherwise abort the whole release. Build the app +
 # updater artifacts first, then create the DMG ourselves with hdiutil.
 #
+# Let Tauri notarize and staple the app BEFORE it creates updater artifacts.
+# Notarizing only the DMG would leave the updater app without a stapled ticket.
+export APPLE_API_KEY_PATH="$NOTARY_API_KEY_PATH"
+export APPLE_API_KEY="$NOTARY_API_KEY_ID"
+export APPLE_API_ISSUER="$NOTARY_API_ISSUER"
+
 # Code signing happens during the Tauri build. Do not re-sign the .app after
 # this point: the tarball and its .sig already exist, and updates would then
 # ship different code than the DMG. The assertions below check both.
@@ -102,6 +114,8 @@ fail() {
 echo "==> Checking the signed bundle"
 BUNDLE_ID="$(jq -r .identifier src-tauri/tauri.conf.json)"
 [ -d "$APP_PATH" ] || fail "$APP_PATH was not built"
+xcrun stapler validate "$APP_PATH" || fail "the app has no valid notarization ticket"
+spctl --assess --type execute --verbose=2 "$APP_PATH" || fail "Gatekeeper rejected the app"
 APP_PLIST="$APP_PATH/Contents/Info.plist"
 APP_BIN="$APP_PATH/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP_PLIST")"
 [ -f "$APP_BIN" ] || fail "main binary not found at $APP_BIN"
@@ -154,6 +168,8 @@ UPDATER_CHECK_DIR="$(mktemp -d)"
 tar -xzf "$UPDATER_TAR" -C "$UPDATER_CHECK_DIR"
 codesign --verify --deep --strict "$UPDATER_CHECK_DIR/FlowingThoughts.app" \
   || fail "the app inside the updater tarball does not pass codesign --verify"
+xcrun stapler validate "$UPDATER_CHECK_DIR/FlowingThoughts.app" \
+  || fail "updater app has no valid notarization ticket"
 APP_CDHASH="$(sed -n 's/^CDHash=//p' <<< "$SIGN_INFO")"
 UPDATER_CDHASH="$(codesign -dvvv "$UPDATER_CHECK_DIR/FlowingThoughts.app" 2>&1 | sed -n 's/^CDHash=//p')"
 rm -rf "$UPDATER_CHECK_DIR"
@@ -200,6 +216,13 @@ if [ ! -f "$APP_TAR" ] || [ ! -f "$APP_SIG" ]; then
   exit 1
 fi
 
+# Prove the updater signature matches the public key embedded in installed apps.
+VERIFY_DIR="$(mktemp -d)"
+jq -r .plugins.updater.pubkey src-tauri/tauri.conf.json | base64 -D > "$VERIFY_DIR/public.key"
+base64 -D < "$APP_SIG" > "$VERIFY_DIR/update.sig"
+minisign -Vm "$APP_TAR" -p "$VERIFY_DIR/public.key" -x "$VERIFY_DIR/update.sig" \
+  || { rm -rf "$VERIFY_DIR"; fail "updater signature does not match the app public key"; }
+rm -rf "$VERIFY_DIR"
 SIGNATURE="$(cat "$APP_SIG")"
 PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -232,25 +255,17 @@ EOF
 echo "==> latest.json preview"
 cat "$LATEST_JSON"
 
-DMG_FILE="$(ls "$BUNDLE_DIR"/../dmg/*.dmg 2>/dev/null | head -n 1 || true)"
+jq -e --arg version "$VERSION" --arg platform "darwin-$RUST_TARGET" \
+  --arg signature "$SIGNATURE" \
+  --arg url "https://github.com/${RELEASES_REPO}/releases/download/${TAG}/${RELEASE_TAR}" \
+  '.version == $version and (.platforms | keys) == [$platform] and
+   .platforms[$platform].signature == $signature and .platforms[$platform].url == $url' \
+  "$LATEST_JSON" >/dev/null || fail "invalid updater manifest"
 
-echo "==> Creating GitHub release ${TAG} on ${RELEASES_REPO}"
-ASSETS=(
-  "$BUNDLE_DIR/$RELEASE_TAR"
-  "$BUNDLE_DIR/$RELEASE_SIG"
-  "$LATEST_JSON"
-)
-if [ -n "$DMG_FILE" ]; then
-  ASSETS+=("$DMG_FILE")
-fi
-
-gh release create "$TAG" \
-  --repo "$RELEASES_REPO" \
-  --title "FlowingThoughts ${TAG}" \
-  --notes "${NOTES:-Release ${TAG}}" \
-  "${ASSETS[@]}"
-
-rm -f "$LATEST_JSON"
+echo "==> Uploading and verifying draft release ${TAG}"
+bash scripts/publish-release.sh "$TAG" "${NOTES:-Release ${TAG}}" \
+  "$BUNDLE_DIR/$RELEASE_TAR" "$BUNDLE_DIR/$RELEASE_SIG" "$LATEST_JSON" "$DMG_OUT"
+rm -rf "$LATEST_JSON_DIR"
 
 echo
 echo "==> Done. Release URL:"

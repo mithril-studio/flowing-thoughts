@@ -81,12 +81,12 @@ app shows one of:
 Both come with a button that opens the right System Settings pane. Grant the
 permission there, then start a new meeting.
 
-**After an update macOS asks again.** Builds are ad-hoc signed, not notarized
-with an Apple Developer ID. macOS ties permission grants to the exact signed
-code, so every update looks like a new app: Microphone, Accessibility, Input
-Monitoring and System Audio Recording all have to be granted again. If a
-permission looks granted but does not work after an update, remove
-FlowingThoughts from that list in System Settings and add it again.
+**Ad-hoc builds may require permissions again after an update.** The first
+transition to Developer ID signing may also require new grants for Microphone,
+Accessibility, Input Monitoring and System Audio Recording. Subsequent releases
+with the same Developer ID are intended to retain them; verify this using the
+[release smoke test](RELEASING.md). If a permission looks granted but does not
+work, remove FlowingThoughts from that list in System Settings and add it again.
 
 ## Use headphones
 
