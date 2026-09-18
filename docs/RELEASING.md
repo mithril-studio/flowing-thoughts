@@ -35,6 +35,11 @@ Check the **Apple credentials** run before tagging. It validates certificate
 import, signing identity and App Store Connect notarization authentication,
 without building or publishing. API key values stay in GitHub secrets.
 
+Apple preflight also runs automatically when credential/release workflow changes
+land on `main`; this does not build or publish an app. Required CI checks only
+changed Rust files for formatting while retaining full Rust compilation/tests.
+Repository-wide formatting cleanup remains a separate change.
+
 ## Normal release
 
 1. Use a PR to bump `package.json`, both root versions in `package-lock.json`,
@@ -71,7 +76,11 @@ signing-password workaround: installed apps trust its existing public key.
 - Bad published release: stop publishing; ship a higher patch version with the
   fix. Do not move source tags or silently replace signed assets. The updater
   does not automatically downgrade already-installed apps.
-- Notarization can take time; jobs have a 45-minute limit. Inspect the Apple
+- CI has a 15-minute limit; provenance and Apple preflight each have a 5-minute
+  limit; the build/notarization/publish job has a 25-minute limit. These are
+  per-job limits, not a 25-minute limit for the entire pipeline. New CI runs
+  cancel obsolete checks, but releases never cancel an active publication.
+  Inspect the Apple
   submission/log before retrying. Do not bypass signing to get a green release.
 
 ## Installed-app smoke test — human interaction required

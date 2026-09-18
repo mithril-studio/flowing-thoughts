@@ -9,17 +9,32 @@ concurrency:
   group: production-release
   cancel-in-progress: false
 jobs:
+  provenance:
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Require merged release code before using signing secrets
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          python3 scripts/check-release-version.py "$GITHUB_REF_NAME"
   preflight:
+    needs: provenance
     uses: ./.github/workflows/apple-credentials.yml
     secrets: inherit
-  build-and-publish:
+  checks:
     needs: preflight
+    uses: ./.github/workflows/ci.yml
+  build-and-publish:
+    needs: checks
     runs-on: macos-14
-    timeout-minutes: 45
+    timeout-minutes: 25
     env:
       APPLE_SIGNING_IDENTITY: "Developer ID Application: Joost Dolstra (3P87HV73Y6)"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Verify release provenance and versions
@@ -27,14 +42,14 @@ jobs:
           test "$(uname -m)" = arm64
           git merge-base --is-ancestor HEAD origin/main
           python3 scripts/check-release-version.py "$GITHUB_REF_NAME"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@1.93.1
+      - uses: dtolnay/rust-toolchain@c655e6902480079b4f4726174674b33218ce239c # 1.93.1
         with:
           targets: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri -> target
       - run: npm ci --ignore-scripts
