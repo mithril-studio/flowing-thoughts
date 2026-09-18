@@ -6,6 +6,8 @@
     <string>FlowingThoughts needs microphone access to record your voice for transcription.</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>FlowingThoughts records the audio of your calls so it can transcribe meetings on this Mac. Nothing is uploaded.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>FlowingThoughts uses Apple Events only as a fallback to paste your transcribed text into the active app.</string>
     <key>LSUIElement</key>
     <true/>
 </dict>
